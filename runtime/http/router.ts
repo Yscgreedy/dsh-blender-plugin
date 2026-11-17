@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from './response.js'
 import { errorDetail } from '../core/json.js'
 import { callerFromRequest, runWithCaller } from './caller.js'
+import { callerInstanceId } from './target.js'
+import { runWithInstance } from '../transport/instance-target.js'
 
 export interface RouteDef {
   method?: string | null
@@ -31,7 +33,11 @@ export function createRouter(E: RouterDeps) {
           ? r.paths.indexOf(p) >= 0
           : p === r.exact || (r.prefix && p.startsWith(r.prefix))
         if (!matched) continue
-        await runWithCaller(callerFromRequest(req), () => r.fn(req, res, url, p))
+        const caller = callerFromRequest(req)
+        // 3.1 多实例：把"这次请求该驱动哪个 Blender"一次定下来（调用方会话的实例），
+        // 否则 addon.send 省略 instanceId 时会报 ambiguity，plan op 直接变成死路。
+        const target = callerInstanceId(caller)
+        await runWithCaller(caller, () => runWithInstance(target, () => r.fn(req, res, url, p)))
         return
       }
       json(res, 404, { ok: false, error: 'not found', path: p })

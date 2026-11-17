@@ -20,7 +20,7 @@ import { READ_ONLY } from './read-only.js'
 export function opHelp(): string {
   return [
     'blender_op 动作（catalog 算子与参数搜索；执行型需要 GUI 会话）：',
-    '  action=plan   op=<catalog op> args={...}：34 family / 228 op 的主入口（op=catalog 看目录）',
+    '  action=plan   op=<catalog op> args={...}：35 family / 261 op 的主入口（op=catalog 看目录）',
     '  action=loop   op=start|status|stop|board|export|help|bench：参数搜索内环（target=gui|session）',
     '  action=opt    op=analyze|join|help：对象精简分析/合并',
     '  action=preset op=list|get|apply|save|delete|export|import|help：配方库',
@@ -45,9 +45,18 @@ function dryRun(raw: unknown): boolean {
   return asRecord(jsonPayload(raw)).dry_run === true
 }
 
-async function gate(port: number, needsSession: boolean): Promise<unknown | null> {
+/** `instance_id` (snake_case, like blender_session) picks the target Blender. */
+function targetInstance(args: Record<string, unknown>): string {
+  return text(args.instance_id).trim()
+}
+
+async function gate(
+  port: number,
+  needsSession: boolean,
+  instanceId?: string,
+): Promise<unknown | null> {
   if (!needsSession) return null
-  const ready = await requireReadySession(port)
+  const ready = await requireReadySession(port, undefined, instanceId)
   return ready.ok ? null : ready.failure
 }
 
@@ -57,6 +66,7 @@ export async function executeOp(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const action = text(args.action).trim() || 'plan'
+  const instanceId = targetInstance(args)
   if (action === 'help') return { text: opHelp() }
   if (!(await ensureBackend(port)))
     return toolError(
@@ -72,9 +82,9 @@ export async function executeOp(
         'OP ' + op + ' 失败 · args 不是合法 JSON 对象：' + text(args.args).slice(0, 200),
         'args 传 JSON 对象，例如 {"family":"audit"}',
       )
-    const blocked = await gate(port, !READ_ONLY.has(op) && !dryRun(args.args))
+    const blocked = await gate(port, !READ_ONLY.has(op) && !dryRun(args.args), instanceId)
     if (blocked) return blocked
-    return executePlan(ctx, port, args)
+    return executePlan(ctx, port, Object.assign({ instance_id: instanceId }, args))
   }
   if (action === 'loop') {
     const target = text(args.target).trim() || 'gui'
@@ -84,17 +94,17 @@ export async function executeOp(
         'loop target 只能是 gui 或 session',
         'target=session 走持久无头 worker',
       )
-    const blocked = await gate(port, target !== 'session')
+    const blocked = await gate(port, target !== 'session', instanceId)
     if (blocked) return blocked
     return executeLoop(port, args)
   }
   if (action === 'opt') {
-    const blocked = await gate(port, true)
+    const blocked = await gate(port, true, instanceId)
     if (blocked) return blocked
     return executeOpt(port, args)
   }
   if (action === 'preset') {
-    const blocked = await gate(port, true)
+    const blocked = await gate(port, true, instanceId)
     if (blocked) return blocked
     return executePreset(port, args)
   }

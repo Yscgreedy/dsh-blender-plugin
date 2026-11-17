@@ -71,10 +71,21 @@ export async function listSessions(port: number): Promise<SessionList | SessionL
   return { ok: true, sessions: rows.filter(isRecord).map(asRecord) }
 }
 
-/** A ready row with a connected addon instance; user-gui wins over virtual-gui. */
-export function readyRow(sessions: SessionRow[], kind?: string): SessionRow | null {
+/**
+ * A ready row with a connected addon instance; user-gui wins over virtual-gui.
+ * `instanceId` narrows the choice to one Blender (multi-instance routing).
+ */
+export function readyRow(
+  sessions: SessionRow[],
+  kind?: string,
+  instanceId?: string,
+): SessionRow | null {
+  const named = String(instanceId || '')
   const ready = sessions.filter(
-    (s) => String(s.status || '') === 'ready' && !!String(s.instanceId || ''),
+    (s) =>
+      String(s.status || '') === 'ready' &&
+      !!String(s.instanceId || '') &&
+      (!named || String(s.instanceId || '') === named),
   )
   const wanted = kind ? ready.filter((s) => String(s.kind || '') === kind) : ready
   return (
@@ -128,11 +139,24 @@ export interface NoReadySession {
 export async function requireReadySession(
   port: number,
   kind?: string,
+  instanceId?: string,
 ): Promise<ReadySession | NoReadySession> {
   const listed = await listSessions(port)
   if (!listed.ok) return listed
-  const row = readyRow(listed.sessions, kind)
-  if (!row) return { ok: false, failure: sessionRequiredFailure() }
+  const row = readyRow(listed.sessions, kind, instanceId)
+  if (!row)
+    return {
+      ok: false,
+      failure: instanceId
+        ? sessionRequiredFailure(
+            'instance_id=' +
+              instanceId +
+              ' 没有 ready 的 GUI 会话（先 blender_session action=attach instance_id=' +
+              instanceId +
+              '）',
+          )
+        : sessionRequiredFailure(),
+    }
   return { ok: true, session: row, instanceId: String(row.instanceId || '') }
 }
 

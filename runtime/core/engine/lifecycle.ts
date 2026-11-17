@@ -1,5 +1,6 @@
 // engine 生命周期：指标 / addon.send 包装
 import { gatewayInstances } from '../../transport/addon-ws.js'
+import { currentInstanceId } from '../../transport/instance-target.js'
 import { errorMessage } from '../json.js'
 import type { EngineMetrics } from './index.js'
 import type { AddonClient as AddonClientType } from '../../transport/probes.js'
@@ -117,6 +118,25 @@ function gatewayTransportDiagnosis(
   }
 }
 
+/**
+ * The instance this call must drive: an explicit option wins; otherwise the
+ * target the HTTP request resolved (the caller's own GUI session). A stale
+ * target whose instance is no longer ready is dropped so the transport keeps its
+ * own single-instance fallback instead of failing on a dead instanceId.
+ */
+function targetInstance(
+  addon: AddonClientType,
+  opts: { instanceId?: string; noMark?: boolean } | undefined,
+): string | null {
+  const explicit = opts && opts.instanceId ? String(opts.instanceId) : ''
+  if (explicit) return explicit
+  const current = currentInstanceId()
+  if (!current) return null
+  const instances = gatewayInstances(addon)
+  if (instances && !instances.some((x) => x.instanceId === current && x.ready)) return null
+  return current
+}
+
 export function installAddonSend(
   addon: AddonClientType,
   metrics: EngineMetrics,
@@ -133,12 +153,16 @@ export function installAddonSend(
       const g = readRenderFlag()
       if (g.present && !g.stale) throw renderBusyError(g, metrics)
     }
+    // 3.1 多实例：调用没点名实例时，用这次 HTTP 请求定下的目标实例（调用方自己的会话）。
+    // 否则两个 Blender 连着时 Gateway 只能报 ambiguity，plan op 直接变成死路。
+    const target = targetInstance(addon, opts)
+    const routed = target ? { ...(opts || {}), instanceId: target } : opts
     metrics.calls++
     metrics.inflight++
     metrics.lastCmd = type
     metrics.lastCmdAt = Date.now()
     try {
-      const r = await rawSend(type, params, timeoutMs, opts)
+      const r = await rawSend(type, params, timeoutMs, routed)
       metrics.lastOkAt = Date.now()
       metrics.lastDiagnosis = null
       metrics.aiPausedAt = null

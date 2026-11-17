@@ -1,4 +1,4 @@
-import { claimExisting, createSession, pickInstance } from './attach.js'
+import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import { issueConsentToken } from './consent.js'
 import { CFG } from '../../config.js'
 import { selectDisplayProvider } from '../../display/provider.js'
@@ -21,10 +21,9 @@ import {
   grantView,
   isMain,
   ownerMatches,
-  ownerOf,
   sessionView,
 } from './types.js'
-import { findCallerSession, pruneSessions } from './lookup.js'
+import { findCallerSession, pruneSessions, unownedSessions } from './lookup.js'
 import { VirtualGuiLifecycle, waitForAddonInstance } from './virtual-gui.js'
 import type { ProviderSelector } from './virtual-gui.js'
 import type {
@@ -50,6 +49,11 @@ function defaultProviderSelector(capabilities: DisplayCapabilities): DisplayProv
 export class SessionRegistry {
   private sessions = new Map<string, SessionRecord>()
   private instances: InstanceRef[] = []
+  /**
+   * 实例表是否曾经"有内容"。空表本身不是"实例已掉线"的证据 —— 测试里没有真实
+   * Gateway 的 registry 恒为空表，把它们当成掉线会把活着的 virtual-gui 拆掉。
+   */
+  private sawInstances = false
   private humanPaused = new Map<string, boolean>()
 
   constructor(
@@ -58,6 +62,8 @@ export class SessionRegistry {
   ) {
     const opts = typeof options === 'function' ? { display: options } : options
     this.listInstances = instances
+    // 构造时已有的实例也算"实例表可用"的证据（registry 通常在所有 addon 之前建）。
+    if (instances().length) this.sawInstances = true
     this.displayFn = opts.display || displayCapabilities
     this.limitsFn = opts.limits || (() => systemVirtualGuiLimits(CFG.features.virtualGuiMax))
     this.waitForInstanceFn =
@@ -78,14 +84,44 @@ export class SessionRegistry {
 
   refreshInstances(next: InstanceRef[]): void {
     this.instances = next
+    if (next.length) this.sawInstances = true
+  }
+
+  /** Ready instances the Gateway currently knows — routing evidence for the host layer. */
+  readyInstanceIds(): string[] {
+    this.prune()
+    return this.instances.filter((x) => x.ready).map((x) => x.instanceId)
   }
 
   private prune(now = Date.now()): void {
     this.instances = pruneSessions(this.sessions, this.listInstances, now)
+    if (this.instances.length) this.sawInstances = true
+    this.reapLostInstances()
+  }
+
+  /**
+   * A virtual-gui session cannot outlive the Blender it started. The instance_gone
+   * event normally disposes it, but a missed event used to leave a session record
+   * with a live provider handle and no way to stop it; this is the same teardown,
+   * driven from the instance list instead of the event stream.
+   */
+  private reapLostInstances(): void {
+    if (!this.sawInstances) return
+    const known = new Set(this.instances.map((x) => x.instanceId))
+    for (const s of [...this.sessions.values()]) {
+      if (s.kind !== 'virtual-gui' || !s.instanceId || known.has(s.instanceId)) continue
+      this.sessions.delete(s.id)
+      void this.lifecycle.disposeSession(s)
+    }
   }
 
   findForCaller(c: CallerIdentity): SessionRecord | null {
-    return findCallerSession(this.sessions, c)
+    const own = findCallerSession(this.sessions, c)
+    if (own) return own
+    // 归属过期（OWNER_TTL_MS 内没心跳）但 Blender 还连着：唯一一个就算这个调用方的。
+    // 否则 list 报 0 个会话、attach/claim/stop 全落回"另有人拥有"，只能杀进程。
+    const free = unownedSessions(this.sessions, this.listInstances())
+    return free.length === 1 ? (free[0] as SessionRecord) : null
   }
 
   private ensureAttached(
@@ -108,7 +144,8 @@ export class SessionRegistry {
           'wait for the addon handshake, or check blender_session status',
           { sessionId: knownVirtual.id },
         )
-      if (!ownerMatches(knownVirtual.owner, c))
+      // 只有"确实另有主人"才算 in_use；owner 过期被 prune 清掉的会话可以重新认领。
+      if (knownVirtual.owner && !ownerMatches(knownVirtual.owner, c))
         return fail(
           'session_in_use',
           'session',
@@ -142,8 +179,14 @@ export class SessionRegistry {
   }
 
   listFor(c: CallerIdentity): Record<string, unknown>[] {
-    const s = this.findForCaller(c)
-    return s ? [sessionView(s)] : []
+    this.prune()
+    const rows = new Map<string, Record<string, unknown>>()
+    // 实例维度兜底：Blender 还连着、只是归属过期的会话也列出来。否则模型看到 0 个会话，
+    // 手里没有 sessionId，attach/claim/stop 全被 session_in_use 挡住。
+    for (const s of unownedSessions(this.sessions, this.instances)) rows.set(s.id, sessionView(s))
+    const own = this.findForCaller(c)
+    if (own) rows.set(own.id, sessionView(own))
+    return [...rows.values()]
   }
 
   status(
@@ -205,6 +248,7 @@ export class SessionRegistry {
     this.prune()
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
     if (!session) return { ok: true, released: false }
+    if (!session.owner) return { ok: true, released: false }
     if (!ownerMatches(session.owner, c)) {
       return fail(
         'session_in_use',
@@ -296,9 +340,7 @@ export class SessionRegistry {
         { sessionId: session.id },
       )
     }
-    if (!session.owner) session.owner = ownerOf(c)
-    session.owner.heartbeatAt = Date.now()
-    touchAgent(session, c)
+    claimFreeSession(session, c)
     return { ok: true, session: sessionView(session) }
   }
 
@@ -344,6 +386,30 @@ export class SessionRegistry {
   async stop(c: CallerIdentity, sessionId?: string): Promise<SessionResult<{ stopped: boolean }>> {
     this.prune()
     return this.lifecycle.stop(c, sessionId)
+  }
+
+  /**
+   * H4：Gateway 关停（插件 dispose / 热更重启）时把**所有 virtual-gui** 收干净。
+   *
+   * 现场事故：helper exe（dsh-blender-hidden-desktop）与它拉起的隐藏 Blender 是
+   * Gateway 的孙进程，Gateway 一死就成孤儿，下次安装/替换目录时被占用 → "目录替换半残"。
+   * 这里按会话 ledger 逐个 disposeSession（provider.stop 会杀 helper 与隐藏 Blender），
+   * 不依赖任何调用者身份 —— 关停不是权限动作。
+   */
+  async disposeAll(): Promise<{ stopped: string[]; failed: string[] }> {
+    const stopped: string[] = []
+    const failed: string[] = []
+    for (const session of Array.from(this.sessions.values())) {
+      if (session.kind !== 'virtual-gui') continue
+      try {
+        this.sessions.delete(session.id)
+        await this.lifecycle.disposeSession(session)
+        stopped.push(session.id)
+      } catch (e) {
+        failed.push(session.id + ': ' + String((e as Error).message || e))
+      }
+    }
+    return { stopped, failed }
   }
 
   grant(
@@ -399,6 +465,25 @@ export class SessionRegistry {
     )
   }
 
+  /**
+   * The session's instance is gone from a non-empty instance list: null when the
+   * session still has its Blender, when the list itself is empty (no evidence
+   * either way, e.g. a registry without a live Gateway), or when no instance was
+   * recorded.
+   */
+  private missingInstance(
+    instanceId: string | null,
+  ): { instanceId: string; ready: string[] } | null {
+    if (!instanceId) return null
+    const instances = this.listInstances()
+    if (!instances.length) return null
+    if (instances.some((x) => x.instanceId === instanceId && x.ready)) return null
+    return {
+      instanceId: String(instanceId),
+      ready: instances.filter((x) => x.ready).map((x) => x.instanceId),
+    }
+  }
+
   private mustOwn(
     c: CallerIdentity,
     sessionId?: string,
@@ -407,7 +492,7 @@ export class SessionRegistry {
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
     if (!session)
       return fail('session_not_found', 'session', 'the session does not exist', 'attach first', {})
-    if (!ownerMatches(session.owner, c))
+    if (session.owner && !ownerMatches(session.owner, c))
       return fail(
         'session_in_use',
         'session',
@@ -415,6 +500,7 @@ export class SessionRegistry {
         'wait for the owner to release it',
         {},
       )
+    claimFreeSession(session, c)
     return { ok: true, session }
   }
 
@@ -458,7 +544,7 @@ export class SessionRegistry {
     const session = this.sessions.get(String(sessionId))
     if (!session)
       return fail('session_not_found', 'session', 'the session does not exist', 'attach first', {})
-    if (!ownerMatches(session.owner, c))
+    if (session.owner && !ownerMatches(session.owner, c))
       return fail(
         'session_in_use',
         'session',
@@ -466,6 +552,7 @@ export class SessionRegistry {
         'wait for the owner to release it',
         {},
       )
+    claimFreeSession(session, c)
     return { ok: true, session }
   }
 
@@ -487,7 +574,7 @@ export class SessionRegistry {
         {},
       )
     }
-    if (!ownerMatches(session.owner, c)) {
+    if (session.owner && !ownerMatches(session.owner, c)) {
       return fail(
         'session_in_use',
         'session',
@@ -496,6 +583,19 @@ export class SessionRegistry {
         { sessionId: session.id, owner: session.owner },
       )
     }
+    // 会话背后的 Blender 已经掉了：这次写不能放行。多实例下 addon.send 会退化成
+    // "唯一的 ready 实例"，于是别人的 Blender 被当成本会话的目标 —— 隔离直接失效。
+    const missing = this.missingInstance(session.instanceId)
+    if (missing)
+      return fail(
+        'session_unavailable',
+        'session',
+        'the Blender behind this session is not connected (instance ' + missing.instanceId + ')',
+        'blender_session action=attach instance_id=… to take the live instance, then retry',
+        { instanceId: missing.instanceId, ready: missing.ready },
+      )
+    // 无主（归属已过期）的会话在第一次写调用时认领，写门才知道谁是 main。
+    claimFreeSession(session, c)
     const gate = evaluateWriteGate(session, c, scopes, opts)
     if (!('effective' in gate)) return gate
     const { effective } = gate

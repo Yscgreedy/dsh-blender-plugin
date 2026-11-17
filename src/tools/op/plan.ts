@@ -32,7 +32,11 @@ export async function executePlan(
       'args 传 JSON 对象，例如 {"family":"audit"}',
     )
   if (op === 'report' && argsIn.path) payload.path = text(argsIn.path)
-  const r = await backendPost(port, '/plan', { op: op, args: payload }, 300000)
+  const body: Record<string, unknown> = { op: op, args: payload }
+  // 多实例：显式点名实例时透到 /plan；空串表示"按本会话自己的实例"（router 已定）。
+  const instanceId = text(argsIn.instance_id).trim()
+  if (instanceId) body.instance_id = instanceId
+  const r = await backendPost(port, '/plan', body, 300000)
   const lt = leasedText(r)
   if (lt) return { text: lt }
   if (!r || r.ok !== true)

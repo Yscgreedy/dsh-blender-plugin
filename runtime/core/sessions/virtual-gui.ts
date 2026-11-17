@@ -211,7 +211,8 @@ export class VirtualGuiLifecycle {
         { sessionId: session.id },
       )
     }
-    if (!ownerMatches(session.owner, caller)) {
+    // 归属过期（owner 被 prune 清掉）的会话没有主人：谁都能停，否则只能杀进程。
+    if (session.owner && !ownerMatches(session.owner, caller)) {
       return fail(
         'session_in_use',
         'session',
@@ -220,6 +221,7 @@ export class VirtualGuiLifecycle {
         { sessionId: session.id },
       )
     }
+    if (!session.owner) session.owner = ownerOf(caller)
     this.host.removeSession(session.id)
     await this.disposeSession(session)
     return { ok: true, stopped: true }

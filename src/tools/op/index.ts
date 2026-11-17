@@ -12,7 +12,7 @@ function buildOpTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_op',
     description:
-      '【算子】执行 catalog 的 plan 算子（34 family / 228 op；op=catalog 看目录），以及参数搜索 loop、对象精简 opt、配方库 preset。' +
+      '【算子】执行 catalog 的 plan 算子（35 family / 261 op；op=catalog 看目录），以及参数搜索 loop、对象精简 opt、配方库 preset。' +
       '执行型 op 需要 ready 的 GUI 会话；catalog / 只读 op / args.dry_run=true 不需要会话，也不会启动 Blender。' +
       '旧工具迁移：blender_rt_plan → action=plan；blender_rt_loop → action=loop；blender_rt_opt → action=opt；blender_rt_preset → action=preset。' +
       '写文件/改场景的算子按 write scope 申请 grant；写类操作需要人类未暂停。',
@@ -28,6 +28,11 @@ function buildOpTool(ctx: HostContext, port: number) {
         description: 'plan/opt/preset 的参数对象（JSON），例如 {"family":"audit"}',
       },
       path: { type: 'string', description: 'plan report / loop export 的输出路径（可选）' },
+      instance_id: {
+        type: 'string',
+        description:
+          '多实例时指定目标 Blender 实例（blender_session list 里的 instanceId）；省略=驱动本会话自己那个实例',
+      },
       attach_images: {
         type: 'boolean',
         description: 'plan：是否把结果里的图附图（默认按 op 决定）',

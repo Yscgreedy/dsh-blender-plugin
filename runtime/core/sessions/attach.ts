@@ -1,5 +1,19 @@
+import { touchAgent } from './presence.js'
 import type { CallerIdentity, InstanceRef, SessionRecord, SessionResult } from './types.js'
 import { fail, ownerMatches, ownerOf } from './types.js'
+
+/**
+ * Take ownership of a session that has none, or refresh the heartbeat when the
+ * caller already owns it. An expired owner (no heartbeat for OWNER_TTL_MS) is
+ * cleared by prune() and is therefore free: without this path a session whose
+ * owner went away stays blocked forever ("another DSH session owns this"), which
+ * only a process kill could clear.
+ */
+export function claimFreeSession(session: SessionRecord, c: CallerIdentity): void {
+  if (!session.owner) session.owner = ownerOf(c)
+  else session.owner.heartbeatAt = Date.now()
+  touchAgent(session, c)
+}
 
 export function claimExisting(
   session: SessionRecord,
@@ -14,9 +28,8 @@ export function claimExisting(
       { sessionId: session.id, owner: session.owner },
     )
   }
-  if (!session.owner) session.owner = ownerOf(c)
+  claimFreeSession(session, c)
   session.status = 'ready'
-  session.owner.heartbeatAt = Date.now()
   return { ok: true, session }
 }
 

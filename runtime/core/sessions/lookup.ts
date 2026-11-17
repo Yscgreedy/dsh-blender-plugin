@@ -39,6 +39,25 @@ export function pruneSessions(
   return instances
 }
 
+/**
+ * Sessions nobody owns any more (the owner stopped heartbeating and prune()
+ * cleared the record) whose Blender is still connected. They stay visible and
+ * claimable instead of becoming a wall that only a process kill can clear.
+ */
+export function unownedSessions(
+  sessions: Map<string, SessionRecord>,
+  instances: InstanceRef[],
+): SessionRecord[] {
+  const ready = new Set(instances.filter((x) => x.ready).map((x) => x.instanceId))
+  const out: SessionRecord[] = []
+  for (const s of sessions.values()) {
+    if (s.owner) continue
+    if (!s.instanceId || !ready.has(s.instanceId)) continue
+    out.push(s)
+  }
+  return out
+}
+
 export function findCallerSession(
   sessions: Map<string, SessionRecord>,
   c: CallerIdentity,
