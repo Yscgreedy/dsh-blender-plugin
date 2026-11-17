@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { BLENDER_EXE } from '../../../paths.js'
 import { assertBlenderExe, blenderExeSource } from '../../exe-guard.js'
+import { resolveBlenderExe } from '../../../blender-exe.js'
 import { makeStageScanner, startHeartbeat } from '../../../core/progress.js'
 import { baseChildEnv, withWslEnv } from '../../../proc_env.js'
 import { wslToWin } from '../../../config.js'
@@ -22,7 +23,9 @@ export function spawnJobChild(
   const jobs = d.jobs
   // job 与 worker 共用预检；为空时立即抛 blender_exe_missing，
   // 不再让 spawn(null) 抛 Node 的原始 TypeError（路由/工具层拿不到可执行指引）。
-  assertBlenderExe(BLENDER_EXE, blenderExeSource(), 'blender_run op=start')
+  // P2-9：resolver 在缓存路径消失时重探测一次（版本被卸载不必重启后端）
+  const exe = resolveBlenderExe() || (BLENDER_EXE as string | null)
+  assertBlenderExe(exe, blenderExeSource(), 'blender_run op=start')
   const spawnOpts: SpawnOptions = {
     env: withWslEnv(
       baseChildEnv(Object.assign({}, p.envPairs)),
@@ -32,7 +35,7 @@ export function spawnJobChild(
     detached: false,
     windowsHide: true,
   }
-  const child: ChildProcess = spawn(BLENDER_EXE as string, p.args, spawnOpts)
+  const child: ChildProcess = spawn(exe as string, p.args, spawnOpts)
   j.child = child
   j.pid = child.pid
   // v0.9.3：stage 扫描 + 行数/字节计数（stdout 仍然 pipe 到日志文件）

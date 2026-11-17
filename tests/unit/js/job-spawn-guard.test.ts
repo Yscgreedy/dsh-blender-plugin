@@ -32,6 +32,7 @@ vi.mock('../../../runtime/config.js', () => ({
     },
   },
   wslToWin: (p: unknown) => String(p),
+  detectBlenderNow: () => ({ exe: h.exe, from: 'test' }),
 }))
 
 import { spawnJobChild } from '../../../runtime/execution/jobs/start/spawn.js'

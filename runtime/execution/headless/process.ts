@@ -7,6 +7,7 @@ import { wslToWin } from '../../config.js'
 import { makeStageScanner } from '../../core/progress.js'
 import { errorMessage } from '../../core/json.js'
 import { BLENDER_EXE } from '../../paths.js'
+import { resolveBlenderExe } from '../../blender-exe.js'
 import type { HeadlessRunRec, SpawnResult } from './types.js'
 
 export interface HeadlessLogStreams {
@@ -70,7 +71,8 @@ export async function spawnHeadless(
     let child: ChildProcess | null
     const { soStream, seStream } = streams
     try {
-      child = spawn(BLENDER_EXE as string, args, {
+      // P2-9：resolver 会在缓存路径消失（版本被卸载）时重探测一次再返回
+      child = spawn((resolveBlenderExe() || BLENDER_EXE) as string, args, {
         env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

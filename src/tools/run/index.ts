@@ -65,8 +65,16 @@ function buildRunTool(ctx: HostContext, port: number) {
       workdir: { type: 'string', description: 'headless：chdir + sys.path 首位' },
       include_noise: { type: 'boolean', description: 'headless：产物清单是否含噪音文件' },
       out_json: { type: 'string', description: 'headless：结构化结果落盘路径' },
-      args: { type: 'string', description: 'headless：追加到 -- 之后的命令行参数；tune：参数对象' },
-      env: { type: 'json', description: 'headless：子进程环境变量 {KEY:"VALUE"}' },
+      args: {
+        type: 'json',
+        description:
+          'headless：追加到 -- 之后的命令行参数（string 按空白/引号分词，或 string[]；两条路都到 sys.argv）；tune：参数对象',
+      },
+      env: {
+        type: 'json',
+        description:
+          'headless：子进程环境变量 {KEY:"VALUE"}（真透传；回执 provenance.env 列出注入的键）',
+      },
       op: {
         type: 'string',
         description: 'tune：status | analyze | apply | revert | help（默认 status）',

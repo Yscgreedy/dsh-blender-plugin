@@ -343,7 +343,9 @@ describe('3.1 queue executor command shape', () => {
   it('headless runs blender -b with a script file and no GUI session', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-args-'))
     const { args } = buildJobArgs(record('headless', { script: 'print("HEADLESS {}\\n")' }), dir)
-    expect(args).toEqual(['-b', '--factory-startup', '--python', path.join(dir, 'job.py')])
+    // 2026-11-17：headless argv 恒定带 '--' 分隔符（args/outdir 之后追加；脚本可靠地用
+    // sys.argv.index("--") 取参数尾，与 GUI 的 headless 前导同一口径）。
+    expect(args).toEqual(['-b', '--factory-startup', '--python', path.join(dir, 'job.py'), '--'])
     expect(fs.readFileSync(path.join(dir, 'job.py'), 'utf8')).toContain('HEADLESS')
   })
 

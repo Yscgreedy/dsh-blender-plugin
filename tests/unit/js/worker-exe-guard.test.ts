@@ -52,6 +52,7 @@ vi.mock('../../../runtime/config.js', () => ({
   },
   winToWsl: (p: unknown) => String(p),
   wslToWin: (p: unknown) => String(p),
+  detectBlenderNow: () => ({ exe: h.exe, from: 'test' }),
 }))
 
 vi.mock('../../../runtime/paths.js', () => ({
@@ -178,9 +179,9 @@ describe('workerStart exe guard', () => {
     const src = fs.readFileSync(pkgPath('runtime/execution/workers/worker-start.ts'), 'utf8')
     const earlyReturn =
       /if\s*\(\s*workerAlive\(w\)\s*&&\s*w\.ready\s*\)\s*return\s+workerSnapshot\(w\)/.exec(src)
-    const guard = /assertBlenderExe\(\s*BLENDER_EXE\s*,\s*blenderExeSource\(\)\s*\)/.exec(src)
+    const guard = /assertBlenderExe\(\s*exe\s*,\s*blenderExeSource\(\)\s*\)/.exec(src)
     const bootFile = /const\s+bootWin\s*=\s*prepareBootFile\(/.exec(src)
-    const spawn = /spawn\(\s*BLENDER_EXE\s+as\s+string/.exec(src)
+    const spawn = /spawn\(\s*exe\s+as\s+string/.exec(src)
     for (const m of [earlyReturn, guard, bootFile, spawn]) expect(m).toBeTruthy()
     expect(guard!.index).toBeGreaterThan(earlyReturn!.index)
     expect(bootFile!.index).toBeGreaterThan(guard!.index)

@@ -2,6 +2,7 @@
 import { WIN_TMP, blenderJoin } from '../../paths.js'
 import { extractLoop } from '../output/index.js'
 import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { normalizeSelftestReceipt } from '../selftest.js'
 import type { PlanCallDeps } from './index.js'
 import { MAIN_ROUTES, MODULE_ROUTES } from './routes.generated.js'
 import type { GuiRoute } from './routes.generated.js'
@@ -127,18 +128,39 @@ async function handleQcRender(
   )
 }
 
-async function handleMontage(E: PlanCallDeps, route: GuiRoute, payload: unknown): Promise<unknown> {
+/**
+ * montage：`K.dsh_montage_api["montage"](paths, cols, tile, out, labels, grid, scale_m)` 返回的是
+ * **dict**（不是 dispatch 那种 JSON 字符串），所以不能写字面量拼接 —— 那是
+ * `TypeError: can only concatenate str (not "dict") to str`（现场 P1-7：montage 整族必死，
+ * 连同 montage_help）。这里显式 dumps，并且只解一层 payload。
+ */
+async function handleMontage(
+  E: PlanCallDeps,
+  route: GuiRoute,
+  o: string,
+  payload: unknown,
+): Promise<unknown> {
   await E[route.ensure]()
-  const body =
-    'print("LOOP " + K.' +
-    route.api +
-    '["montage"](_json.loads(' +
-    JSON.stringify(JSON.stringify(payload || {})) +
-    ')))'
+  // montage 族的 route 是 prefix=montage / strip=0 ⇒ 到这里 op 还是全名：montage / montage_help / montage_selftest
+  const raw = (o || '').slice(route.strip) || 'montage'
+  const sub = raw.indexOf('montage_') === 0 ? raw.slice('montage_'.length) : raw
+  const body = [
+    'import json as _json',
+    'A = K.' + route.api,
+    'N = ' + JSON.stringify(sub),
+    'P = _json.loads(' + JSON.stringify(JSON.stringify(payload || {})) + ')',
+    'if isinstance(P, dict) and isinstance(P.get("args"), dict): P = P["args"]',
+    'if isinstance(P, dict) and "paths" not in P and isinstance(P.get("files"), (list, str)): P["paths"] = P["files"]',
+    'if N not in A:',
+    '    R = {"ok": False, "error": "unknown montage op", "op": N, "ops": sorted(_k for _k in A if not _k.startswith("_"))}',
+    'else:',
+    '    R = A[N](**P) if isinstance(P, dict) else A[N](P)',
+    'print("LOOP " + (_json.dumps(R, ensure_ascii=False, default=str) if not isinstance(R, str) else R))',
+  ].join(String.fromCharCode(10))
   return extractLoop(
     await E.addon.send(
       'execute_code',
-      { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body },
+      { code: KERNEL_BOOTSTRAP + String.fromCharCode(10) + body },
       route.timeoutMs,
     ),
   )
@@ -233,7 +255,7 @@ export async function handleRoute(
     case 'qc-render':
       return handleQcRender(E, route, o, payload)
     case 'montage':
-      return handleMontage(E, route, payload)
+      return handleMontage(E, route, o, payload)
     case 'motion':
     case 'deliver':
       return handleModuleAlias(E, route, o, payload)
@@ -261,7 +283,7 @@ async function routeTable(
 ): Promise<RouteDecision> {
   for (const route of routes) {
     if (!routeMatches(route, o)) continue
-    return hit(handleRoute(E, route, o, payload))
+    return hit(normalizeSelftestReceipt(o, await handleRoute(E, route, o, payload)))
   }
   return miss()
 }

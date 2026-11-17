@@ -64,6 +64,7 @@ vi.mock('../../../runtime/config.js', () => ({
   winToWsl: (p: unknown) => String(p),
   wslToWin: (p: unknown) => String(p),
   CFG: { workerPort: 9879 },
+  detectBlenderNow: () => ({ exe: 'C:/fake/blender.exe', from: 'test' }),
 }))
 
 vi.mock('../../../runtime/paths.js', () => ({

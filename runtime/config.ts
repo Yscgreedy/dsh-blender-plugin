@@ -399,6 +399,11 @@ const FEATURE_VIRTUAL_GUI_MAX = (() => {
  *  这里只用一次（模块级 CFG），探测来源见 CFG.source.blenderExe。
  *  必须在 resolveWorkDir 之前：workDir 的 Blender 侧形态取决于 Blender 是 Windows 还是同机进程。 */
 const BLENDER = detectBlenderExe({ fileCfg: FILE.cfg })
+/** P2-9：运行时重新探测入口（同一份 FILE.cfg 口径）。runtime/blender-exe.ts 用它实现
+ *  「缓存路径没了就立刻重探测」，不必重启后端。 */
+export function detectBlenderNow(): { exe: string | null; from: string } {
+  return detectBlenderExe({ fileCfg: FILE.cfg })
+}
 const WORK = resolveWorkDir()
 
 function num(v: unknown, d: number): number {

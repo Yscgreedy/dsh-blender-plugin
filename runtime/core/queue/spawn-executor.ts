@@ -9,6 +9,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { CFG, IS_WIN } from '../../config.js'
 import { BLENDER_EXE } from '../../paths.js'
+import { KERNEL_BOOTSTRAP } from '../kernel/bootstrap.js'
+import { preloadChunk } from '../kernel/api.js'
+import { envPrelude, scriptFileBlock, workdirBlock } from '../scripts.js'
 import type { JobExecutionResult, JobExecutor, JobHandle, JobRecord } from './types.js'
 
 export interface SpawnExecutorOptions {
@@ -34,10 +37,119 @@ interface Prepared {
   args: string[]
   tempDir: string | null
   outdir: string | null
+  env: Record<string, string>
+  argsTail: string[]
+  envKeys: string[]
+  preloads: string[]
+  bootstrap: boolean
 }
 
 function asString(value: unknown): string {
   return value === undefined || value === null ? '' : String(value)
+}
+
+/**
+ * args 透传（R4 / 2026-11-17 消费方需求）：schema 收 string | string[]，两条路都真的到 sys.argv。
+ *
+ * 现场：schema 声明 string、实现只认 Array.isArray ⇒ 字符串 100% 静默丢失（ARGV_TAIL []）。
+ * 这里做 POSIX 风格分词（空白分隔 + 单/双引号 + 双引号内反斜杠转义），空串丢弃。
+ */
+export function splitArgs(raw: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let quote: string | null = null
+  let started = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (quote) {
+      if (ch === quote) {
+        quote = null
+        continue
+      }
+      if (ch === '\\' && quote === '"' && i + 1 < raw.length) {
+        cur += raw[++i]
+        continue
+      }
+      cur += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      started = true
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (started || cur) {
+        out.push(cur)
+        cur = ''
+        started = false
+      }
+      continue
+    }
+    cur += ch
+    started = true
+  }
+  if (started || cur) out.push(cur)
+  return out
+}
+
+export function normalizeArgs(value: unknown): string[] {
+  if (value === undefined || value === null) return []
+  if (Array.isArray(value)) return value.map(asString)
+  if (typeof value === 'string') return splitArgs(value)
+  throw new Error('args 只认 string | string[]（收到 ' + typeof value + '）')
+}
+
+export function normalizeEnv(value: unknown): Record<string, string> {
+  if (value === undefined || value === null) return {}
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new Error(
+      'env 只认对象 {KEY:"VALUE"}（收到 ' + (Array.isArray(value) ? 'array' : typeof value) + '）',
+    )
+  const out: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw === undefined || raw === null) continue
+    out[String(key)] = String(raw)
+  }
+  return out
+}
+
+/**
+ * headless 前导（R3 / 2026-11-17 消费方需求）：与 GUI 同源的内核 K。
+ *
+ * 现场：blender_run(kind=headless, preload="geo", bootstrap=true) 跑出来 K_like=[]，
+ * K.dsh_geo_api 直接 NameError —— 队列执行器只拼了 -b --python，从没注入 KERNEL_BOOTSTRAP。
+ * 这里按 GUI 的同一份源码注入：bootstrap（默认开）+ preload 模块（各自命名空间）+ workdir。
+ * preload 名不存在时立刻抛错（job_prepare_failed），不让脚本跑到一半才 NameError。
+ */
+function headlessPrelude(
+  params: Record<string, unknown>,
+  envPairs: Record<string, string>,
+): { code: string; preloads: string[]; bootstrap: boolean } {
+  const parts: string[] = [envPrelude(envPairs)]
+  const bootstrap = params.bootstrap !== false
+  if (bootstrap) parts.push(KERNEL_BOOTSTRAP)
+  const raw = params.preload
+  const mods = (Array.isArray(raw) ? raw.map(asString) : raw ? String(raw).split(',') : [])
+    .map((m) => m.trim().replace(/\.py$/, ''))
+    .filter(Boolean)
+  for (const name of mods) {
+    try {
+      parts.push(preloadChunk(name))
+    } catch (e) {
+      throw new Error(
+        'preload 模块不可用：' +
+          name +
+          '（' +
+          (e instanceof Error ? e.message : String(e)) +
+          '）—— 用 runtime/py/modules.json 里的模块名，例如 preload="geo,audit"',
+        { cause: e },
+      )
+    }
+  }
+  if (params.workdir) parts.push(workdirBlock(String(params.workdir)))
+  if (params.script_file) parts.push(scriptFileBlock(String(params.script_file)))
+  return { code: parts.filter(Boolean).join('\n'), preloads: mods, bootstrap }
 }
 
 function frameRange(params: Record<string, unknown>): { start: number; end: number } | null {
@@ -90,13 +202,27 @@ function renderPrelude(params: Record<string, unknown>): string {
 }
 
 /** Exported for contract tests: render and headless use one fixed internal entry. */
-export function buildJobArgs(
-  job: JobRecord,
-  tempDir: string,
-): { args: string[]; outdir: string | null } {
+export interface BuiltJobArgs {
+  args: string[]
+  outdir: string | null
+  env: Record<string, string>
+  argsTail: string[]
+  envKeys: string[]
+  preloads: string[]
+  bootstrap: boolean
+}
+
+export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
   const params = job.params
   let outdir = asString(params.outdir) || null
   if (outdir) ensureDir(outdir)
+  const argsTail = job.kind === 'headless' ? normalizeArgs(params.args) : []
+  const customEnv = job.kind === 'headless' ? normalizeEnv(params.env) : {}
+  const env: Record<string, string> = {
+    ...customEnv,
+    DSH_ARGS: JSON.stringify(argsTail),
+    DSH_ENV_KEYS: JSON.stringify(Object.keys(customEnv)),
+  }
   if (job.kind === 'render') {
     const file = asString(params.file)
     const args: string[] = []
@@ -118,21 +244,65 @@ export function buildJobArgs(
     const frames = frameRange(params)
     if (frames) args.push('-s', String(frames.start), '-e', String(frames.end), '-a')
     if (output && !output.endsWith('/') && !output.endsWith('\\')) ensureDir(path.dirname(output))
-    return { args, outdir }
+    return {
+      args,
+      outdir,
+      env,
+      argsTail,
+      envKeys: Object.keys(customEnv),
+      preloads: [],
+      bootstrap: false,
+    }
   }
   const file = asString(params.file)
   const args: string[] = []
   if (file) args.push(file)
-  args.push('-b', '--factory-startup')
-  const scriptPath = path.join(tempDir, 'job.py')
+  args.push('-b')
+  if (params.factory_startup !== false) args.push('--factory-startup')
   const script = asString(params.script)
-  if (script) fs.writeFileSync(scriptPath, script, 'utf8')
   const scriptFile = asString(params.script_file)
-  if (scriptFile) args.push('--python', scriptFile)
-  else if (script) args.push('--python', scriptPath)
-  const extra = params.args
-  if (Array.isArray(extra)) args.push(...extra.map(asString))
-  return { args, outdir }
+  const prelude = headlessPrelude(params, env)
+  if (script) {
+    const scriptPath = path.join(tempDir, 'job.py')
+    const body = prelude.code ? prelude.code + '\n' + script : script
+    fs.writeFileSync(scriptPath, body, 'utf8')
+    args.push('--python', scriptPath)
+  } else if (scriptFile) {
+    // 实测：Blender 的每个 --python 文件各跑各的命名空间 —— 用两个 --python 时
+    // 第二个脚本里看不到 prelude 注入的 K（USER_FILE_PRESENT False）。
+    // 所以把 prelude + exec(用户脚本) 合成一个 job.py：K 在 globals() 里，__file__ 仍是用户的文件。
+    const scriptPath = path.join(tempDir, 'job.py')
+    const lines = [
+      prelude.code,
+      'import os as _dsh_os, sys as _dsh_sys',
+      '_dsh_target = ' + JSON.stringify(scriptFile),
+      'try:',
+      '    _dsh_target = K.win_path(_dsh_target)',
+      'except Exception:',
+      '    pass',
+      '__file__ = _dsh_target',
+      '_dsh_dir = _dsh_os.path.dirname(_dsh_target)',
+      'if _dsh_dir and _dsh_dir not in _dsh_sys.path:',
+      '    _dsh_sys.path.insert(0, _dsh_dir)',
+      'with open(_dsh_target, encoding="utf-8") as _dsh_fh:',
+      '    _dsh_src = _dsh_fh.read()',
+      'exec(compile(_dsh_src, _dsh_target, "exec"), globals())',
+    ].filter(Boolean)
+    fs.writeFileSync(scriptPath, lines.join('\n') + '\n', 'utf8')
+    args.push('--python', scriptPath)
+  }
+  args.push('--')
+  if (outdir) args.push(outdir)
+  args.push(...argsTail)
+  return {
+    args,
+    outdir,
+    env,
+    argsTail,
+    envKeys: Object.keys(customEnv),
+    preloads: prelude.preloads,
+    bootstrap: prelude.bootstrap,
+  }
 }
 
 function prepare(job: JobRecord, spawnOptions: SpawnExecutorOptions): Prepared {
@@ -143,17 +313,38 @@ function prepare(job: JobRecord, spawnOptions: SpawnExecutorOptions): Prepared {
   return { ...built, tempDir }
 }
 
-function prepareFailure(e: unknown, blenderExe: string | null): JobExecutionResult {
+function prepareFailure(
+  e: unknown,
+  blenderExe: string | null,
+  code: 'blender_exe_missing' | 'job_prepare_failed' = 'blender_exe_missing',
+): JobExecutionResult {
+  const reason = e instanceof Error ? e.message : String(e)
+  if (code === 'job_prepare_failed')
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: reason,
+      error: {
+        ok: false,
+        code,
+        stage: 'spawn',
+        root_cause: 'Could not prepare the Blender job: ' + reason,
+        fix: 'Fix the reported cause (preload module name, args/env type), then resubmit.',
+        fallback: { kind: 'unavailable', summary: 'fix the job parameters and resubmit' },
+        evidence: { blenderExe },
+      },
+    }
   return {
     exitCode: null,
     signal: null,
     stdout: '',
-    stderr: e instanceof Error ? e.message : String(e),
+    stderr: reason,
     error: {
       ok: false,
-      code: 'blender_exe_missing',
+      code,
       stage: 'spawn',
-      root_cause: 'Could not start Blender: ' + (e instanceof Error ? e.message : String(e)),
+      root_cause: 'Could not start Blender: ' + reason,
       fix: 'Set DSH_BLENDER_EXE or write dsh-blender.config.json with blenderExe.',
       fallback: { kind: 'unavailable', summary: 'install Blender or set DSH_BLENDER_EXE' },
       evidence: { blenderExe },
@@ -216,7 +407,7 @@ function killTree(child: ChildProcess): void {
 
 function spawnBlender(opts: SpawnExecutorOptions, prepared: Prepared, jobId: string): ChildProcess {
   return (opts.spawnImpl || spawn)(opts.blenderExe || (BLENDER_EXE as string), prepared.args, {
-    env: { ...process.env, DSH_JOB_ID: jobId },
+    env: { ...process.env, ...prepared.env, DSH_JOB_ID: jobId },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     detached: !IS_WIN,
@@ -271,7 +462,9 @@ export class SpawnJobExecutor implements JobExecutor {
       return {
         pid: null,
         cancel: () => {},
-        done: Promise.resolve(prepareFailure(e, this.opts.blenderExe || BLENDER_EXE)),
+        done: Promise.resolve(
+          prepareFailure(e, this.opts.blenderExe || BLENDER_EXE, 'job_prepare_failed'),
+        ),
       }
     }
     let child: ChildProcess
@@ -312,6 +505,13 @@ export class SpawnJobExecutor implements JobExecutor {
           stderr: logs.stderr,
           artifacts: artifactsIn(prepared.outdir, started),
           ...(parsed === undefined ? {} : { parsed }),
+          provenance: {
+            args: prepared.argsTail,
+            env: Object.keys(prepared.env).sort(),
+            env_keys: prepared.envKeys,
+            preloads: prepared.preloads,
+            bootstrap: prepared.bootstrap,
+          },
           ...(timedOut
             ? {
                 error: {

@@ -91,6 +91,17 @@ export class JobQueue {
     this.restore()
   }
 
+  /**
+   * 从磁盘恢复队列（Gateway 换代后的第一件事）。
+   *
+   * H5：上一个 Gateway 死的那一刻，assigned/running 的 Blender 进程已经被收走
+   * （dispose 杀进程树 / 宿主换代）—— 这条记录若继续自称 running，下一个调用者的
+   * status/wait 就会一直等一个不存在的 pid。这里落到 failed(gateway_restart) 并打
+   * **lost=true**：id 与参数保留、事件链完整、重新入口写在 error.fix 与 lostReason 里。
+   *
+   * queued 的作业没有进程，所以反过来**照旧入队**（随后 pump 会真把它跑起来）——
+   * "reload 之前排上队的活不会因为 reload 白排"。
+   */
   private restore(): void {
     const loaded = this.store.load()
     for (const job of loaded) {
@@ -98,6 +109,12 @@ export class JobQueue {
         this.transition(job, 'failed', 'gateway_restart')
         job.error = failureForRestart()
         job.finishedAt = this.now()
+        job.pid = null
+        job.lost = true
+        job.lostAt = this.now()
+        job.lostReason =
+          'Gateway 换代（reload / dispose）时进程被收走：作业没有跑完，id 与参数保留。' +
+          '要产物就用同一组参数重新 action=submit；旧记录只用于对账（lost=true）。'
       }
       this.jobs.push(job)
     }
@@ -243,6 +260,36 @@ export class JobQueue {
     return { job: this.snapshot(job), canceled: true, alreadyFinished: false }
   }
 
+  /**
+   * H4/H5：Gateway 关停（插件 dispose / 热更重启）时把**所有非终态作业**收干净。
+   *
+   * 为什么不能只让 OS 杀子进程：作业是 Gateway 的子进程，Gateway 一死它们就成了
+   * 孤儿（还在跑、还在写盘），而 index.jsonl 里永远留着 running —— 现场表现为
+   * "reload 之后 /status 有一堆状态是 running 的僵尸作业"。这里显式 cancel：
+   * 杀掉 handle、状态落到 canceled、并在事件里写明原因（重新入口 = 重新 submit）。
+   */
+  cancelAll(reason = 'gateway shutdown'): string[] {
+    const dropped: string[] = []
+    for (const job of this.jobs) {
+      if (terminalOf(job.state)) continue
+      const handle = this.handles.get(job.id)
+      this.transition(job, 'canceled', reason)
+      job.finishedAt = this.now()
+      job.pid = null
+      this.handles.delete(job.id)
+      if (handle) {
+        try {
+          handle.cancel()
+        } catch {
+          /* cancellation is idempotent */
+        }
+      }
+      dropped.push(job.id)
+    }
+    if (dropped.length) this.persist()
+    return dropped
+  }
+
   list(filter: { state?: string; kind?: string; owner?: string } = {}): JobRecord[] {
     return this.jobs
       .filter((job) => !filter.state || job.state === filter.state)
@@ -352,6 +399,7 @@ export class JobQueue {
       signal: result.signal,
       ms: Date.now() - (job.startedAt || Date.now()),
       ...(result.parsed === undefined ? {} : { parsed: result.parsed }),
+      ...(result.provenance === undefined ? {} : { provenance: result.provenance }),
     }
     job.artifacts = result.artifacts || []
     job.pid = null

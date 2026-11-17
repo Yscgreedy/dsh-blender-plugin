@@ -205,14 +205,37 @@ function steamRoots(d: BlenderDetectDeps): string[] {
  * 路径用 path.join（Windows 上就是 path.win32.join），盘符根显式带分隔符，
  * 避免 path.win32.join('C:', …) 变成驱动器相对路径。
  */
+/**
+ * 同一目录下多个版本安装（Blender 5.2 / 5.3 / 4.2 LTS）时，**按版本号倒序**返回。
+ *
+ * 现场（P2-9）：旧实现按 listDir 返回顺序 push，取第一个存在的 —— 于是同时装了 5.2 与 5.3 时，
+ * 后端可能选 5.2 spawn，而 GUI 里跑的是 5.3.0；两个通道不是同一个 Blender，且这个差异完全静默。
+ * 解析规则：目录名里的第一个 x[.y[.z]] 当版本键；无版本号的排最后（老式 Blender/ 目录）。
+ */
+function versionKey(name: string): number[] {
+  const m = /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(name))
+  if (!m) return [-1, -1, -1]
+  return [Number(m[1] || 0), Number(m[2] || 0), Number(m[3] || 0)]
+}
+
+function sortByVersionDesc(dirs: string[]): string[] {
+  return dirs.slice().sort((a, b) => {
+    const ka = versionKey(a)
+    const kb = versionKey(b)
+    for (let i = 0; i < 3; i++) {
+      if (ka[i] !== kb[i]) return kb[i] - ka[i]
+    }
+    return String(b).localeCompare(String(a))
+  })
+}
+
 function winCandidates(d: BlenderDetectDeps): Candidate[] {
   const out: Candidate[] = []
   const pf = readString(d.env.ProgramFiles) || 'C:\\Program Files'
   const foundation = path.join(pf, 'Blender Foundation')
-  for (const dir of d.listDir(foundation)) {
-    if (/^Blender/i.test(dir)) {
-      out.push({ exe: path.join(foundation, dir, 'blender.exe'), from: 'auto:install' })
-    }
+  const verDirs = sortByVersionDesc(d.listDir(foundation).filter((dir) => /^Blender/i.test(dir)))
+  for (const dir of verDirs) {
+    out.push({ exe: path.join(foundation, dir, 'blender.exe'), from: 'auto:install' })
   }
   out.push({ exe: path.join(foundation, 'Blender', 'blender.exe'), from: 'auto:install' })
   for (const root of steamRoots(d)) {
@@ -232,13 +255,13 @@ function macCandidates(d: BlenderDetectDeps): Candidate[] {
   const homes = ['/Applications', path.join(d.homedir(), 'Applications')]
   for (const v of d.listDir('/Volumes')) homes.push(path.join('/Volumes', v, 'Applications'))
   for (const base of homes) {
-    for (const dir of d.listDir(base)) {
-      if (/^Blender.*\.app$/i.test(dir)) {
-        out.push({
-          exe: path.join(base, dir, 'Contents', 'MacOS', 'Blender'),
-          from: 'auto:install',
-        })
-      }
+    for (const dir of sortByVersionDesc(
+      d.listDir(base).filter((x) => /^Blender.*\.app$/i.test(x)),
+    )) {
+      out.push({
+        exe: path.join(base, dir, 'Contents', 'MacOS', 'Blender'),
+        from: 'auto:install',
+      })
     }
     out.push({
       exe: path.join(base, 'Blender.app', 'Contents', 'MacOS', 'Blender'),
@@ -255,10 +278,9 @@ function linuxCandidates(d: BlenderDetectDeps): Candidate[] {
     const base = '/mnt/' + drive
     if (!d.exists(base)) continue
     const foundation = path.join(base, 'Program Files', 'Blender Foundation')
-    for (const dir of d.listDir(foundation)) {
-      if (/^Blender/i.test(dir)) {
-        out.push({ exe: path.join(foundation, dir, 'blender.exe'), from: 'auto:install' })
-      }
+    const verDirs = sortByVersionDesc(d.listDir(foundation).filter((dir) => /^Blender/i.test(dir)))
+    for (const dir of verDirs) {
+      out.push({ exe: path.join(foundation, dir, 'blender.exe'), from: 'auto:install' })
     }
     for (const rel of [
       'SteamLibrary/steamapps/common/Blender/blender.exe',

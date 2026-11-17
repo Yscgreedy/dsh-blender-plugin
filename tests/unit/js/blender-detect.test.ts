@@ -215,6 +215,31 @@ describe('detectBlenderExe · official install (Windows regression)', () => {
     expect(got.from).toBe('auto:install')
     expect(norm(got.exe)).toBe(norm(exe))
   })
+
+  // P2-9 回归：同时装 5.2 与 5.3 时必须选 **5.3**。旧实现按 listDir 返回顺序取第一个存在的，
+  // 于是后端 spawn 的可能是 5.2，而 GUI 里跑的是 5.3 —— 两条通道不是同一个 Blender，且完全静默。
+  it('picks the highest version when several Blender installs coexist', () => {
+    const home = tmpHome('official-multi')
+    const pf = path.join(home, 'Program Files')
+    const foundation = path.join(pf, 'Blender Foundation')
+    const v52 = writeFile(path.join(foundation, 'Blender 5.2', 'blender.exe'), '')
+    const v53 = writeFile(path.join(foundation, 'Blender 5.3', 'blender.exe'), '')
+    const v42 = writeFile(path.join(foundation, 'Blender 4.2', 'blender.exe'), '')
+
+    // listDir 故意给出"低版本在前"的顺序（资源管理器/文件系统都可能这样返回）
+    const got = detectBlenderExe({
+      env: { ProgramFiles: pf },
+      isWin: true,
+      isMac: false,
+      fileCfg: {},
+      exists: (p: string) => [v52, v53, v42].some((x) => norm(x) === norm(p)),
+      listDir: (p: string) =>
+        norm(p) === norm(foundation) ? ['Blender 4.2', 'Blender 5.2', 'Blender 5.3'] : [],
+    })
+
+    expect(got.from).toBe('auto:install')
+    expect(norm(got.exe)).toBe(norm(v53))
+  })
 })
 
 describe('detectBlenderExe · macOS / Linux (injected probes)', () => {

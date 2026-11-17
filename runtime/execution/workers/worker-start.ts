@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { winToWsl, wslToWin } from '../../config.js'
 import { assertBlenderExe, blenderExeSource } from '../exe-guard.js'
+import { resolveBlenderExe } from '../../blender-exe.js'
 import {
   BLENDER_EXE,
   USER_CONFIG_WIN,
@@ -140,6 +141,7 @@ function assertWorkerReady(
   w: WorkerRecord,
   child: ChildProcess,
   info: WorkerInfo,
+  exe: string | null,
 ): Record<string, unknown> {
   if (info.spawnErr) {
     const spawnErr = info.spawnErr as NodeJS.ErrnoException
@@ -153,7 +155,7 @@ function assertWorkerReady(
       evidence?: Record<string, unknown>
     } = new Error(
       'worker 起不来（' +
-        String(BLENDER_EXE) +
+        String(exe) +
         '）：' +
         String((info.spawnErr && info.spawnErr.message) || info.spawnErr),
     )
@@ -170,7 +172,7 @@ function assertWorkerReady(
         summary: '没有可执行的 Blender 时无法启动无头 worker；不会启动可见 GUI 或伪造渲染。',
       }
       e.evidence = {
-        blenderExe: String(BLENDER_EXE || ''),
+        blenderExe: String(exe || ''),
         spawnError: String(spawnErr.code || ''),
       }
     }
@@ -229,7 +231,9 @@ export async function workerStart(
   const w = workerState(ctx, nameArg !== undefined ? nameArg : opts.name)
   if (workerAlive(w) && w.ready) return workerSnapshot(w)
   // 预检必须在 prepareBootFile 写盘与 spawn 之前：exe 为空时不再触发 Node 原始 TypeError。
-  assertBlenderExe(BLENDER_EXE, blenderExeSource())
+  // P2-9：走 resolver —— 缓存路径在磁盘上不存在时（版本被卸载）先重探测一次，不必重启后端。
+  const exe = resolveBlenderExe() || (BLENDER_EXE as string | null)
+  assertBlenderExe(exe, blenderExeSource())
   if (w.child) {
     try {
       w.child.kill('SIGKILL')
@@ -248,7 +252,7 @@ export async function workerStart(
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   }
-  const child: ChildProcess = spawn(BLENDER_EXE as string, args, spawnOpts)
+  const child: ChildProcess = spawn(exe as string, args, spawnOpts)
   w.child = child
   w.port = port
   w.ready = false
@@ -259,7 +263,7 @@ export async function workerStart(
   w.stdoutTail = ''
   w.stderrTail = ''
   const info = await waitWorkerReady(w, child, opts)
-  const okRec = assertWorkerReady(w, child, info)
+  const okRec = assertWorkerReady(w, child, info, exe as string | null)
   const okPid = typeof okRec.pid === 'number' ? okRec.pid : null
   w.ready = true
   w.gpu = okRec.gpu || null

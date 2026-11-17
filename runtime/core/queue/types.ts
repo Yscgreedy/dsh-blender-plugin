@@ -47,6 +47,8 @@ export interface JobResult {
   signal: string | null
   ms: number
   parsed?: unknown
+  /** 参数透传回执（R4）：args 分词结果、注入的 env 键、preload 清单、bootstrap 是否开启。 */
+  provenance?: Record<string, unknown>
 }
 
 /** Persisted job shape. Handles and timers are never part of this record. */
@@ -70,6 +72,17 @@ export interface JobRecord {
   logs: JobLogs
   error: AvailabilityFailure | null
   events: JobEvent[]
+  /**
+   * H5（作业跨 reload）：这条记录是**上一个 Gateway** 留下的、进程已经随换代消失的作业。
+   * 它不能自称 running（那会让下一次 status/wait 一直等一个不存在的进程），
+   * 也不能假装失败得像"跑完了"—— lost=true 才是诚实答案：id / 参数 / 事件保留，
+   * 产物按磁盘台账认领，要产物就重新 submit。
+   */
+  lost?: boolean
+  /** lost 的人话原因（与 events 的 reason 同源） */
+  lostReason?: string
+  /** 判 lost 的时刻（毫秒时间戳） */
+  lostAt?: number
 }
 
 export interface JobExecutionResult {
@@ -79,6 +92,7 @@ export interface JobExecutionResult {
   stderr: string
   artifacts?: string[]
   parsed?: unknown
+  provenance?: Record<string, unknown>
   error?: AvailabilityFailure
 }
 

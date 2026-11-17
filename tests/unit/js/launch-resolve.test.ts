@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({
   cfg: { launchAgentUrl: '' } as Record<string, unknown>,
 }))
-vi.mock('../../../runtime/config.js', () => ({ CFG: h.cfg, winToWsl: (p: string) => p }))
+vi.mock('../../../runtime/config.js', () => ({
+  CFG: h.cfg,
+  winToWsl: (p: string) => p,
+  detectBlenderNow: () => ({ exe: null, from: 'test' }),
+}))
 
 import {
   ADDON_NAME_HINTS,

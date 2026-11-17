@@ -62,12 +62,31 @@ export function formatJob(job: Record<string, unknown>): string[] {
           ? ' · parsed=' + clip(JSON.stringify(result.parsed), 1200)
           : ''),
     )
+  const provenance = asRecord(result.provenance)
+  if (result.provenance)
+    lines.push(
+      'provenance  args=' +
+        clip(JSON.stringify(provenance.args ?? []), 400) +
+        ' · env=' +
+        clip(JSON.stringify(provenance.env_keys ?? provenance.env ?? []), 400) +
+        (Array.isArray(provenance.preloads) && provenance.preloads.length
+          ? ' · preloads=' + provenance.preloads.join(',')
+          : '') +
+        ' · bootstrap=' +
+        text(provenance.bootstrap),
+    )
   const artifacts = Array.isArray(job.artifacts) ? job.artifacts : []
   if (artifacts.length) {
     lines.push('artifacts ' + String(artifacts.length) + ' 个')
     for (const a of artifacts.slice(0, 8)) lines.push('  · ' + text(a))
     if (artifacts.length > 8) lines.push('  · …另有 ' + String(artifacts.length - 8) + ' 个')
   }
+  if (job.lost === true)
+    lines.push(
+      'lost    true · ' +
+        text(job.lostReason || '上一个 Gateway 换代时进程被收走') +
+        '（产物未生成；重新入口 = 同一组参数再 action=submit）',
+    )
   if (job.error)
     lines.push(
       'error   ' + text(err.code) + ' · stage=' + text(err.stage) + ' · ' + text(err.root_cause),
@@ -176,6 +195,8 @@ export function runHelp(): string {
     '  action=submit kind=render|headless + 参数',
     '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/priority',
     '    headless（跑脚本）：script/script_file/file/outdir/timeout_ms/engine/preload/factory_startup/bootstrap/workdir/include_noise/out_json/args/env/priority',
+    '      · 默认注入内核 K（bootstrap=false 才关）+ preload 模块；preload 名不存在 → job_prepare_failed',
+    '      · args=string（引号分词）| string[]；env={KEY:VALUE}；两者都写进 result.provenance 供对账',
     '  action=status|wait|collect|cancel id=<jobId>；wait 默认 120s、上限 600s，超时不取消',
     '  action=list [state=kind=owner=] | action=perf（队列容量与槽位）',
     '  action=tune op=status|analyze|apply|revert|help（旧 blender_run 的 Cycles 分析）',
