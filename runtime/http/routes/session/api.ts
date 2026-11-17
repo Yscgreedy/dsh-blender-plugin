@@ -31,10 +31,18 @@ export interface SessionApiResult {
   body: Record<string, unknown>
 }
 
+/** Gateway 控制面（reload / shutdown）：由 /lease 路由注入，不属于会话注册表。 */
+export interface SessionControl {
+  /** 回执自带 ok/code 字段（与 SessionResult 同构），直接当 body 透给调用方。 */
+  reload: (payload: Record<string, unknown>) => Record<string, unknown>
+  shutdown: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
+}
+
 export async function dispatchSessionAction(
   registry: SessionRegistry,
   action: string,
   payload: Record<string, unknown>,
+  control?: SessionControl,
 ): Promise<SessionApiResult> {
   const caller = currentCaller()
   if (!caller) {
@@ -47,7 +55,7 @@ export async function dispatchSessionAction(
       },
     }
   }
-  const result = await runSessionAction(registry, caller, action, payload)
+  const result = await runSessionAction(registry, caller, action, payload, control)
   if (!result.ok)
     return { status: statusFor(result), body: result as unknown as Record<string, unknown> }
   return { status: 200, body: result as unknown as Record<string, unknown> }
@@ -58,9 +66,36 @@ async function runSessionAction(
   caller: CallerIdentity,
   action: string,
   payload: Record<string, unknown>,
+  control?: SessionControl,
 ): Promise<SessionResult<Record<string, unknown>>> {
   const sessionId = payload.sessionId === undefined ? undefined : String(payload.sessionId)
   switch (action) {
+    // H2：一步式热更（HTTP 面）。宿主面同构，见 src/tools/session/reload.ts。
+    case 'reload':
+      if (!control)
+        return {
+          ok: false,
+          code: 'feature_disabled',
+          stage: 'config',
+          root_cause: 'reload control is not wired in this Gateway build',
+          fix: 'rebuild the Gateway (npm run build) or use blender_session action=reload',
+          fallback: { kind: 'unavailable', summary: 'reload unavailable' },
+          evidence: { action },
+        }
+      return control.reload(payload) as unknown as SessionResult<Record<string, unknown>>
+    // H4：插件 dispose / 热更重启前的收尾（virtual-gui + 作业 + 进程）
+    case 'shutdown':
+      if (!control)
+        return {
+          ok: false,
+          code: 'feature_disabled',
+          stage: 'config',
+          root_cause: 'shutdown control is not wired in this Gateway build',
+          fix: 'rebuild the Gateway (npm run build)',
+          fallback: { kind: 'unavailable', summary: 'shutdown unavailable' },
+          evidence: { action },
+        }
+      return (await control.shutdown(payload)) as unknown as SessionResult<Record<string, unknown>>
     case 'list':
       return { ok: true, sessions: registry.listFor(caller) }
     case 'attach':
@@ -135,7 +170,7 @@ async function runSessionAction(
         code: 'invalid_params',
         stage: 'config',
         root_cause: 'unknown session action: ' + action,
-        fix: 'use list, attach, claim, detach, release, status, doctor, consent, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat',
+        fix: 'use list, attach, claim, detach, release, status, doctor, consent, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
         fallback: { kind: 'unavailable', summary: 'the session action was not executed' },
         evidence: { action },
       }

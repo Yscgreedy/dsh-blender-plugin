@@ -3,9 +3,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from '../deps.js'
 import { currentCaller } from '../../caller.js'
 import { dispatchSessionAction } from './api.js'
+import type { SessionControl } from './api.js'
+import { buildReloadReport, drainGateway } from './control.js'
 
 export function createLeaseHandler(E: HttpRouteDeps) {
   const { json, leaseAcquire, leaseView, readBody, releaseStaleLease, sessionRegistry } = E
+  // H2/H4：reload / shutdown 走同一条动作通道（路由表 29 条不变）
+  const control: SessionControl = {
+    reload: (payload) => buildReloadReport(E, payload) as unknown as Record<string, unknown>,
+    shutdown: (payload) => drainGateway(E, payload),
+  }
   return async function lease(
     req: IncomingMessage,
     res: ServerResponse,
@@ -20,7 +27,7 @@ export function createLeaseHandler(E: HttpRouteDeps) {
       payload = {}
     }
     if (typeof payload.action === 'string' && payload.action) {
-      const result = await dispatchSessionAction(sessionRegistry, payload.action, payload)
+      const result = await dispatchSessionAction(sessionRegistry, payload.action, payload, control)
       json(res, result.status, result.body)
       return
     }

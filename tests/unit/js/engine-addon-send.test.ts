@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createEngineMetrics, installAddonSend } from '../../../runtime/core/engine/lifecycle.js'
+import { runWithInstance } from '../../../runtime/transport/instance-target.js'
 import type { AddonClient } from '../../../runtime/transport/probes.js'
 
 interface SendCall {
@@ -35,5 +36,40 @@ describe('installAddonSend', () => {
     expect(calls[0].params).toEqual({ code: 'print(1)' })
     expect(calls[0].timeoutMs).toBe(1234)
     expect(calls[0].opts).toEqual({ instanceId: 'vgui-abc' })
+  })
+
+  it('drives the instance the request resolved when the call names none', async () => {
+    const calls: SendCall[] = []
+    const addon = fakeAddon(calls)
+    installAddonSend(addon, createEngineMetrics(), ready)
+
+    await runWithInstance('vgui-abc', async () => {
+      await addon.send('execute_code', { code: 'print(1)' })
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].opts).toEqual({ instanceId: 'vgui-abc' })
+  })
+
+  it('keeps an explicit instance option over the request target', async () => {
+    const calls: SendCall[] = []
+    const addon = fakeAddon(calls)
+    installAddonSend(addon, createEngineMetrics(), ready)
+
+    await runWithInstance('vgui-abc', async () => {
+      await addon.send('execute_code', {}, 100, { instanceId: 'vgui-explicit', noMark: true })
+    })
+
+    expect(calls[0].opts).toEqual({ instanceId: 'vgui-explicit', noMark: true })
+  })
+
+  it('leaves the call unqualified outside a request context', async () => {
+    const calls: SendCall[] = []
+    const addon = fakeAddon(calls)
+    installAddonSend(addon, createEngineMetrics(), ready)
+
+    await addon.send('execute_code', {})
+
+    expect(calls[0].opts).toBeUndefined()
   })
 })

@@ -34,6 +34,11 @@ import type { GatewayOwner } from './owner.js'
 export interface GatewayAppOptions extends AddonGatewayOptions {
   port?: number
   host?: string
+  /**
+   * 只由进程入口（runtime/gateway.ts）打开：打开后 action=reload / action=shutdown
+   * 才会真的排定 process.exit —— 测试里进程不能自己死。
+   */
+  selfExit?: boolean
 }
 
 export interface GatewayApp {
@@ -127,6 +132,12 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     engineProvenance,
     hostJson,
     hostErrText,
+    // H2/H4 控制面：关停/自重启的出口。close 引用 app（后定义，调用时才求值）。
+    gatewayControl: {
+      selfExit: opts.selfExit === true,
+      close: () => app.close(),
+      pid: process.pid,
+    },
   }
   const routes = createRoutes(E)
   const server = http.createServer(createRouter({ HOST: host, PORT: port, bump, routes }))

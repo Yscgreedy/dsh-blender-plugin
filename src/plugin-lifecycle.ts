@@ -12,13 +12,28 @@ import {
   noteGatewayRestartFailure,
   noteGatewayRestartSuccess,
 } from './host/backend/restart.js'
+import { refreshHostManifest } from './host/backend/host-manifest.js'
+import { settlePendingReload } from './host/reload/index.js'
 import type { HostContext } from './host/context.js'
 
 export function registerLifecycle(ctx: HostContext, port: number, autoStart: boolean): void {
+  // H1：这一代 fiber 装载时重写宿主层清单（模块实例被复用时**不**重写 —— 旧代码不该自证成最新）。
+  try {
+    refreshHostManifest()
+  } catch {
+    /* 清单失败 = 降级（Gateway 回扫盘并在 note 里写明），不影响启动 */
+  }
+
   void (async () => {
     if (autoStart && !isPaused()) {
       if (await ensureBackend(port)) noteGatewayRestartSuccess()
       else noteGatewayRestartFailure()
+    }
+    // H2：上一代触发的 HMR 到底成不成 —— 只有新一代写得下 pidAfter/verdict（两段式收尾）。
+    try {
+      await settlePendingReload(port)
+    } catch {
+      /* 收尾失败只影响自证记录的完整性，不影响后端可用性 */
     }
   })()
 
@@ -72,6 +87,15 @@ export function registerLifecycle(ctx: HostContext, port: number, autoStart: boo
 
   ctx.effect(
     () => () => {
+      // H4（dispose 收干净）：杀**进程树**，不只是一个句柄 —— helper
+      // （dsh-blender-hidden-desktop）与它拉起的隐藏 Blender 都是 Gateway 的孙进程，
+      // 只 kill 父进程会留下一串孤儿（现场：热更十轮后 helper 越堆越多、目录替换半残）。
+      //
+      // 这里**不做** graceful drain：dispose 是同步回调，先发 shutdown 再杀会和新 fiber 的
+      // ensureBackend 抢同一端口（新 fiber 可能把"正在退出的旧 Gateway"认成已就绪）。
+      // 优雅收尾放在异步面：blender_session action=reload 的运行时层换代先 drainGateway 再杀
+      // （见 src/host/reload/index.ts）；其余情况由下一代的台账收敛
+      // （queue restore → lost=true、ledger reconcile → recovered/stale）。
       killChildHandle()
     },
     'dsh-blender-plugin: backend',

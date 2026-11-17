@@ -7,7 +7,8 @@ import { startGateway } from './gateway/lifecycle.js'
 
 const argv = process.argv.slice(2)
 const port = parsePortArg(argv) ?? Number(process.env.DSH_BLENDER_GATEWAY_PORT || CFG.gatewayPort)
-const app = createGatewayApp({ port })
+// selfExit：只有真正的 Gateway 进程才允许对自己的 pid 动手（reload/shutdown 的收尾）。
+const app = createGatewayApp({ port, selfExit: true })
 const result = await startGateway(app)
 if (!result.ok) {
   console.error(JSON.stringify(result.error))

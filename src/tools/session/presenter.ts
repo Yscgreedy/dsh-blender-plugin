@@ -77,6 +77,58 @@ export function formatSessionResult(action: string, body: Record<string, unknown
   return head + (Object.keys(rest).length ? LF + clip(rest) : '')
 }
 
+/**
+ * reload 回执（H2）：**原样**呈现 ReloadReport 的关键字段 —— mode / pid / verdict / changed /
+ * receipt / needsRestart / note。失败（含浏览器面 409 的 mode=hmr）也走这里，
+ * 绝不压成一句 "request failed"：模型要能读到"为什么还得重启"。
+ */
+export function formatReloadReport(body: Record<string, unknown>): string {
+  const mode = text(body.mode || 'unavailable')
+  const staleLayer = Array.isArray(body.staleLayer) ? body.staleLayer.map(text) : []
+  const lines = [
+    'SESSION reload · mode=' +
+      mode +
+      ' · ok=' +
+      String(body.ok === true) +
+      ' · pending=' +
+      String(body.pending === true) +
+      ' · pid ' +
+      String(body.pidBefore ?? 'null') +
+      '→' +
+      String(body.pidAfter ?? 'null') +
+      ' · verdict=' +
+      text(body.verdict || 'unknown') +
+      (staleLayer.length ? ' · staleLayer=' + staleLayer.join(',') : ''),
+  ]
+  const count = asRecord(body.changedCount)
+  lines.push(
+    'changed host=' +
+      String(count.host ?? 0) +
+      ' · runtime=' +
+      String(count.runtime ?? 0) +
+      ' · other=' +
+      String(count.other ?? 0),
+  )
+  const changed = asRecord(body.changed)
+  for (const layer of ['host', 'runtime', 'other']) {
+    const list = Array.isArray(changed[layer]) ? (changed[layer] as unknown[]).map(text) : []
+    if (list.length) lines.push('· ' + layer + ': ' + list.join(', '))
+  }
+  // H5：作业被 reload 取消时**必须**说出来（上一版恒空 → 用户以为还在跑）。
+  const jobs = Array.isArray(body.jobsDropped) ? body.jobsDropped.map(text) : []
+  if (jobs.length) lines.push('jobsDropped: ' + jobs.join(', ') + '（重跑请重新 submit）')
+  const stopped = Array.isArray(body.stopped) ? body.stopped.map(text) : []
+  if (stopped.length) lines.push('stopped: ' + stopped.join(', '))
+  if (body.receipt) lines.push('profile receipt: ' + text(body.receipt))
+  const needs = Array.isArray(body.needsRestart) ? body.needsRestart.map(text) : []
+  if (needs.length) {
+    lines.push('needsRestart:')
+    for (const n of needs) lines.push('  · ' + n)
+  }
+  if (body.note) lines.push('note: ' + text(body.note))
+  return lines.join(LF)
+}
+
 export function formatStatus(body: Record<string, unknown>, sessions: SessionRow[]): string {
   const readiness = asRecord(body.readiness)
   const addon = asRecord(readiness.addon)
@@ -151,6 +203,7 @@ export function sessionHelp(): string {
     '  mark_read（清掉 human_modified 冲突）| presence | heartbeat',
     '  start / stop（只作用 virtual-gui；首次 start 返回 consent_required，需要人类授权）',
     '  txn（子动作 op=snapshot|restore|list|prune|mark|revert|marks|drop|help；写快照/回滚需 exclusive grant）',
+    '  reload（热更不重启：宿主层→写 profile patch 触发 HMR；运行时层→重拉 Gateway；dry_run=true 只诊断）',
     '旧工具迁移：blender_viewport → blender_session（status/doctor）+ blender_see；blender_rt_txn → blender_session action=txn。',
   ].join(LF)
 }

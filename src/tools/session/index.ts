@@ -25,6 +25,7 @@ const ACTIONS = [
   'start',
   'stop',
   'txn',
+  'reload',
   'help',
 ]
 
@@ -35,7 +36,8 @@ function buildSessionTool(ctx: HostContext, port: number) {
       '【会话 / 归属 / 权限】管理 GUI 会话：list/status/doctor 看状态；attach 附着到用户已打开的 Blender（多实例必须给 instance_id）；grant/revoke 把写 scope（exclusive | collection:名 | prefix:名 | object:名）授予子 agent；pause/resume 只有人类能操作（agent 调用返回 human_action_required）；mark_read 清掉 human_modified 冲突。' +
       'start/stop 只作用 virtual-gui：start 第一次返回 consent_required，等用户授权后由宿主带一次性 token 重试；user-gui 永远由用户自己打开 Blender 并 Connect。' +
       'txn 子面：snapshot/restore/list/prune/mark/revert/marks/drop（restore/mark/revert 属写操作，需要 exclusive grant + 人类未暂停）。' +
-      'Gateway 进程与 launch 运维不在模型面：Gateway 由宿主管理。旧 blender_viewport 的会话/健康动作迁移到这里；旧 blender_rt_txn 迁移到 action=txn。',
+      'reload：一步式热更——比对两层 provenance：宿主层变了写 profile 的 cordis.patch.yml 触发 HMR 重组合，运行时层变了重拉 Gateway；回执 mode/pidBefore/pidAfter/verdict/needsRestart（dry_run=true 只诊断）。' +
+      'Gateway 进程与 launch 运维不在模型面。旧 blender_viewport 的会话/健康动作、旧 blender_rt_txn（action=txn）都在这里。',
     parameters: {
       action: { type: 'string', required: true, description: ACTIONS.join(' | ') },
       session_id: { type: 'string', description: '会话 id（大多数会话级动作必填）' },
@@ -69,6 +71,8 @@ function buildSessionTool(ctx: HostContext, port: number) {
       into: { type: 'string', description: 'txn restore：auto | snapshot | original' },
       backup: { type: 'boolean', description: 'txn restore：是否先留 pre_restore 备份' },
       force: { type: 'boolean', description: '保留参数：由 Gateway 决定是否接受强抢语义' },
+      dry_run: { type: 'boolean', description: 'reload：只诊断不动进程（不写 profile、不换 pid）' },
+      reason: { type: 'string', description: 'reload：写进 profile 触发注释的原因（单行）' },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
     isConcurrencySafe: () => true,

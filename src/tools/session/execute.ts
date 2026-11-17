@@ -16,6 +16,7 @@ import {
   formatStatus,
   sessionHelp,
 } from './presenter.js'
+import { executeReload } from './reload.js'
 import { executeTxn } from './txn.js'
 
 const CAMEL: Record<string, string> = {
@@ -154,6 +155,9 @@ export async function executeSession(
   const action = text(args.action).trim() || 'list'
   if (action === 'help') return { text: sessionHelp() }
   if (action === 'txn') return executeTxn(port, args)
+  // H2：reload 是**宿主**的动作（写 profile patch / 杀自己的 Gateway 句柄），不转发给 /lease
+  // 的会话动作通道 —— 那条通道只会 409，并把 ReloadReport 包成一句 request failed。
+  if (action === 'reload') return executeReload(port, args)
   if (action === 'status') return statusOf(port)
   if (action === 'doctor') return doctorOf(port)
   if (action === 'list') {

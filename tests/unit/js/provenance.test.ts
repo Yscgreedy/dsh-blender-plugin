@@ -102,3 +102,86 @@ describe('loaded version provenance', () => {
     expect(note.includes('重启后端') || note.includes('以干净进程那份为准')).toBe(true)
   })
 })
+// H8（回归）：宿主层「已装载」必须来自宿主写的清单，而不是 Gateway 启动时扫的盘。
+// 反例（2026-11-16 下游实测的洞）：改 lib/constants.js → 只重启 Gateway →
+// Gateway 重新扫盘 → host.verdict 自证成 current，而宿主进程里仍是旧代码。
+describe('host layer provenance (H1: the loaded side is the host manifest)', () => {
+  const HOSTLIB = path.join(TMP, 'lib')
+  const MANIFEST = path.join(TMP, 'host-manifest.json')
+  const CONSTANTS = path.join(HOSTLIB, 'constants.js')
+  let layers: any
+
+  beforeAll(async () => {
+    // 前面的用例把 lib/runtime/engine.js 改写过（运行时层 stale）：本组只验宿主层，先复原，
+    // 否则顶层 verdict 会一直带 runtime。
+    fs.writeFileSync(ENGINE, origEngine, 'utf8')
+    fs.writeFileSync(path.join(HOSTLIB, 'index.js'), 'export default {}\n', 'utf8')
+    fs.writeFileSync(CONSTANTS, 'export const PLUGIN_VERSION = "probe-1"\n', 'utf8')
+    layers = await import(
+      pathToFileURL(path.join(COPY_RT, 'core', 'layers.js')).href + '?layers=' + String(Date.now())
+    )
+  })
+
+  afterAll(() => {
+    delete process.env.DSH_BLENDER_HOST_MANIFEST
+  })
+
+  it('records the manifest at host load and keeps stale across a gateway-only restart', () => {
+    const manifest = layers.writeHostManifest(HOSTLIB, MANIFEST, {
+      pluginVersion: 'probe',
+      hostPid: 4242,
+    })
+    // runtime/ 整枝不属于宿主层：清单里只能是 constants.js + index.js
+    expect(manifest.fileCount).toBe(2)
+    expect(Object.keys(manifest.files).sort()).toEqual(['constants.js', 'index.js'])
+    process.env.DSH_BLENDER_HOST_MANIFEST = MANIFEST
+
+    const loaded = mod.engineProvenance({ fresh: true })
+    expect(loaded.verdict).toBe('current')
+    expect(loaded.staleLayer).toEqual([])
+    expect(loaded.host).toMatchObject({
+      source: 'manifest',
+      verdict: 'current',
+      loadedFileCount: 2,
+      fileCount: 2,
+      changedCount: 0,
+    })
+    expect(loaded.host.loadedHash).toBe(loaded.host.currentHash)
+
+    fs.writeFileSync(CONSTANTS, 'export const PLUGIN_VERSION = "probe-2"\n', 'utf8')
+
+    const drifted = mod.engineProvenance({ fresh: true })
+    expect(drifted.verdict).toBe('stale')
+    expect(drifted.stale).toBe(true)
+    expect(drifted.staleLayer).toEqual(['host'])
+    expect(drifted.host.verdict).toBe('stale')
+    expect(drifted.host.changedFiles).toEqual(['constants.js'])
+    // 运行时层没动：stale 必须归因到宿主层，而不是可重启 Gateway 解决的那一层
+    expect(drifted.runtime.verdict).toBe('current')
+    expect(String(drifted.host.note)).toContain('只重启 Gateway 不会换掉宿主层')
+
+    // ★「只重启 Gateway」= 同一份清单、下一次读盘。清单没重写 ⇒ 仍然 stale。
+    const afterGatewayRestart = mod.engineProvenance({ fresh: true })
+    expect(afterGatewayRestart.host.verdict).toBe('stale')
+    expect(afterGatewayRestart.host.loadedAt).toBe(drifted.host.loadedAt)
+
+    // 宿主重组合（新 fiber 重写清单）之后才转 current
+    const rewritten = layers.writeHostManifest(HOSTLIB, MANIFEST, {
+      pluginVersion: 'probe',
+      hostPid: 4243,
+    })
+    expect(rewritten.hash).not.toBe(manifest.hash)
+    const recomposed = mod.engineProvenance({ fresh: true })
+    expect(recomposed.verdict).toBe('current')
+    expect(recomposed.host.source).toBe('manifest')
+    expect(recomposed.host.changedCount).toBe(0)
+  })
+
+  it('degrades to the boot scan and says so when no host manifest is provided', () => {
+    delete process.env.DSH_BLENDER_HOST_MANIFEST
+    const pr = mod.engineProvenance({ fresh: true })
+    expect(pr.host.source).not.toBe('manifest')
+    expect(pr.host.verdict).toBe('unknown')
+    expect(String(pr.host.note)).toContain('降级')
+  })
+})

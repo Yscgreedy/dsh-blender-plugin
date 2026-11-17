@@ -5,7 +5,8 @@ import { closeSync, mkdirSync, openSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { GATEWAY_PATH } from '../../constants.js'
-import { winKillPids } from '../runtime-bridge.js'
+import { HOST_MANIFEST_ENV, winKillPids } from '../runtime-bridge.js'
+import { ensureHostManifest } from './host-manifest.js'
 
 let child: ChildProcess | null = null
 
@@ -38,8 +39,15 @@ export function spawnChild(port: number): string {
   //   ② windowsHide：console-subsystem 可执行体在"宿主无控制台"时会新配一个控制台（#38/#43 同族）；
   //   ③ detached=false：Gateway 生命周期归 host/plugin；不 detach、不 unref，host 退出由插件清理。
   const logFd = openGatewayLog()
+  // H1：把「宿主这一代装载的是哪些 lib 文件」交给 Gateway。清单在宿主 fiber 首次 spawn 时
+  // 定型，之后只重启 Gateway 不会重写 —— 宿主层因此不会「一重启就自证成最新」。
+  const hostManifest = ensureHostManifest()
   const spawned = spawn(process.execPath, [GATEWAY_PATH, '--port', String(port)], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      ...(hostManifest ? { [HOST_MANIFEST_ENV]: hostManifest } : {}),
+    },
     stdio: logFd === null ? 'ignore' : ['ignore', logFd, logFd],
     detached: false,
     windowsHide: true,
@@ -88,14 +96,25 @@ export function getChild(): ChildProcess | null {
   return child
 }
 
-/** 杀掉并清空当前子进程句柄；返回是否原本有句柄（调用方据此写回执）。 */
+/**
+ * 杀掉并清空当前子进程句柄；返回是否原本有句柄（调用方据此写回执）。
+ *
+ * H4（dispose 收干净）：**必须杀进程树**。Gateway 自己 spawn 的 helper
+ * （dsh-blender-hidden-desktop）与它拉起的隐藏 Blender 是它的子/孙进程，只 kill 父进程会留孤儿 ——
+ * 现场后果是"热更十轮之后 helper 越堆越多 / 目录替换半残"。win32 没有优雅信号，
+ * 统一走 win_proc 的 taskkill /T /F（与 killStaleChild、作业队列同一套清理原语）；
+ * POSIX 仍发 SIGTERM，让 Gateway 自己的 shutdown 钩子（engine.stop + server.close）跑完。
+ */
 export function killChildHandle(): boolean {
   if (!child) return false
+  const handle = child
+  const pid = handle.pid
+  child = null
   try {
-    child.kill()
+    if (pid && process.platform === 'win32') winKillPids([pid])
+    else handle.kill()
   } catch {
     /* 已经退出 */
   }
-  child = null
   return true
 }

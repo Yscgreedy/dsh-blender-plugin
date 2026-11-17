@@ -11,6 +11,7 @@ vi.mock('../../../runtime/ports.js', () => ({
 }))
 vi.mock('../../../runtime/config.js', () => ({
   CFG: { workDirWsl: 'D:/tmp/f4-wiring' },
+  detectBlenderNow: () => ({ exe: null, from: 'test' }),
 }))
 
 import { startServer } from '../../../runtime/http/lifecycle.js'

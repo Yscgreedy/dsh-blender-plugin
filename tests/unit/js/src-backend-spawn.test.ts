@@ -4,6 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // spawnChild()/childAlive()/killStaleChild()/killChildHandle() run against a
 // mocked node:child_process, so issue #51's spawn options and listener order are
 // proven behaviorally on every platform (including Windows).
+//
+// H1 (hot reload, round 2): spawnChild now also injects the host layer manifest —
+// `env.DSH_BLENDER_HOST_MANIFEST` + a manifest written before the spawn. The
+// assertions below therefore pin the **whole** argv/env/stdio contract instead of
+// "the first two argv entries", and they check the manifest write itself
+// (schema / root / files / hash), because a spawn child without the manifest is
+// exactly the degraded path where the host layer can no longer prove itself.
 
 const h = vi.hoisted(() => {
   const listeners: Record<string, Array<(...a: unknown[]) => void>> = {}
@@ -25,16 +32,34 @@ const h = vi.hoisted(() => {
     calls.push(args)
     return child
   })
-  return { listeners, calls, events, child, spawn }
+  const winKillPids = vi.fn((pids: number[]) => pids.map(String))
+  // 清单的真实扫描/落盘在 runtime/core/layers.ts（有独立用例）；这里只要证明
+  // spawn 之前的**接线**：清单文件路径 + 元数据（pluginVersion / hostPid / pluginRoot）。
+  const writeHostManifest = vi.fn((root: string, file: string, meta: any) => ({
+    schema: 1,
+    root,
+    loadedAt: '2026-11-16T00:00:00.000Z',
+    pluginVersion: meta && meta.pluginVersion,
+    hostPid: meta && meta.hostPid,
+    pluginRoot: meta && meta.pluginRoot,
+    hash: 'abc123def456',
+    files: { 'index.js': 'aaaa11112222' },
+    fileCount: 1,
+    bytes: 42,
+  }))
+  return { listeners, calls, events, child, spawn, winKillPids, writeHostManifest }
 })
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return { ...actual, spawn: h.spawn }
 })
 vi.mock('../../../src/host/runtime-bridge.js', () => ({
-  winKillPids: vi.fn((pids: number[]) => pids.map(String)),
+  winKillPids: h.winKillPids,
+  writeHostManifest: h.writeHostManifest,
+  HOST_MANIFEST_ENV: 'DSH_BLENDER_HOST_MANIFEST',
 }))
 
+import { PLUGIN_VERSION } from '../../../src/constants.js'
 import {
   childAlive,
   getChild,
@@ -42,6 +67,7 @@ import {
   killStaleChild,
   spawnChild,
 } from '../../../src/host/backend/spawn.js'
+import { hostManifestPath } from '../../../src/host/backend/host-manifest.js'
 import { winKillPids } from '../../../src/host/runtime-bridge.js'
 
 function emit(ev: string): void {
@@ -59,21 +85,43 @@ afterEach(() => {
   h.child.unref.mockClear()
   h.child.on.mockClear()
   h.spawn.mockClear()
+  h.writeHostManifest.mockClear()
   h.child.exitCode = null
   h.child.signalCode = null
 })
 
 describe('spawnChild spawn options (issue #51)', () => {
-  it('spawns process.execPath with the built Gateway path and the port', () => {
+  it('spawns process.execPath with gateway argv, the port and the H1 host manifest', () => {
     const out = spawnChild(9877)
     expect(out).toBe('spawned pid=4321')
     expect(h.spawn).toHaveBeenCalledTimes(1)
     const [file, args, opts] = h.spawn.mock.calls[0] as [string, string[], any]
     expect(file).toBe(process.execPath)
-    expect(args.slice(0, 2)).toEqual([expect.stringMatching(/gateway\.(mjs|js)$/), '--port'])
+    // argv 全长：gateway 入口 + --port + 端口（不许写死成"前两条"，清单注入就藏在这里）
+    expect(args).toHaveLength(3)
+    expect(args[0]).toMatch(/gateway\.(mjs|js)$/)
+    expect(args[1]).toBe('--port')
     expect(args[2]).toBe('9877')
     expect(opts.env.ELECTRON_RUN_AS_NODE).toBe('1')
     expect(opts.env.PATH).toBe(process.env.PATH)
+    // H1：清单路径经 env 传给 Gateway；它就是刚才写出的那个文件，且带 schema/root/files/hash
+    const manifestPath = String(opts.env.DSH_BLENDER_HOST_MANIFEST || '')
+    expect(manifestPath).toMatch(/host-manifest\.json$/)
+    expect(manifestPath).toBe(hostManifestPath())
+    expect(h.writeHostManifest).toHaveBeenCalledTimes(1)
+    const [root, wrote, meta] = h.writeHostManifest.mock.calls[0] as [string, string, any]
+    expect(wrote).toBe(manifestPath)
+    expect(String(root).endsWith('lib')).toBe(true)
+    expect(meta.pluginVersion).toBe(PLUGIN_VERSION)
+    expect(meta.hostPid).toBe(process.pid)
+    expect(typeof meta.pluginRoot).toBe('string')
+    const manifest = h.writeHostManifest.mock.results[0].value
+    expect(manifest).toMatchObject({
+      schema: 1,
+      root,
+      files: expect.any(Object),
+      hash: expect.any(String),
+    })
     expect(Array.isArray(opts.stdio)).toBe(true)
     expect(opts.stdio[0]).toBe('ignore')
     expect(typeof opts.stdio[1]).toBe('number')
@@ -105,6 +153,18 @@ describe('spawnChild spawn options (issue #51)', () => {
     expect(getChild()).toBeNull()
     expect(childAlive()).toBe(false)
   })
+
+  it('reuses the manifest written when this host fiber loaded (no re-scan per spawn)', () => {
+    spawnChild(9877)
+    spawnChild(9878)
+    // H1 的核心：清单是「宿主装载那一刻」的快照。若每次 spawn 都重扫，
+    // 只重启 Gateway 就会把旧宿主层洗成 current —— 那正是被验收打回来的洞。
+    const manifestPath = String((h.spawn.mock.calls[0] as any)[2].env.DSH_BLENDER_HOST_MANIFEST)
+    for (const call of h.spawn.mock.calls) {
+      expect(String((call as any)[2].env.DSH_BLENDER_HOST_MANIFEST)).toBe(manifestPath)
+    }
+    expect(h.spawn).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('child handle lifecycle', () => {
@@ -112,7 +172,14 @@ describe('child handle lifecycle', () => {
     expect(killChildHandle()).toBe(false)
     spawnChild(9877)
     expect(killChildHandle()).toBe(true)
-    expect(h.child.kill).toHaveBeenCalledTimes(1)
+    if (process.platform === 'win32') {
+      // H4：win32 没有优雅信号，句柄清理走 winKillPids 的**进程树** kill
+      // （只杀父进程会留下 helper 与隐藏 Blender 的孤儿）。
+      expect(vi.mocked(winKillPids)).toHaveBeenCalledWith([4321])
+      expect(h.child.kill).not.toHaveBeenCalled()
+    } else {
+      expect(h.child.kill).toHaveBeenCalledTimes(1)
+    }
     expect(getChild()).toBeNull()
     expect(killChildHandle()).toBe(false)
   })
