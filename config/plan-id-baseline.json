@@ -1,19 +1,19 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-08T02:26:15.177Z",
+  "generatedAt": "2026-11-17T04:55:25.412Z",
   "mode": "warn",
   "totals": {
-    "all": 1379,
-    "exempt": 1379,
+    "all": 1409,
+    "exempt": 1409,
     "residual": 0
   },
   "byPrefix": {},
   "byKind": {},
   "files": {
     "CHANGELOG.md": {
-      "count": 214,
-      "exempt": 214,
+      "count": 220,
+      "exempt": 220,
       "residual": 0
     },
     "MIGRATIONS.md": {
@@ -71,6 +71,16 @@
       "exempt": 5,
       "residual": 0
     },
+    "runtime/blender-detect.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/blender-exe.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "runtime/catalog/data.ts": {
       "count": 7,
       "exempt": 7,
@@ -81,9 +91,69 @@
       "exempt": 7,
       "residual": 0
     },
+    "runtime/config.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/core/dispatcher/plan-call.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/core/kernel/api.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/core/kernel/bootstrap.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/execution/headless/process.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/execution/jobs/start/spawn.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/execution/workers/worker-start.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/http/routes/health.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "runtime/py/assembly/assembly_features.json": {
       "count": 16,
       "exempt": 16,
+      "residual": 0
+    },
+    "runtime/py/core/audit_impl/mesh.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/py/core/contract_impl/api.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/py/core/contract_impl/checks.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/py/core/contract_impl/common.py": {
+      "count": 1,
+      "exempt": 1,
       "residual": 0
     },
     "runtime/py/core/evalharness.py": {
@@ -99,6 +169,16 @@
     "runtime/py/geometry/blockout_impl/present.py": {
       "count": 1,
       "exempt": 1,
+      "residual": 0
+    },
+    "runtime/py/geometry/generator.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/py/geometry/sculpt.py": {
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/py/geometry/shapegen.py": {
@@ -317,8 +397,8 @@
       "residual": 0
     },
     "tests/e2e/blender/native/txn.py": {
-      "count": 1,
-      "exempt": 1,
+      "count": 6,
+      "exempt": 6,
       "residual": 0
     },
     "tests/e2e/blender/native/txn_restore.py": {
@@ -436,6 +516,11 @@
       "exempt": 2,
       "residual": 0
     },
+    "tests/unit/js/blender-detect.test.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "tests/unit/js/contract/catalog.test.ts": {
       "count": 1,
       "exempt": 1,
@@ -447,6 +532,11 @@
       "residual": 0
     },
     "tests/unit/js/contract/surface-fit.test.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "tests/unit/js/dispatcher-routes.test.ts": {
       "count": 1,
       "exempt": 1,
       "residual": 0

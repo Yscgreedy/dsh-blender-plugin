@@ -50,11 +50,11 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 
    - **DSH Web / DSH TUI：** 使用你实际运行的 profile：
 
-         dsh plugin --profile <profile> add dsh-blender-plugin@3.1.0-alpha.1
+         dsh plugin --profile <profile> add dsh-blender-plugin@3.2.0-alpha.1
 
      装完后按第 3 步重启 DSH。
 
-   - **DSH Desktop：** 打开 Plugins 页面，安装 bundle `dsh-blender-plugin@3.1.0-alpha.1`。DSH Desktop 通过 Plugins 页面安装后不需要重启 DSH。
+   - **DSH Desktop：** 打开 Plugins 页面，安装 bundle `dsh-blender-plugin@3.2.0-alpha.1`。DSH Desktop 通过 Plugins 页面安装后不需要重启 DSH。
 
 3. **重启 DSH（仅 DSH Web / DSH TUI）。** 从 DSH Desktop 的 Plugins 页面安装的用户跳过这一步。
 
@@ -76,7 +76,7 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
     如果已有桥接类 addon（MCP for Blender / blender_mcp，或任何 Blender 侧桥接服务
     提供服务的 addon），先停用它；不要卸载用户的其他 addon，也不要要求用户这么做。
     然后从 npm 安装 DSH × Blender 插件到我的 DSH profile：
-    dsh plugin --profile <profile> add dsh-blender-plugin@3.1.0-alpha.1
+    dsh plugin --profile <profile> add dsh-blender-plugin@3.2.0-alpha.1
     先读 docs/AI-安装提示词.md 并严格照做；
     最后必须验收：GUI 路线 doctor 返回 kind=ok，
     纯无头路线用 blender_run 的 headless 提交 + wait 能返回产物。
@@ -146,12 +146,12 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
 ## 工具
 
-插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（34 family / 228 op）里，所以工具面保持很小。
+插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（35 family / 261 op）里，所以工具面保持很小。
 
 | 工具 | 它能给你什么 |
 |---|---|
 | blender_session | GUI 会话生命周期与归属：list/status/doctor、attach、claim/release、写作用域 grant/revoke、暂停状态、presence，以及 `action=txn` 快照/标记回滚。Blender 与 Gateway 由宿主管理。 |
-| blender_op | 能力目录（`op="catalog"`，34 family / 228 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
+| blender_op | 能力目录（`op="catalog"`，35 family / 261 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
 | blender_py | 在已 attach 的 GUI 会话里执行 Python，内核跨调用保留；`see=true` 顺带回一帧。仅 GUI，没有无头回退。 |
 | blender_see | 仅用于 GUI 取帧：`viewpoint=viewport|camera|custom`、`mode=frame|sequence`，固定宽高比分档。相机动画与批量渲染走 `blender_run(kind="render")`。 |
 | blender_run | 唯一作业入口：`action=submit` 配 `kind=render|headless` 立即返回 job id；`status/wait/collect/cancel/list` 管理作业；`action=tune` 管渲染性能。 |

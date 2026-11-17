@@ -273,9 +273,17 @@ describe('port conflict contract', () => {
     expect(failure.code).toBe('port_conflict')
     expect(failure.stage).toBe('config')
     expect(failure.port).toBe(port)
-    expect(failure.evidence.probe.port).toBe(port)
-    expect(typeof failure.evidence.probe.pid).toBe('number')
-    expect(typeof failure.evidence.probe.process).toBe('string')
+    // 占用者归因是尽力而为的（win32 走 netstat.exe，POSIX 走 /proc；探针被策略或
+    // 沙箱挡住时 pid/process 回到 null）。契约是 number|null / string|null，
+    // port_conflict 的判据不依赖它们，这里只校验形状。
+    const probe = failure.evidence.probe as {
+      port: number
+      pid: number | null
+      process: string | null
+    }
+    expect(probe.port).toBe(port)
+    expect(probe.pid === null || Number.isInteger(probe.pid)).toBe(true)
+    expect(probe.process === null || typeof probe.process === 'string').toBe(true)
     expect(String(failure.fix)).toContain('占用者')
   }, 20000)
 })

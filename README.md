@@ -50,11 +50,11 @@ This is the supported installation path. It does not require `git clone`, `npm c
 
    - **DSH Web or DSH TUI:** install into the profile you actually run:
 
-         dsh plugin --profile <profile> add dsh-blender-plugin@3.1.0-alpha.1
+         dsh plugin --profile <profile> add dsh-blender-plugin@3.2.0-alpha.1
 
      Then restart DSH in step 3.
 
-   - **DSH Desktop:** open the Plugins page and install the bundle `dsh-blender-plugin@3.1.0-alpha.1`. DSH Desktop applies the bundle from the Plugins page and does not need a DSH restart.
+   - **DSH Desktop:** open the Plugins page and install the bundle `dsh-blender-plugin@3.2.0-alpha.1`. DSH Desktop applies the bundle from the Plugins page and does not need a DSH restart.
 
 3. **Restart DSH (DSH Web and DSH TUI only).** If you installed from the DSH Desktop Plugins page, skip this step.
 
@@ -78,7 +78,7 @@ Copy this prompt into an agent that can run commands:
     ), disable it; do not uninstall the user's other addons and
     do not ask them to.
     Then install the DSH × Blender plugin from npm for my DSH profile:
-    dsh plugin --profile <profile> add dsh-blender-plugin@3.1.0-alpha.1
+    dsh plugin --profile <profile> add dsh-blender-plugin@3.2.0-alpha.1
     Read docs/AI-安装提示词.md first, follow it exactly,
     and finish with the acceptance check: doctor must return kind=ok for the
     GUI route, or a blender_run headless submit + wait must return outputs for the headless-only route.
@@ -149,12 +149,12 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ## Tools
 
-The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (34 families / 228 ops), so the surface stays small.
+The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (35 families / 261 ops), so the surface stays small.
 
 | Tool | What it gives you |
 |---|---|
 | blender_session | GUI session lifecycle and ownership: list/status/doctor, attach, claim/release, grant/revoke write scopes, pause state, presence, and `action=txn` snapshots/marks for rollback. Blender and the Gateway are host-managed. |
-| blender_op | The capability catalog (`op="catalog"`, 34 families / 228 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
+| blender_op | The capability catalog (`op="catalog"`, 35 families / 261 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
 | blender_py | Runs Python in the attached GUI session with a persistent kernel; `see=true` returns a frame. GUI-only: there is no headless fallback. |
 | blender_see | GUI capture only: `viewpoint=viewport|camera|custom`, `mode=frame|sequence`, fixed aspect/size tiers. Camera animation and batch renders go to `blender_run(kind="render")`. |
 | blender_run | The only job entry point: `action=submit` with `kind=render|headless` returns a job id immediately; `status/wait/collect/cancel/list` manage it; `action=tune` covers render performance. |

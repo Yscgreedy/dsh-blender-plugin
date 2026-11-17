@@ -10,7 +10,7 @@ const lock = JSON.parse(
 describe('catalog contract', () => {
   const payload = catalogPayload({ full: true }) as any
 
-  it('reports the frozen 34 family / 228 op surface', () => {
+  it('reports the frozen 35 family / 261 op surface', () => {
     expect(payload.ok).toBe(true)
     expect(payload.families).toHaveLength(lock.families_count)
     expect(payload.ops_count).toBe(lock.ops_count)

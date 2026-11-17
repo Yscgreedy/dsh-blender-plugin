@@ -242,6 +242,132 @@
         "M"
       ],
       "reason": "catalog 详情断言：surface 族的 M3 是拟合阶段领域词（与 runtime/catalog/data.ts 一致）。"
+    },
+    {
+      "path": "runtime/blender-detect.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/blender-exe.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/config.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/core/dispatcher/plan-call.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/core/kernel/api.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/core/kernel/bootstrap.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/execution/headless/process.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/execution/jobs/start/spawn.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/execution/workers/worker-start.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/http/routes/health.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/core/audit_impl/mesh.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/core/contract_impl/api.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/core/contract_impl/checks.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/core/contract_impl/common.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/geometry/generator.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P0 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/py/geometry/sculpt.py",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P0 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "tests/unit/js/blender-detect.test.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "tests/unit/js/dispatcher-routes.test.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
     }
   ]
 }

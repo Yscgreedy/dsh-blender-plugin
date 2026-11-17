@@ -1,6 +1,6 @@
 # MIGRATIONS —— 从旧版本迁到 v3.1
 
-> **当前版本（2026-11-08）**：插件 **v3.1.0-alpha.1** · **6 个模型工具** · plan catalog **34 family / 228 op** ·
+> **当前版本（2026-11-17）**：插件 **v3.2.0-alpha.1** · **6 个模型工具** · plan catalog **35 family / 261 op** ·
 > addon command **25**（+ping = 26 wire）· addon **v2.0.0**（protocol **12**）· Gateway `127.0.0.1:39877` · addon 主动连接 Gateway（无入站监听）。
 > **旧 `MCP for Blender` 自 v2.3 起不再支持**；v3.0 是工程重构 + addon 安装方式 breaking，按下文 §0/§1 迁。
 
@@ -17,7 +17,7 @@
 2. Blender 里停用并移除旧 addon（含旧的单文件 `dsh_blender_bridge.py`）→ 安装本仓 `extension/dsh_blender_bridge.zip`（**v2.0.0**）→ 启用 → N → Connect。
 3. `blender_inspect(command="get_addon_info")` → `addon_version=[2,0,0]`、`protocol=12`；
    GUI 路线 `curl http://127.0.0.1:39877/doctor` → `kind=ok`（纯无头路线用 `blender_run(action="submit", kind="headless", …)` + `wait`/`collect` 取产物自证）；
-   `blender_op(op="catalog")` → **34 family / 228 op**。
+   `blender_op(op="catalog")` → **35 family / 261 op**。
 4. 选中入口：Blender 原生选中 → `N` →「Selection → DSH」→ 发送（多选 / 集合）；编辑模式选点/面、姿态选骨骼也会一起发。
 5. 新能力（交互式无头、`img_*`、`asm_*`、`blockout`、`visualreport`、`shapesolve`、`eval_run`、强制门等）用
    `blender_op(op="catalog")` 查骨架；除 v3.0 明确移除的 Premium/Tripo 通道外，旧 op 不删除、只增不改。

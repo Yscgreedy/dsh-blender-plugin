@@ -1,6 +1,6 @@
 {
-  "families_count": 34,
-  "ops_count": 228,
+  "families_count": 35,
+  "ops_count": 261,
   "tools_count": 6,
   "tools": [
     "blender_inspect",
@@ -62,6 +62,10 @@
     {
       "f": "generator",
       "ops": 7
+    },
+    {
+      "f": "geo",
+      "ops": 33
     },
     {
       "f": "gui",

@@ -1,8 +1,8 @@
 {
   "schema": "dsh-behavior-matrix/1",
-  "generatedAt": "2026-11-08T01:52:52.775Z",
-  "node": "v24.18.0",
-  "pluginVersion": "3.1.0-alpha.1",
+  "generatedAt": "2026-11-17T04:55:29.747Z",
+  "node": "v26.13.1",
+  "pluginVersion": "3.2.0-alpha.1",
   "generatedBy": "node scripts/check-behavior-matrix.mjs --generate",
   "generators": {
     "tools": "tests/unit/js/contract/tool-matrix.test.ts (A1_MATRIX_OUT)",
@@ -77,7 +77,7 @@
         "tool": "blender_see",
         "aspect": "success",
         "status": "PASS",
-        "evidence": "SEE viewport · 1024x576 · 15ms · 70B · hash 3766854d · 场景与用户视口均未改动"
+        "evidence": "SEE viewport · 1024x576 · 2ms · 70B · hash 3766854d · 场景与用户视口均未改动"
       },
       {
         "tool": "blender_run",
@@ -131,13 +131,13 @@
         "tool": "blender_session",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: 后端不可用（127.0.0.1:13253）"
+        "evidence": "resolve: 后端不可用（127.0.0.1:51877）"
       },
       {
         "tool": "blender_op",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:13255）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:51879）"
       },
       {
         "tool": "blender_py",
@@ -155,13 +155,13 @@
         "tool": "blender_run",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:13261）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:51889）"
       },
       {
         "tool": "blender_inspect",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:13263）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:51891）"
       },
       {
         "tool": "blender_session",
@@ -386,19 +386,19 @@
         "route": "/health",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true lease.active=false backend.pid=43856"
+        "evidence": "200 application/json · ok=true lease.active=false backend.pid=7772"
       },
       {
         "route": "/status",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true plugin.version=3.1.0-alpha.1"
+        "evidence": "200 application/json · ok=true plugin.version=3.2.0-alpha.1"
       },
       {
         "route": "/doctor",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true config.http=127.0.0.1:13272"
+        "evidence": "200 application/json · ok=true config.http=127.0.0.1:51900"
       },
       {
         "route": "/launch",
@@ -1603,8 +1603,8 @@
     ]
   },
   "behaviorMatrix": {
-    "total": 324,
-    "covered": 322,
+    "total": 357,
+    "covered": 355,
     "planned": 0,
     "exempt": 2
   }

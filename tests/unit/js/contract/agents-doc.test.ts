@@ -152,8 +152,8 @@ describe('architecture guide', () => {
     }
     for (const fact of [
       '6 tools',
-      '34 planning families',
-      '228 operations',
+      '35 planning families',
+      '261 operations',
       '25 addon commands',
       '29 HTTP routes',
       'protocol 12',

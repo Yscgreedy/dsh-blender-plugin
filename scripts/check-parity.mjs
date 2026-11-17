@@ -63,6 +63,18 @@ const DECLARED_CATALOG_REMOVALS = [
   'ping',
 ]
 
+// Declared catalog additions: v3.1 adds exactly one plan family on top of the
+// pre-3.1 34-family base — 'geo'（硬表面基础体/布尔/阵列/倒角/应用修改器）。
+// 2026-11-17 消费方需求 R6：把内核里另外 14 个 geo 动词补进 catalog（19 → 33），
+// 这里同步声明 op 数；注入逻辑不变（整族对象从当前 catalog 取，逐项比对仍严格）。 Instead of tolerating a count delta at every compare site (which
+// would weaken the fingerprint, the payload family list, ops_count and
+// planOpNames()), the family object is taken from the built current catalog and
+// spliced into the extracted base catalog source at the same index the current
+// catalog uses. Every downstream comparison therefore stays strict, and the
+// injection itself is asserted: exactly one family, exactly the declared op
+// count, and the base must end up at +1 family / +19 ops.
+const DECLARED_CATALOG_ADDITION_3_1 = { family: 'geo', ops: 33 }
+
 // Declared user-visible catalog text patches: exact base -> current replacements
 // for reviewed help-text fixes. The parity gate compares user-visible text
 // strictly, so a prose fix is an explicit, reviewed contract change too — each
@@ -273,6 +285,45 @@ try {
   fs.writeFileSync(path.join(tmp, 'package.json'), pkgShown.stdout)
   ensureBuild({ log: (m) => console.error('parity: ' + m) })
 
+  // Declared 3.1 catalog addition (see DECLARED_CATALOG_ADDITION_3_1): splice the
+  // current family object into the base catalog source so the rest of this gate
+  // keeps comparing the two catalogs strictly instead of allowing a delta.
+  const curCatalog = await import(
+    pathToFileURL(path.join(ROOT, 'lib', 'runtime', 'catalog', 'data.js')).href
+  )
+  const addedFamily = curCatalog.PLAN_CATALOG.find(
+    (e) => e.f === DECLARED_CATALOG_ADDITION_3_1.family,
+  )
+  if (!addedFamily)
+    throw new Error(
+      'declared catalog addition missing from current catalog: ' +
+        DECLARED_CATALOG_ADDITION_3_1.family,
+    )
+  if (addedFamily.ops.length !== DECLARED_CATALOG_ADDITION_3_1.ops)
+    throw new Error(
+      'declared catalog addition ' +
+        DECLARED_CATALOG_ADDITION_3_1.family +
+        ' must have ' +
+        DECLARED_CATALOG_ADDITION_3_1.ops +
+        ' ops, got ' +
+        addedFamily.ops.length,
+    )
+  const addedIndex = curCatalog.PLAN_CATALOG.indexOf(addedFamily)
+  fs.appendFileSync(
+    baseCatalogPath,
+    '\n// declared 3.1 catalog addition, injected by scripts/check-parity.mjs\n' +
+      'PLAN_CATALOG.splice(' +
+      addedIndex +
+      ', 0, ' +
+      JSON.stringify(addedFamily) +
+      ');\n',
+  )
+  ok('declared-additions', 'declared catalog addition injected into base', {
+    family: DECLARED_CATALOG_ADDITION_3_1.family,
+    ops: DECLARED_CATALOG_ADDITION_3_1.ops,
+    index: addedIndex,
+  })
+
   const baseEngine = await import(pathToFileURL(path.join(tmp, 'runtime', 'engine.mjs')).href)
   const baseRoutes = await import(
     pathToFileURL(path.join(tmp, 'runtime', 'http', 'routes', 'index.mjs')).href
@@ -296,7 +347,7 @@ try {
   ok('declared-engine-removals', 'declared engine exports removed', DECLARED_ENGINE_REMOVALS.length)
   ok('exports-count', 'engine exports', bKeys.length)
 
-  // 2. Catalog fingerprint (34 families / 228 ops / 25 commands / 6 tool details).
+  // 2. Catalog fingerprint (35 families / 261 ops / 25 commands / 6 tool details).
   // The 3.1 tool-surface change is declared: toolDetailKeys shrinks 7 -> 6 and
   // the family metadata grows target fields, so the hash itself is not compared;
   // the structural contract counts are.

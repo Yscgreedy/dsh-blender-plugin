@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Function-level budget registry (two-level exception model): every 80-120 line function is registered with a real classification, reason, class owner and future reviewBy; unregistered, unclassified, expired and stale entries fail. Functions over 120 lines always fail. Path-level file-budget exceptions live in config/exceptions.json.",
-  "generatedAt": "2026-11-08T02:15:18.963Z",
+  "generatedAt": "2026-11-17T04:56:47.660Z",
   "functions": [
     {
       "file": "extension/dsh_blender_bridge/commands/core/bpy_lookup.py",
@@ -78,7 +78,7 @@
     {
       "file": "runtime/core/engine-api/doctor.ts",
       "name": "createDoctorApi",
-      "lines": 87,
+      "lines": 91,
       "classification": "dispatch-table",
       "reason": "Gateway doctor/status API factory: one branch per reported surface (readiness, addon, bpy, virtualGui, sessions, diagnostics).",
       "owner": "runtime",
@@ -90,15 +90,6 @@
       "lines": 83,
       "classification": "dispatch-table",
       "reason": "Engine API factory: one handler per loop start/status/board/export op.",
-      "owner": "runtime",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/core/evidence.ts",
-      "name": "engineProvenance",
-      "lines": 99,
-      "classification": "orchestration",
-      "reason": "Provenance assembly across engine self, catalog fingerprint, plugin metadata and override options.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
@@ -130,9 +121,27 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "runtime/core/queue/spawn-executor.ts",
+      "name": "buildJobArgs",
+      "lines": 92,
+      "classification": "parsing",
+      "reason": "Headless job prelude + argv assembly: POSIX-style args splitting, env merge, KERNEL_BOOTSTRAP inline and the -- separator; the length is the string surgery, not nested branching.",
+      "owner": "host",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/core/queue/spawn-executor.ts",
+      "name": "start",
+      "lines": 85,
+      "classification": "orchestration",
+      "reason": "Job start orchestration: resolve exe (runtime re-probe), build prelude/script files, spawn the child, then record job state and provenance in one readable sequence.",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "runtime/execution/headless/process.ts",
       "name": "<anonymous>",
-      "lines": 90,
+      "lines": 91,
       "classification": "orchestration",
       "reason": "Promise executor owning the child-process lifecycle state; splitting would leak mutable state across closures.",
       "owner": "runtime",
@@ -141,7 +150,7 @@
     {
       "file": "runtime/execution/headless/process.ts",
       "name": "spawnHeadless",
-      "lines": 98,
+      "lines": 99,
       "classification": "orchestration",
       "reason": "Headless child-process lifecycle: spawn, stream capture, timeout and exit bookkeeping.",
       "owner": "runtime",
@@ -193,6 +202,15 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "runtime/gateway/app.ts",
+      "name": "createGatewayApp",
+      "lines": 85,
+      "classification": "dispatch-table",
+      "reason": "Gateway app factory: the route-dependency table (29 routes worth of deps) plus transport/engine assembly and the close exit.",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "runtime/http/routes/act.ts",
       "name": "createActRoutes",
       "lines": 81,
@@ -202,21 +220,21 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "file": "runtime/http/routes/health.ts",
-      "name": "createHealthRoutes",
-      "lines": 98,
+      "file": "runtime/http/routes/session/api.ts",
+      "name": "runSessionAction",
+      "lines": 115,
       "classification": "dispatch-table",
-      "reason": "HTTP route table: one handler per health/status endpoint.",
+      "reason": "Session action dispatcher: one case per wire action (attach, grant, presence, human-edit readback, consent, virtual-gui start).",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
     {
-      "file": "runtime/http/routes/session/api.ts",
-      "name": "runSessionAction",
-      "lines": 88,
-      "classification": "dispatch-table",
-      "reason": "Session action dispatcher: one case per wire action (attach, grant, presence, human-edit readback, consent, virtual-gui start).",
-      "owner": "runtime",
+      "file": "runtime/http/routes/session/control.ts",
+      "name": "buildReloadReport",
+      "lines": 83,
+      "classification": "formatting",
+      "reason": "Reload receipt assembly: merges provenance layers, drain result, pid transition and needsRestart into the one ReloadReport shape shared by the tool and HTTP faces.",
+      "owner": "host",
       "reviewBy": "2027-06-30"
     },
     {
@@ -383,10 +401,10 @@
     },
     {
       "file": "runtime/py/core/audit_impl/api.py",
-      "name": "audit_gate_selftest",
+      "name": "_audit_gate_selftest_body",
       "lines": 96,
       "classification": "validation",
-      "reason": "Synthetic self-test for assembly judgement predicates (float/gap/attribution/drift).",
+      "reason": "audit_gate_selftest assertion body: one clause check per criterion (floater/bbox/confirmed/drift), fixture scene removed in finally, no production mutation.",
       "owner": "qa",
       "reviewBy": "2027-06-30"
     },
@@ -432,6 +450,24 @@
       "lines": 106,
       "classification": "validation",
       "reason": "Floater snap audit: detects visible floaters, validates candidates and applies only wholly-owned moves (dry-run default).",
+      "owner": "qa",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/py/core/audit_impl/mesh.py",
+      "name": "_mesh_genus",
+      "lines": 87,
+      "classification": "validation",
+      "reason": "Genus estimate from Euler characteristic: per-shell vertex/edge/face accounting plus boundary-loop detection and well-definedness report.",
+      "owner": "qa",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/py/core/audit_impl/mesh.py",
+      "name": "audit_duplicates",
+      "lines": 90,
+      "classification": "validation",
+      "reason": "Duplicate datablock audit: scope resolution (objects/prefix union), per-signature grouping for materials and meshes, and truncation reporting.",
       "owner": "qa",
       "reviewBy": "2027-06-30"
     },
@@ -688,6 +724,15 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "runtime/py/geometry/geo_impl/units.py",
+      "name": "_convert_op_args",
+      "lines": 114,
+      "classification": "validation",
+      "reason": "Unit gate at the dispatch boundary: per-op length-param conversion (mm -> BU), *_mm pass-through and sub_mm_feature warnings, one entry per geo op family.",
+      "owner": "qa",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "runtime/py/geometry/shapegen.py",
       "name": "shape_draft_check",
       "lines": 94,
@@ -931,9 +976,18 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "src/plugin-lifecycle.ts",
+      "name": "registerLifecycle",
+      "lines": 85,
+      "classification": "orchestration",
+      "reason": "Host lifecycle wiring: manifest refresh, two-phase reload settle, 15s watchdog whose probe budget and backoff counters must stay in one closure (splitting would leak mutable state).",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "src/tui/commands.ts",
       "name": "blenderCommand",
-      "lines": 83,
+      "lines": 85,
       "classification": "formatting",
       "reason": "TUI command-string formatter: one branch per command shape and argument.",
       "owner": "host",

@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 34 planning families, 228 operations, 25 addon commands
+blender_run, blender_inspect), 35 planning families, 261 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -68,6 +68,20 @@ The runtime build precedes the host build because host modules import boundary h
 runtime. The Gateway entry used by GATEWAY_PATH is lib/runtime/gateway.js. Source maps are emitted so a
 crash still points at a TypeScript line.
 
+### Headless jobs and the kernel
+
+`blender_run(kind="headless")` never runs a bare Python file. `runtime/core/queue/spawn-executor.ts`
+composes the same `KERNEL_BOOTSTRAP` the GUI path injects, then every `preload` module in its own
+namespace, then the caller's script. An inline script is appended to `job.py`; a `script_file` is
+exec'd from that same script with `__file__` set back to the user's path (Blender gives every
+`--python` file its own namespace, so two `--python` arguments would hide `K` from the second one).
+`bootstrap:false` is the only opt-out. An unknown `preload` name fails at prepare time with
+`job_prepare_failed` and the available module list, instead of raising `NameError` halfway through the
+script. `args` accepts a string (POSIX-style split) or `string[]` and always appends the `--` separator;
+`env` is merged into the child environment. Both are echoed in `result.provenance`
+(`{args, env, env_keys, preloads, bootstrap}`), so "the parameter never arrived" is diagnosable from the
+receipt alone.
+
 ### Public facades and the dual entry
 
 The build has exactly two public facades, one per entry:
@@ -96,6 +110,12 @@ tests); `runtime/gateway/app.ts` imports the created engine and `engineProvenanc
 `ensure-build` keep `lib/runtime/engine.js` as a required artifact. check-parity declares public
 surface removals in `DECLARED_ENGINE_REMOVALS`: a declared name that is still present in the current
 facade fails, which is what makes the shrink auditable against the base commit.
+
+Catalog *additions* are declared the same way: `DECLARED_CATALOG_ADDITION_3_1` takes the 3.1 `geo`
+family from the built current catalog and splices it into the extracted base catalog source at the
+index the current catalog uses, after asserting its op count. The fingerprint, the payload family
+list, `ops_count` and `planOpNames()` therefore keep being compared strictly — a count delta is
+never tolerated at a compare site, the addition itself is what gets reviewed.
 
 ### GUI sessions and presence
 
@@ -186,7 +206,7 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 34 families / 228 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 35 families / 261 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by

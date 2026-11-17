@@ -4,6 +4,7 @@ import {
   prepareEvidencePayload,
   routeMainPlanOps,
 } from '../../../runtime/core/dispatcher/plan-call.js'
+import { routeExtRouting } from '../../../runtime/core/dispatcher/ext-routing.js'
 
 const ensureNames = [
   'ensureAssembly',
@@ -18,6 +19,7 @@ const ensureNames = [
   'ensureFix',
   'ensureGate',
   'ensureGenerator',
+  'ensureGeo',
   'ensureHuman',
   'ensureImg',
   'ensureMaterial',
@@ -68,8 +70,45 @@ describe('dispatcher regression guards', () => {
     expect(ensures.ensureMontage).toHaveBeenCalledTimes(1)
     expect(sends).toHaveLength(1)
     const code = String((sends[0].payload as Record<string, unknown>).code)
-    expect(code).toContain('K.dsh_montage_api["montage"]')
+    expect(code).toContain('A = K.dsh_montage_api')
+    expect(code).toContain('A[N](**P)')
     expect(code).not.toContain('K.dsh_montage_api["dispatch"]')
+  })
+
+  // P1-7 回归：montage()/montage_help() 返回的是 **dict**，而旧的
+  // `print("LOOP " + K.dsh_montage_api["montage"](...))` 直接把它和 str 相加 ⇒
+  // TypeError: can only concatenate str (not "dict") to str（整族必死）。判据：生成代码必须 dumps。
+  it('dumps the montage result instead of concatenating the dict into "LOOP "', async () => {
+    const { deps, sends } = makeDeps()
+    const decision = await routeMainPlanOps(deps, 'montage', { paths: ['a.png'] })
+    await (decision as { result: Promise<unknown> }).result
+    const code = String((sends[0].payload as Record<string, unknown>).code)
+    expect(code).toContain('_json.dumps(R, ensure_ascii=False, default=str)')
+    expect(code).not.toMatch(/print\("LOOP " \+ K\./)
+    expect(code).toContain('N = "montage"')
+  })
+
+  it('routes montage_help to the help entry (strip only the first montage_ prefix)', async () => {
+    const { deps, sends } = makeDeps()
+    const decision = await routeMainPlanOps(deps, 'montage_help', {})
+    await (decision as { result: Promise<unknown> }).result
+    const code = String((sends[0].payload as Record<string, unknown>).code)
+    expect(code).toContain('N = "help"')
+  })
+
+  it('routes geo_* to dsh_geo_api with the geo_ prefix stripped', async () => {
+    const { deps, sends, ensures } = makeDeps()
+    // geo_* 走 EXT_ROUTES（ext-geo，routing.json hostSideFamilies）—— 不是 MAIN 表
+    const decision = await routeExtRouting(deps, 'geo_box', {
+      name: 'B',
+      xr: [-60, 60],
+      yr: [-60, 60],
+      zr: [0, 40],
+    })
+    await (decision as { result: Promise<unknown> }).result
+    expect(ensures.ensureGeo).toHaveBeenCalledTimes(1)
+    const code = String((sends[0].payload as Record<string, unknown>).code)
+    expect(code).toContain('dsh_geo_api["dispatch"]("box"')
   })
 
   it('ensures view before preparing the evidence payload', async () => {

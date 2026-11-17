@@ -67,11 +67,11 @@ describe('engine assembly', () => {
     ])
   })
 
-  it('serves catalog locally without an addon (34 families / 228 ops)', async () => {
+  it('serves catalog locally without an addon (35 families / 261 ops)', async () => {
     const c = await engine.plan('catalog', {})
     expect(c.ok).toBe(true)
-    expect(c.families).toHaveLength(34)
-    expect(c.ops_count).toBe(228)
+    expect(c.families).toHaveLength(35)
+    expect(c.ops_count).toBe(261)
     expect(c.provenance).toBeTruthy()
   })
 
