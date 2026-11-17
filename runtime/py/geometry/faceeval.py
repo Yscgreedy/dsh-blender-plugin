@@ -101,6 +101,14 @@ def face_compare(attempt, ref, canon=None, tol=None, tol_ratio=0.08):
                "note": "这是「与参考的差距」；face_ratios 是「与经典比例的差距」，两者都要看"})
 
 
+def _num_or_1(v):
+    """None → 1（判据不成立），但 **0.0 要保持 0.0**。
+
+    现场（face_selftest 判定倒挂）：写成 `(worst_rel_err or 1) < 0.01` 时，完美命中（误差 0.0）
+    被 `or` 吃成 1 ⇒ good 用例恒 False ⇒ 自检永远红。0.0 是**最好**的值，不是"没值"。"""
+    return 1.0 if v is None else float(v)
+
+
 def face_selftest():
     """自检：严格符合 canon 的 landmarks 必须全过；偏 20%% 的必须挂 ≥3 项。"""
     ev = {}
@@ -127,7 +135,7 @@ def face_selftest():
         ev["compare"] = {"ok": cp.get("ok"), "failed": cp.get("failed")}
         ok = (rg.get("ok") is True and rb.get("ok") is False and len(rb.get("failed") or []) >= 3
               and cp.get("ok") is False and len(cp.get("failed") or []) >= 3
-              and (rg.get("worst_rel_err") or 1) < 0.01)
+              and _num_or_1(rg.get("worst_rel_err")) < 0.01)
         return _j({"ok": bool(ok), "evidence": ev})
     except Exception as e:
         return _j({"ok": False, "evidence": ev, "error": "%s: %s" % (type(e).__name__, str(e)[:200])})

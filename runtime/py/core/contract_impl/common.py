@@ -42,7 +42,29 @@ API 挂在持久内核上：K.dsh_contract_api（与 K.dsh_view_api / K.dsh_perf
 import bpy, json as json, time, math as math, os
 
 CONTRACT_VERSION = 3
-DESTRUCTIVE_OPS = ("boolean_union", "weld", "merge", "join", "apply_transform")
+# 破坏性操作清单：**判据是"会不会改拓扑/覆盖几何后对象级 mark/revert 回不去"**，不是"名字里有没有 merge"。
+# 2026-11 现场（P1-6）：旧清单只有 5 个布尔合并名，于是 boolean / hole_cut / slots_cut / mirror /
+# fix_repair / sculpt_setup(VOXEL) / surface_tessellate 全被"非破坏性操作，不拦"放行 —— 而 catalog 里
+# class=boolean 的第一步正是 destructive_guard，护栏是假的。
+DESTRUCTIVE_OPS = (
+    # 布尔/合并（原有）
+    "boolean_union", "boolean_difference", "boolean_intersect", "boolean",
+    "weld", "merge", "join", "apply_transform", "apply_mods",
+    # 切削（几何层 geo_* 的动词，含不带前缀的裸名）
+    "hole_cut", "slots_cut", "mirror",
+    # 修复/重构（会重写拓扑）
+    "fix_repair", "sculpt_setup", "sculpt_remesh", "voxel_remesh",
+    # 曲面细分/铺面
+    "surface_tessellate",
+    # 逐顶点改写（拓扑不变，但 **顶点级回不去**）：txn 的对象级 mark/revert 只记
+    # transform / 材质槽 / 可见性 / 修改器开关，不含顶点坐标（blender_rt_txn 的边界说明
+    # 明写「对象级不含拓扑/UV/顶点级改动」）。所以 sculpt_apply 与 sculpt_filter 属于
+    # 「改了就回不去却没被拦」——2026-11 复审（YSC 第二条）后纳入清单。
+    "sculpt_apply", "sculpt_filter",
+    # 带 family 前缀的同一批 op（调用方直接拿 catalog 全名时也要拦住）
+    "geo_boolean", "geo_hole_cut", "geo_slots_cut", "geo_mirror", "geo_join", "geo_apply_mods",
+    "geo_sculpt_apply", "geo_sculpt_filter",
+)
 # v0.9.0（Procedura 融合 #8）：判定随几何失效的门限 —— 中心漂移 > 对角线 10% 或尺寸漂移 > 20%
 # → 旧判定自动降级为 unresolved（上游 assembly-seed.ts 的 DRIFT_CENTER/SIZE_FRACTION）
 DRIFT_CENTER_FRACTION = 0.10
@@ -74,11 +96,28 @@ FEATURES_JSON = os.path.join(_HERE, FEATURES_JSON_NAME)
 
 import sys as _sys_kit
 _KIT = getattr(_sys_kit.modules.get("dsh_rt_kernel"), "dsh_kit", None)
-if _KIT is None:
-    raise RuntimeError("contract 需要共享内核 K.dsh_kit（由 KERNEL_BOOTSTRAP 注入）")
 
 
-_j = _KIT.j  # 共享内核（原自带实现已删）
+def kit():
+    """真实共享内核（KERNEL_BOOTSTRAP 注入的 dsh_kit）。
+
+    与 generator / sculpt 不同：contract 要 Api / wrap_dispatch / find_runtime_file，
+    **最小 kit 给不出来**，所以这里不装兜底，改成惰性 —— import 期（打包 / 静态检查 /
+    第三方 import）不再炸，缺内核只在真正调用时以可读文案出现。
+    """
+    K = _sys_kit.modules.get("dsh_rt_kernel")
+    found = getattr(K, "dsh_kit", None) if K is not None else None
+    if found is None or not hasattr(found, "Api"):
+        raise RuntimeError(
+            "contract 需要真实共享内核（KERNEL_BOOTSTRAP 注入的 dsh_kit）。"
+            "裸 python 路径请先注入 dsh_rt_kernel.dsh_kit 再调用；"
+            "会话内请走 blender_op(op=\"contract_status\")。")
+    return found
+
+
+def _j(obj):
+    """JSON 序列化（惰性取内核的 j：import 期不要求 kit 在）。"""
+    return kit().j(obj)
 def _kernel():
     import sys
     return sys.modules.get("dsh_rt_kernel")

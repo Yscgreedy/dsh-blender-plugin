@@ -62,7 +62,7 @@ class DSHBB_AddonPreferences(bpy.types.AddonPreferences):
         connection_box.prop(self, "gateway_port", text="Gateway Port")
 
         layout.separator()
-        layout.label(text="Virtual Display (virtual-gui):", icon='DISPLAY')
+        layout.label(text="Virtual Display (virtual-gui):", icon='DESKTOP')
         display_box = layout.box()
         display_box.operator(
             "dshbb.install_virtual_display_deps",

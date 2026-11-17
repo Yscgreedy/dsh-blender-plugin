@@ -28,12 +28,19 @@
 硬规则：空产出必须 ok=false；判定三态（supported / refuted / unresolved，证据不足就 unresolved）；
         数值带单位；扫掠结束**必须**把场景 transform 完整还原（逐对象对拍并报 mismatch）。
 """
+# 子模块（urdf / usda / infer）经 `from ..common import *` 拿 json 解析错误体，本模块不直接用。
+import json  # noqa: F401
 import math
 import os
 import time
 
 import bpy
 import numpy as np
+# mathutils 的 Matrix/Vector 是模块级公开名：各子模块 from ..common import * 之后直接用（transforms/measure），
+# 缺这行时扫掠一律 NameError: name 'Matrix' is not defined（2026-11 现场：motion_measure 直接崩）。
+from mathutils import Matrix, Quaternion, Vector  # noqa: F401
+from mathutils.bvhtree import BVHTree  # noqa: F401  （measure.py 的干涉/穿透判定）
+import xml.etree.ElementTree as ET  # noqa: F401  （urdf.py 的 XML 自检）
 
 MOTION_VERSION = 1
 

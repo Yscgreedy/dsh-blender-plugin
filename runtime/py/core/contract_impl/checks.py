@@ -207,8 +207,24 @@ def c_check_interface(conn_id, mesh=True, samples=1500):
 
 # ---------------------------------------------------------------- 门控
 
-def c_destructive_guard(op, targets=None, conn_ids=None):
-    """破坏性操作门控：只要目标对象属于「未判别（status != supported）」的连接，或该连接把它列为禁止项，就拦住。"""
+SNAPSHOT_HINT = "blender_session(action=\"txn\", op=\"snapshot\", label=\"pre_{op}\")  # 或 blender_rt_txn(op=\"snapshot\") 旧名"
+DESTRUCTIVE_GUARD_RULE = (
+    "破坏性操作（布尔/开孔/开槽/镜像/合并/修复/重构/曲面细分）默认 **allowed=false**：先 snapshot，再 confirmed=true 放行。",
+    "理由：这些 op 会改拓扑或被覆盖链接，对象级 mark/revert 回不去（txn 的对象级快照不含拓扑）。"
+)
+
+
+def c_destructive_guard(op, targets=None, conn_ids=None, confirmed=False):
+    """破坏性操作门控。两道闸：
+
+      ① **清单闸**（P1-6）：op 属 DESTRUCTIVE_OPS ⇒ 默认 allowed=false，并给 snapshot 建议；
+         调用方显式 confirmed=true（"已经快照过"）才放行。非破坏性 op 不受影响。
+      ② **连接闸**（原有）：目标对象属于「未判别（status != supported）」的连接，或该连接把它列为
+         禁止项 ⇒ 拦住。
+
+    v3.1.0-alpha.2 起 ① 是**故意**的行为变更：旧实现没有这道闸，boolean 被当成"非破坏性操作，不拦"，
+    而 catalog 里 class=boolean 的第一步就是本 op —— 护栏是假的。
+    """
     st = _store()
     op = str(op)
     if op not in DESTRUCTIVE_OPS:
@@ -232,5 +248,15 @@ def c_destructive_guard(op, targets=None, conn_ids=None):
                    "code": "Unsupported Destructive Merge" if op in ("boolean_union", "weld", "merge", "join") else "Forbidden Destructive Op",
                    "reason": "目标涉及未判别的连接或该连接显式禁止该操作；先按 cookbook 判定（probe/explain）再来做",
                    "blocked_by": hits})
-    return _j({"ok": True, "allowed": True, "op": op, "reason": "没有未判别连接涉及该操作"})
+    if confirmed:
+        return _j({"ok": True, "allowed": True, "op": op, "confirmed": True,
+                   "reason": "破坏性操作已被调用方确认（confirmed=true）：按约定前置换作已做 snapshot",
+                   "snapshot_hint": SNAPSHOT_HINT.format(op=op),
+                   "rule": DESTRUCTIVE_GUARD_RULE})
+    return _j({"ok": False, "allowed": False, "op": op, "verdict": "blocked",
+               "code": "Snapshot Required Before Destructive Op",
+               "needs_snapshot": True, "snapshot_hint": SNAPSHOT_HINT.format(op=op),
+               "reason": "破坏性操作默认不放行：布尔/开孔/开槽/镜像/合并/修复/重构/细分都会改拓扑，"
+                         "对象级 mark/revert 回不去。先做文件级快照，再用 confirmed=true 重发。",
+               "rule": DESTRUCTIVE_GUARD_RULE, "destructive_ops": list(DESTRUCTIVE_OPS)})
 

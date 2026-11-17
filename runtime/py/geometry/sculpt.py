@@ -51,9 +51,27 @@ FILTERS = ("SMOOTH", "INFLATE", "RELAX", "RELAX_FACE_SETS", "SHARPEN", "ENHANCE_
 
 import sys as _sys_kit
 _KIT = getattr(_sys_kit.modules.get("dsh_rt_kernel"), "dsh_kit", None)
-if _KIT is None:
-    raise RuntimeError("sculpt 需要共享内核 K.dsh_kit（由 KERNEL_BOOTSTRAP 注入）")
 
+
+def _fallback_kit():
+    """没有 bootstrap 的裸 import（打包 / 静态检查 / 第三方 import）：装最小 kit，只保证 j()。
+
+    本模块的模块级只用 _KIT.j（与 generator 同款），所以缺真内核时不必 raise；
+    真正的错误留到首次真正调用（那时才需要 K 上的持久内核）。
+    """
+    import json as _json
+    import types as _types
+    kmod = _sys_kit.modules.get("dsh_rt_kernel")
+    if kmod is None:
+        kmod = _types.ModuleType("dsh_rt_kernel")
+        _sys_kit.modules["dsh_rt_kernel"] = kmod
+    if getattr(kmod, "dsh_kit", None) is None:
+        kmod.dsh_kit = _types.SimpleNamespace(
+            j=lambda _o: _json.dumps(_o, ensure_ascii=False), fallback=True)
+    return kmod.dsh_kit
+
+
+_KIT = _KIT or _fallback_kit()
 
 _j = _KIT.j  # 共享内核（原自带实现已删）
 def _num(v, name, lo=None, hi=None, default=None):
@@ -372,6 +390,9 @@ def _apply_one(ob, stroke, use_mask=True):
     maxd = float(np.abs(new - co).max()) if n else 0.0
     return {"name": ob.name, "brush": pr["brush"], "dabs": len(dabs), "stroke_paths": used_paths, "verts": n,
             "affected_verts": int(affect.sum()), "max_delta": round(maxd, 8),
+            "radius": round(float(pr["radius"]), 8),
+            "radius_unit": "场景单位（对象**局部**坐标；不是 mm、不是世界坐标）",
+            "dab_amp": round(float(pr["strength"]) * float(pr["radius"]) * 0.25, 8),
             "ms": int((time.time() - t0) * 1000)}
 
 
@@ -482,8 +503,35 @@ def sculpt_setup(object=None, objects=None, mode="KEEP", voxel_size=None, levels
     return _j({"ok": True, "objects": out})
 
 
+RADIUS_SEMANTICS = {
+    "unit": "场景单位（对象**局部**坐标；不是 mm，也不是世界坐标）",
+    "meaning": "单 dab 位移上限 = strength × radius × 0.25（即**位移量随 radius 线性放大**）",
+    "measured": "同一 strength 下 radius 0.05 → 位移 ≈ ×1，radius 0.3 → 位移 ≈ ×7.9（实测）",
+    "dabs": "控制点按 radius×0.25 的间距插值成 dab 序列：radius 越大，一个点覆盖越广也推得越远",
+    "points": "points 用局部坐标；世界坐标请先减 obj.matrix_world.translation 再传",
+}
+
+
+def _sculpt_apply_gate(payload, total_affected, max_delta):
+    """P0-1：零位移不许判 pass（实测：世界坐标当局部坐标传 ⇒ affected=0/max_delta=0 却 ok=true）。"""
+    ok = bool(total_affected > 0 and max_delta > 0)
+    payload["verdict"] = "pass" if ok else "fail"
+    if not ok:
+        payload["ok"] = False
+        payload["error"] = ("笔刷零位移：affected_verts=%d、max_delta=%g —— 一个顶点都没动，"
+                            "不能当「雕过」（ok=false / verdict=fail）" % (int(total_affected), float(max_delta)))
+        payload["hint"] = ("points 是**局部坐标**（对象局部原点，落在 ±dimensions/2 内）；"
+                           "世界坐标请先减 obj.matrix_world.translation 再传。"
+                           "另查 radius 是否远小于模型尺寸（radius 单位=场景单位，不随 mm 工作台换算）")
+    return payload
+
+
 def sculpt_apply(object=None, objects=None, strokes=None, use_mask=True):
-    """L2 位移笔刷：一笔 = 一条控制点路径 + 一个笔刷 + 半径/强度/衰减（+ 对称/遮罩/方向）。"""
+    """L2 位移笔刷：一笔 = 一条控制点路径 + 一个笔刷 + 半径/强度/衰减（+ 对称/遮罩/方向）。
+
+    P0-1（2026-11 现场实测）：零位移（affected_verts==0 或 max_delta==0）⇒ ok=false / verdict=fail。
+    此前正式调用路径没有这道闸（只有 selftest 里断言过），于是"世界坐标当局部坐标传"这种明显
+    无效的调用会回 ok=true —— 证据链被污染。"""
     obs = _objs(objects or object)
     if not isinstance(strokes, (list, tuple)) or not strokes:
         raise ValueError("strokes 必填（[{brush, points, radius, strength, falloff, symmetry, invert, direction}]）")
@@ -492,14 +540,23 @@ def sculpt_apply(object=None, objects=None, strokes=None, use_mask=True):
         if not isinstance(s, dict):
             raise ValueError("strokes[%d] 需要对象" % i)
     out = []
+    total_affected = 0
+    max_delta = 0.0
     for ob in obs:
         recs = []
         for s in strokes:
-            recs.append(_apply_one(ob, s, use_mask=bool(use_mask)))
+            rec = _apply_one(ob, s, use_mask=bool(use_mask))
+            recs.append(rec)
+            if rec.get("skipped"):
+                continue
+            total_affected += int(rec.get("affected_verts") or 0)
+            max_delta = max(max_delta, float(rec.get("max_delta") or 0.0))
         out.append({"object": ob.name, "strokes": recs,
                     "verts_after": len(ob.data.vertices), "tris_after": _tris(ob.data)})
-    return _j({"ok": True, "results": out,
-               "note": "位移写在基础网格上（不是 multires 层）；随后可 sculpt_filter 平滑、sculpt_remesh 重拓扑"})
+    payload = {"ok": True, "results": out, "affected_verts": int(total_affected),
+               "max_delta": round(max_delta, 8), "radius_semantics": RADIUS_SEMANTICS,
+               "note": "位移写在基础网格上（不是 multires 层）；随后可 sculpt_filter 平滑、sculpt_remesh 重拓扑"}
+    return _j(_sculpt_apply_gate(payload, total_affected, max_delta))
 
 
 def sculpt_filter(objects=None, scope="ACTIVE", type="SMOOTH", strength=0.3, iterations=1, mask=False):
@@ -780,10 +837,10 @@ def sculpt_dispatch(op, args_json):
         return _j({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:220]), "op": op})
 
 
-_DshApi = _KIT.Api  # 共享内核（尾部注册行无需改）
+_DshApi = getattr(_KIT, "Api", None)  # 最小 kit 兜底时没有 Api：只有真内核才注册
 import sys as _sys
 _K = _sys.modules.get("dsh_rt_kernel")
-if _K is not None:
+if _K is not None and _DshApi is not None:
     _K.dsh_sculpt_api = _DshApi({"version": SCULPT_VERSION, "dispatch": sculpt_dispatch,
                                  "scan": sculpt_scan, "setup": sculpt_setup, "apply": sculpt_apply,
                                  "filter": sculpt_filter, "mask": sculpt_mask, "remesh": sculpt_remesh,

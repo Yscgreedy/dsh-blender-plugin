@@ -8,7 +8,18 @@ from .measure import audit_measure, audit_snap_floaters
 from .overlap import audit_interference, audit_overlap
 
 def audit_gate_selftest():
-    """装配级判据的合成自检：可见浮块 / 微隙容忍 / 归因 / 漂移 四项一起验。"""
+    """装配级判据的合成自检：可见浮块 / 微隙容忍 / 归因 / 漂移 四项一起验。
+
+    判据是 mm 口径的绝对量（远端浮块 gap > 1000mm、微隙 0.2mm）；打开的文件若把
+    scene.unit_settings.scale_length 设成 0.001，同一段自检会正好差 1000 倍而全判 fail。
+    自检自带口径，跑完复位（kit.scene_units）。
+    """
+    with _KIT.scene_units(1.0):
+        return _audit_gate_selftest_body()
+
+
+def _audit_gate_selftest_body():
+    """audit_gate_selftest 的本体（场景单位已由调用方钉到 1 单位 = 1 m）。"""
     made = []
     try:
         def cube(name, loc, size):

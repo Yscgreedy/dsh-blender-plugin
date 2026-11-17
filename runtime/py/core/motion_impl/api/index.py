@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """motion dispatch/reset + kernel API registration (entry surface preserved)."""
+import json
+import traceback
+
 from ..common import *  # noqa: F401,F403
 from ..infer import motion_infer_axis, motion_joint, motion_joints
 from ..measure import motion_measure

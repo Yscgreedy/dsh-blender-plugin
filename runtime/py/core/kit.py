@@ -11,6 +11,7 @@
 
 约定：kit 只放"**每个模块都要写一遍**"的东西；领域逻辑一律留在各模块。
 """
+import contextlib
 import json
 import os
 import sys
@@ -124,6 +125,30 @@ def units():
 def mm(v):
     """Blender 单位 → 毫米。"""
     return float(v) * units()
+
+
+@contextlib.contextmanager
+def scene_units(scale_length=1.0):
+    """把场景单位临时钉到 1 单位 = scale_length 米，退出时复位。
+
+    为什么需要：自检的期望值是**写死的绝对量**（print_selftest 的"1 单位立方体壁厚 1000 mm"、
+    vehicle_selftest 的"车长 4300 mm"、audit_gate_selftest 的"远端浮块 gap > 1000 mm"），它们默认
+    1 单位 = 1 m。打开的文件若把 scene.unit_settings.scale_length 设成 0.001（1 单位 = 1 mm，
+    本机 GUI 默认文件就是），同一段自检会**正好差 1000 倍**而全判 fail —— 那是打开文件的口径，
+    不是代码坏了。自检自带口径，跑完复位，不动用户文件。
+    """
+    import bpy
+
+    us = bpy.context.scene.unit_settings
+    prev = float(getattr(us, "scale_length", 1.0) or 1.0)
+    us.scale_length = float(scale_length)
+    try:
+        yield prev
+    finally:
+        try:
+            us.scale_length = prev
+        except Exception:
+            pass
 
 
 # ────────────────────────────── 跨模块 API ──────────────────────────────
@@ -455,12 +480,58 @@ class BatchUpdates:
         return False
 
 
+# ────────────────────────────── selftest evidence 归一 ──────────────────────────────
+def norm_evidence(evidence):
+    """把各族 selftest 的 evidence 归一成可机器判的形状（与宿主 runtime/core/selftest.ts 同口径）。
+
+    回 {evidence_flat: {path: bool}, evidence_nonbool: {path: value}, evidence_failed: [path],
+       evidence_ok: bool, evidence_shape: flat-bool|nested|list|missing}。
+    只做加性归一：原 evidence 原样保留，调用方按需取用。
+    """
+    flat, other, failed = {}, {}, []
+
+    def walk(value, path, depth=0):
+        if depth > 8:
+            return
+        if isinstance(value, bool):
+            flat[path] = value
+            if not value:
+                failed.append(path)
+        elif isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                walk(item, "%s[%d]" % (path, i), depth + 1)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, ("%s.%s" % (path, key)) if path else str(key), depth + 1)
+        elif value is not None:
+            other[path or "value"] = value
+
+    if isinstance(evidence, dict):
+        for key, item in evidence.items():
+            walk(item, str(key))
+    elif isinstance(evidence, (list, tuple)):
+        for i, item in enumerate(evidence):
+            walk(item, "[%d]" % i)
+    elif isinstance(evidence, bool):
+        walk(evidence, "value")
+    if isinstance(evidence, (list, tuple)):
+        shape = "list"
+    elif isinstance(evidence, dict):
+        top = list(evidence.values())
+        shape = "flat-bool" if top and all(isinstance(v, bool) for v in top) else "nested"
+    else:
+        shape = "missing" if evidence is None else "nested"
+    return {"evidence_flat": flat, "evidence_nonbool": other, "evidence_failed": failed,
+            "evidence_ok": not failed, "evidence_shape": shape}
+
 # 注册：KERNEL_BOOTSTRAP 会执行本文件 ⇒ K.dsh_kit 在任何注入路径里都存在
 _K = _kernel()
 _K.dsh_kit = types.SimpleNamespace(
-    version=KIT_VERSION, j=j, err=err, receipt=receipt, units=units, mm=mm, api=api,
+    version=KIT_VERSION, j=j, err=err, receipt=receipt, units=units, mm=mm,
+    scene_units=scene_units, api=api,
     Api=Api, register=register, flatten=flatten, dispatch_table=dispatch_table,
     objects=objects, world_tris=world_tris, bvh=bvh, iou=iou,
     find_runtime_file=find_runtime_file, RUNTIME_DOMAINS=RUNTIME_DOMAINS,
     pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree, BatchUpdates=BatchUpdates,
+    norm_evidence=norm_evidence,
 )

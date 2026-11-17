@@ -712,6 +712,17 @@ def _print_selftest_p2b(st):
 def print_selftest():
     """自检：四种形状验证"贴床面被排除、真悬垂仍被计入"（issue #14 的回归锁）。
 
+    期望值全是**绝对量**（壁厚 1000mm / 贴床面 1e6 mm² …），默认 1 单位 = 1 m。打开的文件若把
+    scale_length 设成 0.001（1 单位 = 1 mm，本机 GUI 默认文件），同一段自检会正好差 1000 倍
+    而全判 fail —— 那是文件口径，不是代码坏了。自检自带口径，跑完复位（kit.scene_units）。
+    """
+    with _KIT.scene_units(1.0):
+        return _print_selftest_body()
+
+
+def _print_selftest_body():
+    """print_selftest 的本体（场景单位已由调用方钉到 1 单位 = 1 m）。
+
     1) 1 单位立方体：壁厚 ≈1000mm；贴床底面 1e6 mm² 必须被排除 → 净悬垂 = 0、ok = true。
        老口径（exclude_bed=False）必须复现 v1.0.4 的数字（1e6 / 0.1667 / ok=false）—— 这就是 issue #14。
     2) 底板 + 悬臂：贴床面 4e6、悬臂底面（离台 500mm）必须仍计入悬垂 1e6。

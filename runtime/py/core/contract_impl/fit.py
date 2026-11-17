@@ -365,13 +365,17 @@ def c_interference_report(scope=None, use_bvh=True, limit=60, declared_ok=True,
 
 def c_help():
     return _j({"version": CONTRACT_VERSION,
+               "naming": {"prefix": "contract_", "rule": "两种写法都可达：contract_status（catalog 口径）与 status（旧脚本别名）；"
+                                                          "裸名 status 也收 —— 与 audit_mesh 这类 family 前缀保持同一口径"},
                "S1_ops": {"register_component": "id, objects, tags, note",
                           "register_connection": "id, a, b, candidates, params, forbidden, confidence, evidence_required, status",
                           "register_envelope": "id, min, max, scope, note",
                           "check_envelope": "id(可选) → 越界清单",
                           "check_interference": "scope, use_bvh, limit → AABB 粗筛 + BVH 精查",
                           "check_interface": "conn_id, mesh(true), samples(1500) → 两组件间隙/侵入：bbox 级老字段（gap_axis_m/gap_m/overlap_bbox）口径不变 + mesh 块（网格级单边间隙 mm/接触占比/穿透 mm）",
-                          "destructive_guard": "op, targets, conn_ids → 允许/拦下 + 理由",
+                          "destructive_guard": "op, targets, conn_ids, confirmed(false) → 允许/拦下 + 理由；"
+                                                      "破坏性 op（boolean/hole_cut/slots_cut/mirror/join/fix_repair/sculpt_setup/surface_tessellate）"
+                                                      "默认 allowed=false，先 snapshot 再 confirmed=true 放行",
                           "evidence": "label, view → 出图 + md5 记账",
                           "ledger/status/report": "证据账本 / 概览 / Markdown 报告"},
                "S2_ops": {"verify": "conn_id, err, tolerance, identifiable, probe_err, probe_tolerance → 三态",

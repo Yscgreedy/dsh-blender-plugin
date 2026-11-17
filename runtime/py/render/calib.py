@@ -108,6 +108,12 @@ def _spec_for(names, break_gates=None):
     sp["gates"][0]["args"] = {"objects": names, "self_intersect": True, "summary_only": True}
     sp["gates"][1]["args"] = {"objects": names}
     sp["gates"][2]["args"] = {"objects": names, "min_mm": 1.0}
+    # 2026-11 现场（calib_selftest 的 baseline_failed=["duplicates"]）：第 4 条门此前只带 top_k，
+    # audit_duplicates 于是扫**全场景** —— 用户场景里只要有一个 Foo/Foo.001 分叉就把"健康基线"判 fail。
+    # 标定套件自带场景，必须只判自己造的那几个对象。
+    # 用**前缀**而不是 objects：_d_dup_resource 造的是 DupMesh/DupMesh.001 + DupMat/DupMat.001，
+    # 它们不挂在任何对象上，按 objects 收窄会漏掉；前缀能圈住"本套件拥有的资源"，同时不扫用户场景。
+    sp["gates"][3]["args"] = {"prefix": PFX, "objects": names, "top_k": 5}
     broken = set(str(x) for x in (break_gates or []))
     for g in sp["gates"]:
         if g["id"] in broken:

@@ -7,7 +7,17 @@ from .panels import vehicle_panels, vehicle_regions
 from .fit import vehicle_fit
 
 def vehicle_selftest():
-    """自检：比例门该过/该挂 + 建壳 + 轮与壳**零互穿**（解析轮眉的硬承诺）+ 尺寸吻合。"""
+    """自检：比例门该过/该挂 + 建壳 + 轮与壳**零互穿**（解析轮眉的硬承诺）+ 尺寸吻合。
+
+    期望值按 1 单位 = 1 m 写死（车长 4300mm）；打开的文件若把 scale_length 设成 0.001，
+    旧实现会报"size_mm 4.3 应 4300"这类正好差 1000 倍的量。自检自带口径，跑完复位。
+    """
+    with _KIT.scene_units(1.0):
+        return _vehicle_selftest_body()
+
+
+def _vehicle_selftest_body():
+    """vehicle_selftest 的本体（场景单位已由调用方钉到 1 单位 = 1 m）。"""
     ev = {}
     try:
         sp = vehicle_spec(type="sports", length_mm=4300.0, width_mm=1850.0, height_mm=1250.0,

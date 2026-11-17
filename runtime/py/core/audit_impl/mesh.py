@@ -7,7 +7,8 @@ def _mesh_totals():
     return {"objects": 0, "tris": 0, "boundary_edges": 0, "nonmanifold_edges": 0, "degenerate_faces": 0,
             "loose_verts": 0, "self_intersections": 0, "normals_inverted": 0, "out_of_bounds": 0,
             "empty_objects": 0, "loose_edges": 0, "normals_unknown": 0, "normals_checked": 0,
-            "normals_multi_shell": 0, "analysis_incomplete": 0}
+            "normals_multi_shell": 0, "analysis_incomplete": 0,
+            "genus_well_defined": True, "genus_total": 0, "genus_main": 0, "genus_top5": []}
 
 
 def _mesh_envelope(envelope):
@@ -32,6 +33,98 @@ def _mesh_loose_edges(me):
     return None
 
 
+GENUS_FORMULA = "g = (2 - chi) / 2（单壳闭壳，chi = V - E + F）"
+
+
+def _mesh_genus(bm):
+    """逐**连通壳**算亏格；闭壳才有定义，开壳一律 None（绝不编造隧道数）。
+
+    2026-11 现场（外部实测缺陷 P2-11）—— 两个坑都必须避开：
+
+      ① 公式：正确是 **g = (2 - chi) / 2**。写成 2 - chi/2 会**每壳多算 1**：
+        控制件实测 —— 立方体该 0（错公式给 1）、环面该 1（错公式给 2）、两个分离方块该
+         shells=2 / genus_total=0（错公式给 2）；碎壳件 225 个壳被报成 3,269 个「隧道」。
+      ② 开壳不可用：chi = 2 - 2g - b 只在闭壳上退化成 V - E + F。只要该壳 boundary_edges>0
+         （即 chi = 2 - 2g - b 里的 b），亏格就**没有定义** —— 老实现把一份 3,921 壳 / 31,140 开边的
+         源件报成「7,981 个隧道」，纯属虚构。非流形边（一条边挂 >2 个面）同样不给数字。
+
+    返回 {genus_well_defined, genus_total, genus_main, top5[], shells, open_shells, reason}。
+    """
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    nv = len(bm.verts)
+    out = {"genus_well_defined": False, "genus_total": None, "genus_main": None, "top5": [],
+           "shells": 0, "open_shells": 0, "formula": GENUS_FORMULA, "reason": ""}
+    if nv == 0 or len(bm.faces) == 0:
+        out["reason"] = "没有面（空对象）"
+        return out
+    par = list(range(nv))
+
+    def _find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    for e in bm.edges:
+        ra, rb = _find(e.verts[0].index), _find(e.verts[1].index)
+        if ra != rb:
+            par[rb] = ra
+    shells = {}
+
+    def _shell(key):
+        rec = shells.get(key)
+        if rec is None:
+            rec = {"verts": 0, "edges": 0, "faces": 0, "open_edges": 0, "nonmanifold_edges": 0}
+            shells[key] = rec
+        return rec
+
+    for v in bm.verts:
+        if v.link_edges or v.link_faces:
+            _shell(_find(v.index))["verts"] += 1
+    for e in bm.edges:
+        rec = _shell(_find(e.verts[0].index))
+        rec["edges"] += 1
+        if len(e.link_faces) == 1:
+            rec["open_edges"] += 1
+        if len(e.link_faces) > 2:
+            rec["nonmanifold_edges"] += 1
+    for f in bm.faces:
+        _shell(_find(f.verts[0].index))["faces"] += 1
+    rows = []
+    open_shells = 0
+    bad = []
+    for i, (key, rec) in enumerate(shells.items()):
+        if rec["open_edges"] > 0 or rec["nonmanifold_edges"] > 0:
+            open_shells += 1
+            bad.append("壳#%d 开边 %d / 非流形边 %d" % (i, rec["open_edges"], rec["nonmanifold_edges"]))
+            g = None
+        else:
+            chi = rec["verts"] - rec["edges"] + rec["faces"]
+            gv = (2 - chi) / 2.0
+            g = int(round(gv)) if abs(gv - round(gv)) < 1e-9 and gv >= -1e-9 else None
+            if g is None:
+                bad.append("壳#%d chi=%d 不是偶数（(2-chi)/2 非整数）" % (i, chi))
+        rows.append({"shell": i, "faces": rec["faces"], "verts": rec["verts"],
+                     "genus": g, "closed": bool(rec["open_edges"] == 0 and rec["nonmanifold_edges"] == 0)})
+    rows.sort(key=lambda r: -r["faces"])
+    out["shells"] = len(rows)
+    out["open_shells"] = open_shells
+    out["top5"] = rows[:5]
+    out["genus_main"] = rows[0]["genus"] if rows else None
+    if open_shells or any(r["genus"] is None for r in rows):
+        out["genus_partial"] = [r for r in rows if r["genus"] is not None][:5]
+        out["reason"] = ("开壳/非流形壳占 %d/%d：亏格没有定义（chi = 2 - 2g - b 只在闭壳上退化），"
+                         "不给数字 —— %s" % (open_shells, len(rows), "；".join(bad[:4])))
+        return out
+    out["genus_well_defined"] = True
+    out["genus_total"] = int(sum(int(r["genus"]) for r in rows))
+    out["genus_main"] = int(rows[0]["genus"])
+    out["reason"] = "全部 %d 个壳闭合且流形" % len(rows)
+    return out
+
+
 def _mesh_topology(bm, info, eps_area):
     """bmesh 拓扑计数 + 有符号体积 + 闭合判定。"""
     bm.verts.ensure_lookup_table()
@@ -50,6 +143,12 @@ def _mesh_topology(bm, info, eps_area):
         vol = None
     info["signed_volume"] = (round(vol, 6) if vol is not None else None)
     info["closed"] = bool(info["boundary_edges"] == 0 and info["nonmanifold_edges"] == 0)
+    _g = _mesh_genus(bm)
+    info["genus"] = _g
+    info["genus_well_defined"] = _g["genus_well_defined"]
+    info["genus_total"] = _g["genus_total"]
+    info["genus_main"] = _g["genus_main"]
+    info["genus_top5"] = _g["top5"]
 
 
 def _mesh_normals(bm, info):
@@ -243,6 +342,22 @@ def _mesh_totals_add(total, info):
         total["empty_objects"] += 1
     if info.get("out_of_bounds"):
         total["out_of_bounds"] += 1
+    _g = info.get("genus") or {}
+    if _g:
+        if not _g.get("genus_well_defined"):
+            total["genus_well_defined"] = False
+        if _g.get("genus_total") is not None and total.get("genus_total") is not None:
+            total["genus_total"] += int(_g["genus_total"])
+        else:
+            total["genus_total"] = None
+        _top = (_g.get("top5") or [{}])[0]
+        if _g.get("genus_main") is not None and int(_top.get("faces") or 0) > int(total.get("_genus_main_faces", -1)):
+            total["_genus_main_faces"] = int(_top.get("faces") or 0)
+            total["genus_main"] = int(_g["genus_main"])
+        for _r in (_g.get("top5") or [])[:5]:
+            total["genus_top5"].append({"object": info.get("name"), "shell": _r.get("shell"),
+                                        "faces": _r.get("faces"), "genus": _r.get("genus"),
+                                        "closed": _r.get("closed")})
 
 
 def _mesh_summary_state(total):
@@ -266,8 +381,21 @@ def _mesh_slim_parts(parts):
              "normals_shell_count", "self_intersections", "self_intersections_analyzed",
              "self_intersections_state", "self_intersections_same_island", "self_intersections_cross_island",
              "self_intersections_filtered_small_island", "self_intersections_kept", "islands",
-             "signed_volume", "empty", "out_of_bounds", "state", "multi_shell", "state_detail")
+             "signed_volume", "empty", "out_of_bounds", "state", "multi_shell", "state_detail",
+             "genus_well_defined", "genus_total", "genus_main", "genus_top5")
     return [{k: v for k, v in p.items() if k in _keep} for p in parts]
+
+
+def _genus_finalize(total):
+    """收敛跨对象的 genus 汇总：top5 按面数排、主壳取全局最大壳、未定义时总数置 None。"""
+    rows = total.get("genus_top5") or []
+    total["genus_top5"] = sorted(rows, key=lambda r: -(int(r.get("faces") or 0)))[:5]
+    total["genus_main_faces"] = total.pop("_genus_main_faces", None)
+    if not total.get("genus_well_defined"):
+        total["genus_total"] = None
+        total["genus_note"] = ("有开壳/非流形壳 ⇒ genus_well_defined=false，不给数字"
+                               "（chi = 2 - 2g - b 只在闭壳上退化为 V - E + F）")
+    total["genus_formula"] = GENUS_FORMULA
 
 
 def _mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect):
@@ -330,6 +458,7 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
                                  island_split, min_island_verts, env)
         _mesh_totals_add(total, info)
         parts.append(info)
+    _genus_finalize(total)
     return _j(_mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect))
 
 def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_k=None,
@@ -358,7 +487,9 @@ def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_
                      "loose_verts": info.get("loose_verts"), "loose_edges": info.get("loose_edges"),
                      "self_intersections": info.get("self_intersections"),
                      "normals_outward": info.get("normals_outward"), "normals_state": info.get("normals_state"),
-                     "state": info.get("state"), "score": score, "aabb": info.get("aabb")})
+                     "state": info.get("state"), "score": score, "aabb": info.get("aabb"),
+                     "genus_well_defined": info.get("genus_well_defined"),
+                     "genus_total": info.get("genus_total"), "genus_main": info.get("genus_main")})
     rows.sort(key=lambda x: -x["score"])
     k = int(top_k) if top_k is not None else int(limit)
     rows_out = rows[:max(0, k)]
@@ -373,7 +504,7 @@ def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_
     if summary_only:
         _keep = ("name", "score", "boundary_edges", "nonmanifold_edges", "degenerate_faces",
                  "loose_verts", "loose_edges", "self_intersections", "normals_outward", "normals_state",
-                 "state", "tris", "closed")
+                 "state", "tris", "closed", "genus_well_defined", "genus_total", "genus_main")
         rows_out = [{kk: vv for kk, vv in row.items() if kk in _keep} for row in rows_out]
     reason = ""
     if state == "degraded":
@@ -421,15 +552,52 @@ def _mat_sig(ob):
         return "err"
 
 
-def audit_duplicates(limit=30, top_k=None):
-    """同名资源审计：把 Foo / Foo.001 这类分叉分组，并比较内容是否不同。"""
+def audit_duplicates(limit=30, top_k=None, objects=None, prefix=None):
+    """同名资源审计：把 Foo / Foo.001 这类分叉分组，并比较内容是否不同。
+
+    作用域（任一给了就收窄，两个都给取交集）：
+      · objects=[...]：只判这些对象**用到的**网格/材质；
+      · prefix="X"：只判名字以 X 开头的资源（标定套件用它圈住自己造的那批，_d_dup_resource 造的
+        同名分叉也带同一前缀）。
+    都不给时才扫全场景 —— 现场（calib_selftest 的 baseline_failed=["duplicates"]）就是因为这条门
+    扫到了用户场景里无关的 Foo/Foo.001，把"健康基线"判成 fail。
+    """
     k = int(top_k) if top_k is not None else int(limit)
+    scope_mats = scope_meshes = None
+    _scope_objs = None
+    if objects:
+        _objs, _missing, _err = _pick(objects, None)
+        if _err:
+            return _j({"ok": False, "error": _err})
+        _scope_objs = [o.name for o in _objs]
+        scope_mats, scope_meshes = set(), set()
+        for _o in _objs:
+            _me = getattr(_o, "data", None)
+            if _me is not None and getattr(_o, "type", "") == "MESH":
+                scope_meshes.add(str(_me.name))
+            for _sl in (getattr(_o, "material_slots", None) or []):
+                _mat = getattr(_sl, "material", None)
+                if _mat is not None:
+                    scope_mats.add(str(_mat.name))
     import hashlib
     out = {"ok": True, "materials": [], "meshes": [],
            "note": "同名分叉多为「先到先得」覆盖造成；若内容不同，说明有两份不一样的资源在混用"}
     # 材质
     groups = {}
+    pre = str(prefix) if prefix not in (None, "") else None
+
+    def _in_scope(name, used):
+        """objects 与 prefix 是**并集**（任一命中即算本作用域）：标定套件给两者，
+        注入的 DupMesh/DupMat 只命中 prefix，健康件只命中 objects。"""
+        if used is not None and str(name) in used:
+            return True
+        if pre is not None and str(name).startswith(pre):
+            return True
+        return used is None and pre is None
+
     for m in bpy.data.materials:
+        if not _in_scope(m.name, scope_mats):
+            continue
         base = str(m.name).split(".")[0]
         groups.setdefault(("m", base), []).append(m)
     for (kind, base), items in sorted(groups.items()):
@@ -443,6 +611,8 @@ def audit_duplicates(limit=30, top_k=None):
     # 网格
     g2 = {}
     for me in bpy.data.meshes:
+        if not _in_scope(me.name, scope_meshes):
+            continue
         base = str(me.name).split(".")[0]
         g2.setdefault(base, []).append(me)
     for base, items in sorted(g2.items()):
@@ -464,6 +634,12 @@ def audit_duplicates(limit=30, top_k=None):
             out[_key + "_total"] = len(out[_key])
             out[_key] = out[_key][:k]
     out["slim"] = {"top_k": k, "materials": len(out["materials"]), "meshes": len(out["meshes"])}
+    if pre is not None:
+        out["scope_prefix"] = pre
+    if _scope_objs is not None:
+        out["scope"] = {"objects": _scope_objs, "materials": sorted(scope_mats or ()),
+                        "meshes": sorted(scope_meshes or ()),
+                        "note": "只判这些对象用到的 datablock（不扫全场景）"}
     out["ok"] = True
     return _j(out)
 

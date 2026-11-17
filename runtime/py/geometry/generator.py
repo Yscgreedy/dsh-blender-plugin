@@ -76,9 +76,24 @@ if CLEAN_SCENE and bpy is not None:
 
 POSTLUDE = """# ---- dsh generator postlude（运行器注入：产出回执）----
 import sys as _sys_kit
+import json as _json_dsh
+import types as _types_dsh
 _KIT = getattr(_sys_kit.modules.get("dsh_rt_kernel"), "dsh_kit", None)
 if _KIT is None:
-    raise RuntimeError("generator 需要共享内核 K.dsh_kit（由 KERNEL_BOOTSTRAP 注入）")
+    # P0-2（2026-11 现场实测）：这里**不许** raise。
+    # 生成器跑在 `blender -b --factory-startup --python <tmp>` 的**全新进程**里，KERNEL_BOOTSTRAP
+    # 根本没注入（也不该注入：生成器必须不依赖会话状态，这是可复现的定义）。
+    # 旧实现第一句就 raise RuntimeError ⇒ 每次 generator_run 都 refuted ⇒ 整条参数化阵列路死了。
+    # 兜底：装一个只有 j() 的最小 kit（真 kit 在场时照旧复用）。
+    _kmod = _sys_kit.modules.get("dsh_rt_kernel")
+    if _kmod is None:
+        _kmod = _types_dsh.ModuleType("dsh_rt_kernel")
+        _sys_kit.modules["dsh_rt_kernel"] = _kmod
+    if getattr(_kmod, "dsh_kit", None) is None:
+        _kmod.dsh_kit = _types_dsh.SimpleNamespace(
+            j=lambda _o: _json_dsh.dumps(_o, ensure_ascii=False),
+            fallback=True)
+    _KIT = _kmod.dsh_kit
 
 
 def _dsh_receipt():
@@ -109,10 +124,27 @@ _dsh_receipt()
 
 
 # 修：模块顶层直接用 _KIT，但此前**只有 POSTLUDE 字符串里**才有它的定义 ⇒ 纯 python 导入必炸
-# （Blender 侧靠 preload 命名空间串味掩盖了）。这里显式解析一次，缺失就明确报错。
+# （Blender 侧靠 preload 命名空间串味掩盖了）。修法**两类分开**：这里只需要 j()，
+# 所以缺 kit 时按 POSTLUDE 的同一套口径装一个只含 j() 的最小 kit 兜底，不阻断 import；
+# 需要真实内核（Api / units / 几何工具）的模块（contract / audit）走惰性访问，见各自 common.py。
 _KIT = getattr(sys.modules.get("dsh_rt_kernel"), "dsh_kit", None)
-if _KIT is None:
-    raise RuntimeError("generator 需要共享内核 K.dsh_kit（由 KERNEL_BOOTSTRAP 注入；纯 python 路径由 tests 注入）")
+
+
+def _fallback_kit():
+    """没有 bootstrap 的裸 import（打包 / 静态检查 / 第三方 import）：装最小 kit，只保证 j()。"""
+    import json as _json
+    import types as _types
+    kmod = sys.modules.get("dsh_rt_kernel")
+    if kmod is None:
+        kmod = _types.ModuleType("dsh_rt_kernel")
+        sys.modules["dsh_rt_kernel"] = kmod
+    if getattr(kmod, "dsh_kit", None) is None:
+        kmod.dsh_kit = _types.SimpleNamespace(
+            j=lambda _o: _json.dumps(_o, ensure_ascii=False), fallback=True)
+    return kmod.dsh_kit
+
+
+_KIT = _KIT or _fallback_kit()
 
 _j = _KIT.j  # 共享内核（原自带实现已删）
 def _kernel():
@@ -551,9 +583,10 @@ def generator_dispatch(op, args=None):
 
 
 import sys as _sys
+_DshApi = getattr(_KIT, "Api", None)  # 最小 kit 兜底时没有 Api：只有真内核才注册
 _K = _sys.modules.get("dsh_rt_kernel")
-if _K is not None:
-    _K.dsh_generator_api = _KIT.Api({"version": GENERATOR_VERSION, "dispatch": generator_dispatch,
+if _K is not None and _DshApi is not None:
+    _K.dsh_generator_api = _DshApi({"version": GENERATOR_VERSION, "dispatch": generator_dispatch,
                             "save": generator_save, "run": generator_run, "list": generator_list,
                             "get": generator_get, "diff": generator_diff,
                             "selftest": generator_selftest, "help": generator_help})
@@ -563,9 +596,9 @@ if _K is not None:
 # 且 dispatch 返回 JSON 字符串，调用方还得自己 json.loads。
 # 现在：api("op", {…}) 或 api({…}) → dict；api["dispatch"](op, json_str) 仍返回 str（引擎契约不变）。
 # 注意：dict 是静态类型，不能对已有实例做 __class__ 赋值（实测 TypeError），所以换成一个新实例。
-_DshApi = _KIT.Api  # 共享内核（尾部注册行无需改）
 import sys as _sys_api
 _K_api = _sys_api.modules.get("dsh_rt_kernel")
-if _K_api is not None and isinstance(getattr(_K_api, "dsh_generator_api", None), dict) \
+if _DshApi is not None and _K_api is not None \
+        and isinstance(getattr(_K_api, "dsh_generator_api", None), dict) \
         and not isinstance(getattr(_K_api, "dsh_generator_api", None), _DshApi):
     _K_api.dsh_generator_api = _DshApi(_K_api.dsh_generator_api)

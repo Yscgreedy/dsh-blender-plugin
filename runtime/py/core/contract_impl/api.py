@@ -8,6 +8,24 @@ from .fit import c_fit_help, c_help, c_interference_report
 
 
 
+CONTRACT_PREFIX = "contract_"
+
+
+def _norm_op(op):
+    """契约族 op 归一：contract_status → status（裸名保留为别名，旧脚本不改）。
+
+    2026-11 现场（P1-5）：34 族里只有 contract 没用 family 前缀，于是 catalog/skill 里写的
+    contract_status / contract_evidence / contract_help 全部 unknown —— 与 audit_mesh 那类口径相反。
+    这里统一成 contract_* 前缀可达、裸名仍是别名。
+    """
+    s = str(op or "").strip()
+    if s == CONTRACT_PREFIX[:-1] or s == "":
+        return "help"
+    if s.startswith(CONTRACT_PREFIX):
+        return s[len(CONTRACT_PREFIX):]
+    return s
+
+
 def c_dispatch(op, args=None):
     """统一入口：工具侧发 {op, args}，这里按参数名派发（args 可选再包一层 dict）。"""
     if isinstance(args, str):
@@ -21,9 +39,11 @@ def c_dispatch(op, args=None):
             kw.update(v)
         else:
             kw[k] = v
-    fn = c_ops().get(str(op))
+    fn = c_ops().get(_norm_op(op))
     if fn is None:
-        return _j({"ok": False, "error": "unknown contract op", "op": op, "ops": sorted(c_ops())})
+        return _j({"ok": False, "error": "unknown contract op", "op": op, "normalized": _norm_op(op),
+                   "ops": sorted(c_ops()),
+                   "hint": "两种写法都收：contract_status 与 status（前者是 catalog 口径）"})
     try:
         return fn(**kw)
     except TypeError as e:
@@ -32,6 +52,11 @@ def c_dispatch(op, args=None):
 
 
 def c_ops():
+    """契约族 op 表（**字面 dict**：catalog↔dispatch parity 用 ast 直读，别改成运行时合并）。
+
+    contract_<op> 前缀由 c_dispatch 的 _norm_op 归一，不在这里重复登记 —— 表里只留一份，
+    两种写法都可达（contract_status 与 status 同一个函数）。
+    """
     return {"reset": c_reset, "help": c_help, "status": c_status,
             "register_component": c_register_component, "register_connection": c_register_connection,
             "register_envelope": c_register_envelope,
@@ -86,9 +111,9 @@ def c_selftest():
 
 
 
-if _K is not None:
-    _K.dsh_contract_api = _KIT.Api({
-        "dispatch": _KIT.wrap_dispatch(c_dispatch, {"selftest": c_selftest}),
+if _K is not None and hasattr(getattr(_K, "dsh_kit", None), "Api"):
+    _K.dsh_contract_api = kit().Api({
+        "dispatch": kit().wrap_dispatch(c_dispatch, {"selftest": c_selftest}),
         "version": CONTRACT_VERSION,
         "reset": c_reset, "help": c_help, "status": c_status,
         "register_component": c_register_component, "register_connection": c_register_connection,
@@ -108,7 +133,21 @@ if _K is not None:
 # 且 dispatch 返回 JSON 字符串，调用方还得自己 json.loads。
 # 现在：api("op", {…}) 或 api({…}) → dict；api["dispatch"](op, json_str) 仍返回 str（引擎契约不变）。
 # 注意：dict 是静态类型，不能对已有实例做 __class__ 赋值（实测 TypeError），所以换成一个新实例。
-_DshApi = _KIT.Api  # 共享内核（尾部注册行无需改）
+class _LazyApi:
+    """惰性 _KIT.Api：import 期不碰内核；构造实例或 isinstance 时才要真 kit。
+
+    contract 的模块级只有两处需要 Api（注册、把旧 dict 换成可调用实例），
+    所以把它做成代理而不是硬依赖 —— 裸 import 不再炸。
+    """
+
+    def __call__(self, *args, **kwargs):
+        return kit().Api(*args, **kwargs)
+
+    def __instancecheck__(self, obj):
+        return isinstance(obj, kit().Api)
+
+
+_DshApi = _LazyApi()  # 共享内核（尾部注册行无需改）
 import sys as _sys_api
 _K_api = _sys_api.modules.get("dsh_rt_kernel")
 if _K_api is not None and isinstance(getattr(_K_api, "dsh_contract_api", None), dict) \

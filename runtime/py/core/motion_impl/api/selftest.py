@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """motion synthetic selftest harness (moved out of api.py; behavior preserved)."""
+import json
+import traceback
+
 from ..common import *  # noqa: F401,F403
 from ..infer import motion_infer_axis, motion_joint
 from ..transforms import TOL_MAT, _snap_diff
