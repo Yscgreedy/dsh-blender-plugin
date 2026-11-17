@@ -6,6 +6,7 @@ through ctx.check and artefacts stay under ctx.test_dir.
 """
 
 import bpy
+import bmesh as _bmesh
 import hashlib
 import json
 import os
@@ -159,13 +160,13 @@ def test_txn(ctx):
                                         "hint": "用 preload='txn' 跑"}, ensure_ascii=False))
         return
     print("TXN_SELFTEST version=%s outdir=%s blender=%s" % (api.get("version"), outdir, bpy.app.version_string))
-    check("TXN_VERSION 已 +1（=4：restore 的 filepath 语义）", int(api.get("version") or 0) == 4, api.get("version"))
+    check("TXN_VERSION 已 +1（=5：拓扑指纹 + strict）", int(api.get("version") or 0) == 5, api.get("version"))
     old_ops = ["snapshot", "restore", "list", "prune", "mark", "revert", "marks", "drop", "help"]
     new_ops = ["edit_begin", "edit_check", "edit_accept", "edit_revert", "edit_status"]
     check("老 API 一个都没丢", all(o in api for o in old_ops), [o for o in old_ops if o not in api])
     check("新 API 都挂上了", all(o in api for o in new_ops), [o for o in new_ops if o not in api])
     h = J(api["help"]())
-    check("t_help 里补了新 op", h.get("version") == 4 and "pending_edit" in h
+    check("t_help 里补了新 op", h.get("version") == 5 and "pending_edit" in h
           and all(o in h["pending_edit"] for o in new_ops), sorted(h))
     check("t_help 写明拓扑边界", "t_snapshot" in str(h.get("boundary")), h.get("boundary"))
 
@@ -388,3 +389,98 @@ def test_txn(ctx):
                                     "skipped": len(SKIPS), "failures": FAILS, "skips": SKIPS, "outdir": outdir},
                                    ensure_ascii=False))
 
+
+def test_txn_topology_fingerprint(ctx):
+    """R2（2026-11-17 消费方需求）：对象级 revert 的拓扑指纹 + strict。
+
+    旧实现只比顶点数：三角化（6→12 面）与加 UV 层都被判"没变"，回执 ok=true 却一点没回。
+    这里逐条复刻消费方的 T1/T3/T5 用例 + strict 语义。
+    """
+    global _CTX
+    _CTX = ctx
+    api, K = _api("dsh_txn_api", "txn")
+    ctx.require("txn api 可用", api is not None)
+    prev_out = getattr(K, "out_dir", None) if K is not None else None
+    if K is not None:
+        K.out_dir = str(ctx.test_dir).replace("\\", "/")
+    made = []
+
+    def cube(name, material=None):
+        me = bpy.data.meshes.new(name)
+        ob = bpy.data.objects.new(name, me)
+        bpy.context.scene.collection.objects.link(ob)
+        bm = _bmesh.new()
+        _bmesh.ops.create_cube(bm, size=1.0)
+        bm.to_mesh(me)
+        bm.free()
+        if material is not None:
+            me.materials.append(material)
+        made.append(ob)
+        return ob
+
+    try:
+        # T1 三角化：顶点数不变、面数 6→12 → strict 必须 ok=false，且原因点名 polys
+        o1 = cube("__e2e_topo_t1")
+        m1 = J(api["mark"]("__e2e_t1", [o1.name]))
+        check("R2①a：mark 回执带拓扑指纹", "polys" in (m1.get("fingerprint") or [])
+              and "topology_hash" in (m1.get("fingerprint") or []), m1.get("fingerprint"))
+        bm = _bmesh.new()
+        bm.from_mesh(o1.data)
+        _bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        bm.to_mesh(o1.data)
+        bm.free()
+        r1 = J(api["revert"]("__e2e_t1", strict=True))
+        reasons = " ".join(r1.get("blocked_reason") or [])
+        check("R2①b：三角化后 strict revert → blocked=1", len(r1.get("blocked") or []) == 1, r1.get("blocked"))
+        check("R2①c：strict revert → ok=false", r1.get("ok") is False, r1.get("ok"))
+        check("R2①d：blocked_reason 点名 polys 6->12", "polys 6->12" in reasons, reasons)
+        check("R2①e：拓扑没被硬写（仍是 12 面）", len(o1.data.polygons) == 12, len(o1.data.polygons))
+
+        # T1' strict=false 的语义：命令执行成功 = ok true，但 blocked 仍然报
+        r1b = J(api["revert"]("__e2e_t1"))
+        check("R2②a：strict=false 保留旧语义（ok=true）", r1b.get("ok") is True, r1b.get("ok"))
+        check("R2②b：strict=false 也报 blocked", len(r1b.get("blocked") or []) == 1, r1b.get("blocked"))
+
+        # T3 加 UV 层：面数不变、uv_layers 0→1
+        o3 = cube("__e2e_topo_t3")
+        J(api["mark"]("__e2e_t3", [o3.name]))
+        o3.data.uv_layers.new(name="UV_probe")
+        r3 = J(api["revert"]("__e2e_t3", strict=True))
+        check("R2③a：加 UV 层后 blocked", len(r3.get("blocked") or []) == 1, r3.get("blocked"))
+        check("R2③b：原因点名 uv_layers 0->1",
+              "uv_layers 0->1" in " ".join(r3.get("blocked_reason") or []), r3.get("blocked_reason"))
+
+        # T5 材质（对照）：槽位能就地补回来，不该被指纹拦
+        mat = bpy.data.materials.new("__e2e_topo_mat")
+        o5 = cube("__e2e_topo_t5", material=mat)
+        J(api["mark"]("__e2e_t5", [o5.name]))
+        o5.data.materials.clear()
+        r5 = J(api["revert"]("__e2e_t5", strict=True))
+        check("R2④a：材质清空可回滚（ok=true / blocked=0）",
+              r5.get("ok") is True and not (r5.get("blocked") or []), r5.get("blocked"))
+        check("R2④b：材质槽补回 1", len(o5.data.materials) == 1, len(o5.data.materials))
+        check("R2④c：changed 里点名对象", o5.name in (r5.get("changed") or []), r5.get("changed"))
+
+        # 回执声明副作用：破坏性 op 的 snapshot 要求
+        check("R2⑤：revert 回执声明 rollback.snapshot_required_for",
+              "boolean" in ((r1.get("rollback") or {}).get("snapshot_required_for") or []),
+              r1.get("rollback"))
+    finally:
+        if K is not None:
+            try:
+                K.out_dir = prev_out
+            except Exception:
+                pass
+        for ob in made:
+            try:
+                me = ob.data
+                bpy.data.objects.remove(ob, do_unlink=True)
+                if me is not None and me.users == 0:
+                    bpy.data.meshes.remove(me, do_unlink=True)
+            except Exception:
+                pass
+        for lb in ("__e2e_t1", "__e2e_t3", "__e2e_t5"):
+            try:
+                api["drop"](lb)
+            except Exception:
+                pass

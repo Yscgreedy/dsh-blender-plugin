@@ -56,17 +56,20 @@ API 挂 K.dsh_txn_api。设计取舍（按外部反馈"没有事务/回滚"落�
     K.dsh_txn_api["edit_accept"]("iso 视角比对目标：榫头进 12mm，方向对，无脱离")
 """
 import bpy
+import hashlib
 import json
 import os
 import shutil
 import time
 
-TXN_VERSION = 4
+TXN_VERSION = 5  # v5：对象级 revert 的拓扑指纹（verts/edges/polys/loops/uv_layers/topology_hash）+ strict 生效
 
 # 对象级回滚的边界（原文照抄给调用者，别让人以为 revert 能回去拓扑）
-_TXN_BOUNDARY = ("对象级快照/回滚只覆盖 transform / 材质槽 / 可见性 / 修改器开关；"
+_TXN_BOUNDARY = ("对象级快照/回滚覆盖 transform / 材质槽 / 可见性 / 修改器开关；"
             "不含拓扑（Boolean / 合并 / 删面 / apply_transform）、UV、顶点位置 —— "
-            "那类改动请先 t_snapshot(...) 用文件级回退点")
+            "那类改动会被**拓扑指纹**拦下（blocked），请先 t_snapshot(...) 用文件级回退点")
+# 拓扑指纹：记进快照、revert 前逐项比对（material_slots 只记录不拦 —— 槽位是能就地补回来的）
+_TXN_FINGERPRINT_KEYS = ("verts", "edges", "polys", "loops", "uv_layers", "topology_hash")
 # 撤销额度下限：保证新会话至少能"改一次 → 撤一次"（上游 = Math.max(2, maxRefineSteps)）
 _TXN_REVERT_FLOOR = 2
 # 复核 kind 的已知取值（非标准 kind 仍记账，但会回一句"非标准"）
@@ -324,6 +327,53 @@ def t_prune(keep=5):
 
 # ---------------------------------------------------------------- 对象级
 
+def _txn_topo_hash(me):
+    """网格拓扑指纹：排序后的边集 + 每个面的 loop 数（安置化后在 Blender 进程内可复现）。
+
+    为什么不能只比顶点数：三角化（6→12 面）与删面（6→5 面）顶点数都不变 —— 实测
+    旧实现把这两类改动判成"没变"，回执 ok=true 却一点没回。边集哈希把这两类都抓住。
+    """
+    h = hashlib.sha1()
+    try:
+        for a, b in sorted(tuple(sorted((int(e.vertices[0]), int(e.vertices[1])))) for e in me.edges):
+            h.update(("%d:%d;" % (a, b)).encode("ascii"))
+        h.update(("P%d;" % len(me.polygons)).encode("ascii"))
+        for p in me.polygons:
+            h.update(("%d;" % int(p.loop_total)).encode("ascii"))
+    except Exception:
+        h.update(b"unavailable")
+    return h.hexdigest()[:16]
+
+
+def _txn_mesh_fingerprint(ob):
+    me = ob.data
+    return {
+        "verts": len(me.vertices),
+        "edges": len(me.edges),
+        "polys": len(me.polygons),
+        "loops": len(me.loops),
+        "uv_layers": len(me.uv_layers),
+        "material_slots": len(me.materials),
+        "topology_hash": _txn_topo_hash(me),
+    }
+
+
+def _txn_fingerprint_diffs(snap, ob):
+    """比对快照与现状 → ["polys 6->12", "uv_layers 0->1"] 这类可读差异。"""
+    if ob is None or ob.type != "MESH" or ob.data is None:
+        return []
+    now = _txn_mesh_fingerprint(ob)
+    diffs = []
+    for key in _TXN_FINGERPRINT_KEYS:
+        before = snap.get(key)
+        if before is None:
+            continue  # 老快照没这项（v4 只记 verts/polys）→ 不制造假阳性
+        after = now.get(key)
+        if after != before:
+            diffs.append("%s %s->%s" % (key, before, after))
+    return diffs
+
+
 def _txn_snap_obj(ob):
     d = {
         "name": ob.name,
@@ -338,8 +388,8 @@ def _txn_snap_obj(ob):
                        "show_render": bool(m.show_render)} for m in ob.modifiers],
     }
     if ob.type == "MESH" and ob.data is not None:
-        d["verts"] = len(ob.data.vertices)
-        d["polys"] = len(ob.data.polygons)
+        d.update(_txn_mesh_fingerprint(ob))
+        d["fingerprint"] = {k: d[k] for k in _TXN_FINGERPRINT_KEYS + ("material_slots",)}
     return d
 
 
@@ -354,14 +404,17 @@ def t_mark(label, objects=None):
     rec = {"label": name, "t": _txn_now(), "objects": {o.name: _txn_snap_obj(o) for o in obs},
            "count": len(obs), "scene": bpy.context.scene.name if bpy.context.scene else None}
     st["marks"][name] = rec
-    return _txn_j({"ok": True, "mark": name, "objects": len(obs), "note": "对象级：只有 transform/材质/可见性/修改器开关；不含拓扑改动"})
+    return _txn_j({"ok": True, "mark": name, "objects": len(obs),
+                   "fingerprint": list(_TXN_FINGERPRINT_KEYS),
+                   "note": "对象级：回写 transform/材质/可见性/修改器开关；拓扑改动由指纹拦截并报 blocked（strict=True 时 ok=false）"})
 
 
 def _txn_restore_objects(objects_snap):
     """把 {对象名: _txn_snap_obj 记录} 就地回写 → (changed, missing, blocked)。
 
     边界：只回写 transform / 材质槽 / 可见性 / 修改器开关；**拓扑变过的对象跳过并报告**
-    （顶点数对不上就是拓扑变了，硬写会把材质槽错位）。t_revert 与 edit_revert 共用这一份实现。
+    （v5：按拓扑指纹逐项比对 verts/edges/polys/loops/uv_layers/topology_hash —— 只比顶点数会漏掉
+    三角化与删面；硬写会把材质槽错位）。t_revert 与 edit_revert 共用这一份实现。
     """
     changed, missing, blocked = [], [], []
     for oname, snap in (objects_snap or {}).items():
@@ -370,8 +423,10 @@ def _txn_restore_objects(objects_snap):
             missing.append(oname)
             continue
         if snap.get("verts") is not None and ob.type == "MESH" and ob.data is not None:
-            if len(ob.data.vertices) != snap["verts"]:
-                blocked.append({"name": oname, "why": "拓扑已变（顶点数 %d → %d）" % (snap["verts"], len(ob.data.vertices))})
+            diffs = _txn_fingerprint_diffs(snap, ob)
+            if diffs:
+                blocked.append({"name": oname, "why": "拓扑指纹已变（%s）" % "；".join(diffs),
+                                "diffs": diffs})
                 continue
         before = _txn_snap_obj(ob)
         try:
@@ -409,14 +464,36 @@ def _txn_restore_objects(objects_snap):
 
 
 def t_revert(label, strict=False):
+    """回滚到 mark 时的对象状态。
+
+    strict=True：任一对象的拓扑指纹不匹配 → ok=False（调用方必须能一眼区分"全回了"与"跳过了一半"）。
+    strict=False（默认）：ok 只表示"命令执行成功"，拓扑变过的对象仍列在 blocked / blocked_reason 里。
+    """
     st = _txn_store()
     rec = st["marks"].get(str(label))
     if not rec:
         return _txn_j({"ok": False, "error": "没有这个 mark: %s" % label, "have": sorted(st["marks"])})
     changed, missing, blocked = _txn_restore_objects(rec["objects"])
     bpy.context.view_layer.update()
-    return _txn_j({"ok": True, "reverted": str(label), "changed": changed, "changed_count": len(changed),
-               "missing_objects": missing, "blocked": blocked,
+    reasons = []
+    for b in blocked:
+        diffs = b.get("diffs") or []
+        if diffs:
+            reasons.extend("%s: %s" % (b.get("name"), d) for d in diffs)
+        else:
+            reasons.append("%s: %s" % (b.get("name"), b.get("why")))
+    blocked_count = len(blocked)
+    ok = not (bool(strict) and blocked_count > 0)
+    return _txn_j({"ok": bool(ok), "reverted": str(label), "changed": changed, "changed_count": len(changed),
+               "missing_objects": missing, "blocked": blocked, "blocked_count": blocked_count,
+               "blocked_reason": reasons, "strict": bool(strict),
+               "fingerprint": list(_TXN_FINGERPRINT_KEYS),
+               "ok_meaning": ("ok 只表示命令执行成功；strict=True 时 ok=False 表示有对象因拓扑变更被跳过"
+                              if strict else
+                              "ok 只表示命令执行成功 —— 回滚是否完整要看 blocked / blocked_reason"),
+               "rollback": {"boundary": _TXN_BOUNDARY,
+                            "snapshot_required_for": ["boolean", "join", "hole_cut", "slots_cut",
+                                                      "delete_faces", "transform_apply"]},
                "boundary": _TXN_BOUNDARY})
 
 
@@ -640,8 +717,8 @@ def t_help():
                                   "into='original' 要求必须能回写，否则 ok:false。"
                                   "backup=True 先在 restore 前留 pre_restore 快照（会话脏且要覆盖原文件时另留磁盘副本）",
                        "list": "list() → 快照 + mark 清单", "prune": "prune(keep=5) → 只留最近 N 个快照（自动备份也算普通快照，会被 prune 掉）"},
-        "object_level": {"mark": "mark(label, objects=None) → 记 transform/材质/可见性/修改器开关",
-                         "revert": "revert(label, strict=False) → 就地回写；拓扑变过的对象会被跳过并报告",
+        "object_level": {"mark": "mark(label, objects=None) → 记 transform/材质/可见性/修改器开关 + 拓扑指纹（verts/edges/polys/loops/uv_layers/topology_hash）",
+                         "revert": "revert(label, strict=False) → 就地回写；拓扑指纹变过的对象跳过并在 blocked/blocked_reason 报告。strict=True 时有 blocked 就回 ok=false（ok 不再只表示命令执行成功）",
                          "marks": "marks() → 列出 mark", "drop": "drop(label) → 删掉 mark"},
         "pending_edit": {"edit_begin": "edit_begin(label, op='edit', targets=None, note='') → 挂 pending（同一时间只允许一条；已有 pending 直接拒）",
                          "edit_check": "edit_check(kind, result=None, note='') → 复核记账（kind=audit/qc/measure/render...）；accept 前至少一条",
@@ -722,6 +799,17 @@ def t_selftest():
         loc = bpy.data.objects[nm].location
         ev["restored"] = abs(loc[0]) < 1e-4 and abs(loc[2]) < 1e-4
         ev["marks_listable"] = isinstance(_d(t_list()), dict)
+        # v5：拓扑指纹 —— 顶点数不变、面数变的三角化必须被 strict 拦下（旧实现全绿放行）
+        _d(t_mark("__dsh_selftest_topo", [nm]))
+        bmt = _bm.new()
+        bmt.from_mesh(bpy.data.objects[nm].data)
+        _bm.ops.triangulate(bmt, faces=bmt.faces[:])
+        bmt.to_mesh(bpy.data.objects[nm].data)
+        bmt.free()
+        rt = _d(t_revert("__dsh_selftest_topo", strict=True))
+        ev["topology_fingerprint_blocks"] = (isinstance(rt, dict) and rt.get("ok") is False
+                                             and int(rt.get("blocked_count") or 0) >= 1
+                                             and any("polys" in str(s) for s in (rt.get("blocked_reason") or [])))
         return _KIT.j({"ok": all(x is True for x in ev.values()), "evidence": ev, "loc": [round(float(q), 3) for q in loc]})
     except Exception as e:
         return _KIT.j({"ok": False, "evidence": ev, "error": "%s: %s" % (type(e).__name__, str(e)[:200])})
