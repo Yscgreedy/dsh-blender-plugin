@@ -489,6 +489,21 @@ export const KIT_SRC = (() => {
   }
 })()
 export const KIT_HASH = createHash('sha256').update(KIT_SRC).digest('hex').slice(0, 12)
+/**
+ * geo 的口径/回执层（geo_impl/units.py）也必须能在**内联 bootstrap** 路径里被 geo.py 找到。
+ *
+ * 背景：KERNEL_BOOTSTRAP 把 GEO_SRC 直接嵌进脚本，此时 __file__ 指向临时 job 脚本，
+ * 按路径找 geo_impl/units.py 必然 ENOENT（实测 headless 作业直接崩在加载处）。
+ * 这里把源码一并带上，geo.py 优先用内联源码，文件路径只作 preload/inject 路径的兜底。
+ */
+export const GEO_UNITS_SRC = (() => {
+  try {
+    return fs.readFileSync(path.join(PY_ROOT, 'py', 'geometry', 'geo_impl', 'units.py'), 'utf8')
+  } catch {
+    return ''
+  }
+})()
+
 export const GEO_SRC = (() => {
   try {
     return fs.readFileSync(GEO_PATH, 'utf8')

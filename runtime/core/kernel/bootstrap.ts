@@ -1,5 +1,5 @@
 // Blender 持久内核启动脚本
-import { GEO_SRC, KIT_SRC, PATH_HELPERS } from '../../paths.js'
+import { AUDIT_PATH, GEO_SRC, GEO_UNITS_SRC, KIT_SRC, PATH_HELPERS } from '../../paths.js'
 
 export const KERNEL_BOOTSTRAP = [
   'import sys as _sys, types as _types',
@@ -89,5 +89,48 @@ export const KERNEL_BOOTSTRAP = [
   // 最大的失效模式不是报错，是"不知道有这个模块"（两个会话各手写一套 kit 的直接原因）。
   // 代价：每次 execute_code 传输量 +GEO_SRC（本地 socket，可忽略）；exec 只在首轮（持久内核）。
   'if getattr(K, "dsh_geo_api", None) is None:',
+  // 内联 geo.py 时 __file__ 是临时脚本 → 口径层的源码也内联（见 paths.ts GEO_UNITS_SRC）
+  ...(GEO_UNITS_SRC ? ['    _dsh_geo_units_src = ' + JSON.stringify(GEO_UNITS_SRC)] : []),
   ...GEO_SRC.split('\n').map((l) => (l ? '    ' + l : l)),
+  // ---- 默认模块集合（P2-8）：kit / geo / audit 三底座，headless / worker / GUI 三路一致 ----
+  // 现场（2026-11）：headless 不传 preload 时只有 kit+geo，hasattr(K,'dsh_audit_api') 为 False，
+  // 脚本里一行 K.dsh_audit_api['mesh'](...) 静默变成 error（73 个文件全军覆没，第一次跑就踩）。
+  // 做法：按**文件路径**加载（不把实现源码塞进 bootstrap）—— audit 是 facade（runtime/py/core/audit_impl/），
+  // 只有 __file__ 正确，它内部的 importlib 才找得到实现包；路径经 _dsh_win_path 归一（WSL↔Windows）。
+  // 其余模块（render/qc/assembly/motion/...）体积大且不是每次都要，仍走 preload ——
+  // 这条边界写在 docs/配置参考.md 的「默认注入 vs preload」表里。
+  'def _dsh_load_module(_name, _file, _attr=None):',
+  '    """按文件路径把 runtime 模块 exec 进独立命名空间；已在 K 上就跳过（幂等，只付一次成本）。"""',
+  '    import sys as _s, os as _os',
+  '    _nm = str(_name)',
+  '    _attr = _attr or ("dsh_%s_api" % _nm)',
+  '    _k = _s.modules.get("dsh_rt_kernel")',
+  '    if _k is None:',
+  '        return None',
+  '    if getattr(_k, _attr, None) is not None:',
+  '        return getattr(_k, _attr)',
+  '    _p = str(_file)',
+  '    _cands = [_p]',
+  '    for _fn in ("_dsh_win_path", "_dsh_wsl_path"):',
+  '        if _fn in globals():',
+  '            try:',
+  '                _cands.append(globals()[_fn](_p))',
+  '            except Exception:',
+  '                pass',
+  '    for _c in _cands:',
+  '        if _os.path.isfile(_c):',
+  '            _p = _c',
+  '            break',
+  '    try:',
+  '        with open(_p, encoding="utf-8") as _fh:',
+  '            _src = _fh.read()',
+  '        exec(compile(_src, _p, "exec"), {"__name__": _nm, "__file__": _p})',
+  '    except Exception as _e:',
+  '        print("DSH_MODULE_LOAD_ERR %s: %s" % (_nm, str(_e)[:200]))',
+  '        return None',
+  '    return getattr(_k, _attr, None)',
+  '# 默认注入清单（真源）：改这里就要同步 docs/配置参考.md 的「默认注入 vs preload」表',
+  'K.dsh_default_modules = ["kit", "geo", "audit"]',
+  'if getattr(K, "dsh_audit_api", None) is None:',
+  '    _dsh_load_module("audit", ' + JSON.stringify(AUDIT_PATH) + ', "dsh_audit_api")',
 ].join('\n')

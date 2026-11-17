@@ -49,6 +49,11 @@
       "function": "qc_render_dispatch",
       "var": "ops"
     },
+    "geo": {
+      "kind": "module-dict",
+      "file": "runtime/py/geometry/geo.py",
+      "var": "OPS"
+    },
     "pipe": {
       "kind": "register-ops",
       "file": "runtime/py/core/pipeline.py",
@@ -349,6 +354,10 @@
     "plan": {
       "api": "dsh_plan_api",
       "table": "plan"
+    },
+    "geo": {
+      "api": "dsh_geo_api",
+      "table": "geo"
     },
     "contract": {
       "api": "dsh_contract_api",

@@ -14,6 +14,7 @@ export interface PlanCallDeps {
   ensureFix: () => Promise<unknown>
   ensureGate: () => Promise<unknown>
   ensureGenerator: () => Promise<unknown>
+  ensureGeo: () => Promise<unknown>
   ensureHuman: () => Promise<unknown>
   ensureImg: () => Promise<unknown>
   ensureMaterial: () => Promise<unknown>

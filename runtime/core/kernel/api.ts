@@ -14,6 +14,7 @@ import {
   FIX_PATH,
   GATE_PATH,
   GENERATOR_PATH,
+  GEO_PATH,
   HUMAN_PATH,
   IMG_PATH,
   MATERIAL_PATH,
@@ -243,6 +244,9 @@ const ensureDeliver = (d: KernelIoDeps) =>
   injectModule(d, needFile(DELIVER_PATH, 'deliver'), 'DELIVER_READY', 'DELIVER_VERSION')
 const ensureGenerator = (d: KernelIoDeps) =>
   injectModule(d, needFile(GENERATOR_PATH, 'generator'), 'GENERATOR_READY', 'GENERATOR_VERSION')
+// geo：bootstrap 里已常驻（P2-8 的默认集合），但 plan 路由仍要一个 ensure —— 幂等，已在则直接返回。
+const ensureGeo = (d: KernelIoDeps) =>
+  injectModule(d, needFile(GEO_PATH, 'geo'), 'GEO_READY', 'GEO_VERSION')
 // v0.9.6（上游整合）：五个新模块都走 needFile —— 还没落盘时给清楚的错，而不是 ENOENT
 const ensureSculpt = (d: KernelIoDeps) =>
   injectModule(d, needFile(SCULPT_PATH, 'sculpt'), 'SCULPT_READY', 'SCULPT_VERSION')
@@ -368,6 +372,7 @@ const createEnsures = (
   ensureMotion: () => ensureMotion(d),
   ensureDeliver: () => ensureDeliver(d),
   ensureGenerator: () => ensureGenerator(d),
+  ensureGeo: () => ensureGeo(d),
   ensureSculpt: () => ensureSculpt(d),
   ensureFix: () => ensureFix(d),
   ensureUv: () => ensureUv(d),

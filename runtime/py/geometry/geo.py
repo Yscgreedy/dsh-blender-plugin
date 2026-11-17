@@ -31,8 +31,12 @@
   同时注册为 K.dsh_geo_api（可 dispatch）；也可显式 preload="geo"。
   自检：geo_selftest()   速查：geo_help()
 
-单位：几何坐标用**当前场景单位**；要按 mm 建模就把 scene.unit_settings.scale_length 设成 0.001
-（此时 K.dsh_kit.units() 回报 1.0 mm/unit）。本模块所有 `*_mm` 参数按毫米解释并自动换算。
+单位口径（v2 / 消费方需求 2026-11-17 R1）：
+  几何坐标默认是**场景单位**（unit="bu"，与旧行为逐字节一致）；要按毫米喂坐标就加 `unit="mm"` ——
+  调度层按 scene.unit_settings.scale_length 把长度参数换算成 BU（**不改 scene.unit_settings**），
+  回执固定带 units={mm_per_bu, scale_length, unit_mode}，粗尺度下的亚毫米特征给 sub_mm_feature 警告。
+  带 `_mm` 后缀的参数（bevel_mm / width_mm）永远是毫米，不随 unit 二次换算。
+  直接调函数（K.dsh_geo_api["box"](...)）不会做换算：老调用方行为不变；换算只在 dispatch（JSON）边界发生。
 """
 import math
 import sys
@@ -41,7 +45,7 @@ import bpy
 import bmesh
 from mathutils import Vector, Matrix
 
-GEO_VERSION = 1
+GEO_VERSION = 2  # v2：unit="mm" 口径 + units 回执 + join 烘 matrix_world（2026-11-17）
 
 _K = sys.modules.get("dsh_rt_kernel")
 _KIT = getattr(_K, "dsh_kit", None)
@@ -51,6 +55,35 @@ _j = _KIT.j
 _err = _KIT.err
 _receipt = _KIT.receipt
 _units = _KIT.units
+
+# ── 口径 / 回执层（geo_impl/units.py）：geo.py 已到 Python 单文件 1000 行预算，拆出去但仍是同一实现 ──
+def _load_geo_impl(_name):
+    import os as _os
+    # ① 内联 bootstrap：GEO_SRC 被嵌进临时脚本，__file__ 不可信 → 用 bootstrap 一并带下来的源码
+    if _name == "units":
+        _inline = globals().get("_dsh_geo_units_src")
+        if _inline:
+            _ns0 = {"__name__": "geo_impl.units", "__file__": "<geo_impl/units.py>",
+                    "K": _K, "KIT": _KIT}
+            exec(compile(_inline, "<geo_impl/units.py>", "exec"), _ns0)
+            return _ns0
+    # ② preload / injectModule / offline_bootstrap：__file__ 是真实的 geo.py 路径
+    try:
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+    except NameError:
+        _here = _os.path.dirname(_os.path.abspath(_KIT.find_runtime_file("geo.py") or ""))
+    _path = _os.path.join(_here, "geo_impl", _name + ".py")
+    _ns = {"__name__": "geo_impl." + _name, "__file__": _path, "K": _K, "KIT": _KIT}
+    with open(_path, encoding="utf-8") as _fh:
+        exec(compile(_fh.read(), _path, "exec"), _ns)
+    return _ns
+
+
+_GEO_UNITS = _load_geo_impl("units")
+units_state = _GEO_UNITS["units_state"]
+units_receipt = _GEO_UNITS["units_receipt"]
+_stamp = _GEO_UNITS["_stamp"]
+_agg_stats = _GEO_UNITS["_agg_stats"]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -99,6 +132,7 @@ def apply_mods(ob):
 
     不用 bpy.ops.object.modifier_apply：它依赖 active/选中/上下文，无头下时好时坏。
     """
+    _before = mesh_stats(ob) if getattr(ob, "type", "") == "MESH" else None
     dg = bpy.context.evaluated_depsgraph_get()
     ev = ob.evaluated_get(dg)
     me = bpy.data.meshes.new_from_object(ev)
@@ -107,6 +141,8 @@ def apply_mods(ob):
     ob.data = me
     if old.users == 0:
         bpy.data.meshes.remove(old)
+    if _before is not None:
+        _stamp(ob, "apply_mods", {"before": _before, "after": mesh_stats(ob)})
     return ob
 
 
@@ -256,9 +292,23 @@ def solid(name, bm, coll="COL_geo", owner=None, bevel_mm=0.0, seg=2,
     return ob
 
 
-def box(name, xr, yr, zr, coll="COL_geo", owner=None, bevel_mm=0.0, seg=2,
-        angle_deg=40.0, smooth_angle=None):
-    """轴对齐盒：三个区间 (min, max)。**没有尺寸默认值 —— 尺寸永远由调用方给。**"""
+def box(name=None, xr=None, yr=None, zr=None, coll="COL_geo", owner=None, bevel_mm=0.0, seg=2,
+        angle_deg=40.0, smooth_angle=None, size_mm=None, at_mm=None):
+    """轴对齐盒：三个区间 (min, max)，或 size_mm=[x,y,z]（+ 可选 at_mm 中心）。
+
+    两种写法都**没有尺寸默认值**：区间型传 xr/yr/zr；尺寸型传 size_mm（在 unit="mm" 下按毫米收）。
+    实测坑：区间型必须传 [min,max]，按标量传会 TypeError: float object is not subscriptable。
+    """
+    if size_mm is not None:
+        _s = [float(size_mm[0]), float(size_mm[1]), float(size_mm[2])]
+        _c = at_mm if at_mm is not None else (0.0, 0.0, 0.0)
+        _cx, _cy, _cz = float(_c[0]), float(_c[1]), float(_c[2])
+        xr = (_cx - _s[0] * 0.5, _cx + _s[0] * 0.5)
+        yr = (_cy - _s[1] * 0.5, _cy + _s[1] * 0.5)
+        zr = (_cz - _s[2] * 0.5, _cz + _s[2] * 0.5)
+    if xr is None or yr is None or zr is None:
+        raise ValueError("geo.box: 需要 xr/yr/zr 三个区间，或 size_mm（可选 at_mm）")
+    name = name or "GEO_box"
     x0, x1 = float(xr[0]), float(xr[1])
     y0, y1 = float(yr[0]), float(yr[1])
     z0, z1 = float(zr[0]), float(zr[1])
@@ -459,6 +509,8 @@ def boolean(target, cutter, op="DIFFERENCE", solver="EXACT", delete_cutter=True,
         target["dsh_boolean_guard"] = _j(info)
     except Exception:
         pass
+    _stamp(target, "boolean", {"before": pre, "after": mesh_stats(target),
+                               "solver": str(solver), "guard": info["guard"], "op": top})
     return target
 
 
@@ -550,14 +602,43 @@ def linear_array(ob, count, offset, name=None):
     return out
 
 
+def _is_identity(m, eps=1e-9):
+    try:
+        for i in range(4):
+            for j in range(4):
+                if abs(float(m[i][j]) - (1.0 if i == j else 0.0)) > eps:
+                    return False
+        return True
+    except Exception:
+        return False
+
+
 def join(objs, name=None, coll=None, owner=None):
-    """合并成一格网格（**布尔请在 join 之前做** —— join 出的自交网格会让 EXACT 布尔退化）。"""
+    """合并成一个网格（**布尔请在 join 之前做** —— join 出的自交网格会让 EXACT 布尔退化）。
+
+    v1.1（消费方需求 2026-11-17 R5）：先把每个对象的 **matrix_world 烘进顶点** 再合并。
+    旧实现只吃 mesh 本地坐标 —— linear_array 造出的对象级位移在 join 时全部丢失，
+    12 根 88×4×60 的阵列会静默叠回 4×4×60。回执带 baked_transforms 计数。
+    """
     objs = [o for o in (objs or []) if o is not None]
     if not objs:
         return None
+    before = _agg_stats(objs, mesh_stats)
     bm = bmesh.new()
+    baked = 0
     for o in objs:
-        bm.from_mesh(o.data)
+        mw = o.matrix_world
+        if _is_identity(mw):
+            bm.from_mesh(o.data)
+            continue
+        baked += 1
+        try:
+            frag = o.data.copy()
+            frag.transform(mw)
+            bm.from_mesh(frag)
+            bpy.data.meshes.remove(frag)
+        except Exception:
+            bm.from_mesh(o.data)
     base = objs[0]
     for o in objs:
         if o is not base:
@@ -574,8 +655,14 @@ def join(objs, name=None, coll=None, owner=None):
         bpy.data.meshes.remove(old)
     if name:
         base.name = str(name)
+    # 顶点已在世界空间 ⇒ 基对象的变换必须归零，否则会二次位移
+    try:
+        base.matrix_world = Matrix.Identity(4)
+    except Exception:
+        pass
     own(base, coll or (base.users_collection[0] if base.users_collection else "COL_geo"),
         owner or base.get("dsh.owner"))
+    _stamp(base, "join", {"before": before, "after": mesh_stats(base), "baked_transforms": baked})
     return base
 
 
@@ -857,5 +944,6 @@ OPS = {
 }
 
 # 注册：既挂 K.dsh_geo_api（可 dispatch），公开名也随 bootstrap 进脚本 globals（直接可用）
-_KIT.register("geo", GEO_VERSION, ops=OPS,
+geo_dispatch = _GEO_UNITS["make_dispatch"](OPS, _KIT, _err, _j, mesh_stats)
+_KIT.register("geo", GEO_VERSION, ops=OPS, dispatch=geo_dispatch,
               extra={"get": lambda n: OPS.get(str(n)), "help_text": geo_help})

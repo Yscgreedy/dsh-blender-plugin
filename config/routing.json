@@ -574,6 +574,20 @@
       }
     },
     {
+      "id": "ext-geo",
+      "side": "gui",
+      "family": "geo",
+      "group": "ext",
+      "kind": "dispatch",
+      "match": "prefix",
+      "prefix": "geo_",
+      "strip": 4,
+      "api": "dsh_geo_api",
+      "ensure": "ensureGeo",
+      "timeoutMs": 300000,
+      "preload": "geo"
+    },
+    {
       "id": "ext-contract",
       "side": "gui",
       "family": "contract",
