@@ -20,6 +20,9 @@ export async function executeReload(port: number, args: Record<string, unknown>)
   const report = await hostReload({
     port,
     apply: !dryRun,
+    // force：不信判据，强制重组合一次。给「镜像被中断 + 清单丢了 → 两层都说 current」留的
+    // 唯一恢复手段（不必重启 DSH）。
+    force: args.force === true,
     reason: text(args.reason).trim() || undefined,
   })
   return { text: formatReloadReport(report as unknown as Record<string, unknown>), report }

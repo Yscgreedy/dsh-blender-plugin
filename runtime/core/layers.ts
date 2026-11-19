@@ -285,22 +285,40 @@ export interface HostManifestMeta {
 }
 
 /**
- * 写宿主层清单（H1 的接线点）：宿主插件在**装载那一刻**把 lib/** scan 成清单落盘，
- * 路径经 DSH_BLENDER_HOST_MANIFEST 传给 Gateway；Gateway 每次都读这份文件当「已装载」。
+ * 两个根路径是不是同一处（Win 大小写不敏感、分隔符/尾斜杠无关）。
  *
- * 为什么必须是「装载那一刻」而不是「每次 spawn 时现扫」：只重启 Gateway 时，
- * 现扫会读到磁盘上的新代码 → 宿主层自证成 current —— 那正是旧实现（HOST_SELF）的洞。
- * 清单由宿主 fiber 写，fiber 不换，清单就不换，宿主层就一直是 stale。
- *
- * 失败返回 null，绝不抛：没有清单 = Gateway 降级回扫盘自证（不是致命错）。
+ * 为什么必须比：清单文件在**共享目录**（workDir/logs 或 OS tmpdir），一台机器上只要还有一个
+ * 进程从别处装载过这个插件（仓库开发副本 / 隔离副本 / 另一个 profile），它写下的清单就会和本
+ * 安装共用同一个路径。旧实现只信 `manifest.root`，于是 Gateway 会拿**别人那份**清单当自己的
+ * 「已装载」—— 2026-11-19 现场：manifest.root=仓库 lib、Gateway 的宿主层=profile 安装副本，
+ * 两边各自自证 current，而宿主 fiber 跑的其实是旧代码（假绿，重启 Gateway 与 reload 都说 noop）。
  */
-export function writeHostManifest(
+export function sameRoot(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): string => {
+    const s = String(v || '').trim()
+    if (!s) return ''
+    let out = path.resolve(s).split(path.sep).join('/')
+    while (out.length > 1 && out.endsWith('/')) out = out.slice(0, -1)
+    return process.platform === 'win32' ? out.toLowerCase() : out
+  }
+  const left = norm(a)
+  return left !== '' && left === norm(b)
+}
+
+/**
+ * 把**已经算好的**扫描结果写成清单（宿主侧「装载那一刻」的调用点）。
+ *
+ * 与 writeHostManifest 的差别只有一处：不再现扫磁盘 —— 传进来的 scan 必须来自 **fiber 装载那一刻**
+ * （host/backend/host-manifest.ts 的模块级 LOAD_SCAN）。否则「镜像完成 → 首次 spawn 之前被中断」
+ * 这一小段里，清单会把新磁盘记成「已装载」，下一次 reload 又是假 noop。
+ */
+export function writeLayerManifest(
+  scan: LayerScan,
   root: string,
   file: string,
   meta: HostManifestMeta = {},
 ): LayerManifest | null {
   try {
-    const scan = scanLayer(root, HOST_LAYER_SKIP)
     const manifest: LayerManifest = {
       schema: LAYER_SCHEMA,
       root,
@@ -322,18 +340,39 @@ export function writeHostManifest(
   }
 }
 
+/**
+ * 写宿主层清单（H1 的接线点）：宿主插件在**装载那一刻**把 lib/** scan 成清单落盘，
+ * 路径经 DSH_BLENDER_HOST_MANIFEST 传给 Gateway；Gateway 每次都读这份文件当「已装载」。
+ *
+ * 为什么必须是「装载那一刻」而不是「每次 spawn 时现扫」：只重启 Gateway 时，
+ * 现扫会读到磁盘上的新代码 → 宿主层自证成 current —— 那正是旧实现（HOST_SELF）的洞。
+ * 清单由宿主 fiber 写，fiber 不换，清单就不换，宿主层就一直是 stale。
+ *
+ * 失败返回 null，绝不抛：没有清单 = Gateway 降级回扫盘自证（不是致命错）。
+ */
+export function writeHostManifest(
+  root: string,
+  file: string,
+  meta: HostManifestMeta = {},
+): LayerManifest | null {
+  try {
+    return writeLayerManifest(scanLayer(root, HOST_LAYER_SKIP), root, file, meta)
+  } catch {
+    return null
+  }
+}
+
 /** 丢掉某份清单的读取缓存：写完必须调（同尺寸 + 同毫秒的重写会命中旧缓存）。 */
 export function forgetHostManifest(file: string): void {
   _manifestCache.delete(file)
 }
 
-/** 宿主层：已装载清单（宿主写）vs 磁盘清单（Gateway 现算）。 */
-export function hostLayerSnapshot(): LayerSnapshot {
-  const manifestPath = String(process.env[HOST_MANIFEST_ENV] || '')
-  const empty: LayerSnapshot = {
+/** 宿主层「判不了」的统一骨架（available=false → 调用方不许把它当 current）。 */
+function unavailableHost(root: string | null, note: string, over: Partial<LayerSnapshot> = {}): LayerSnapshot {
+  return {
     layer: 'host',
     available: false,
-    root: null,
+    root,
     loadedHash: null,
     currentHash: null,
     fileCount: null,
@@ -343,28 +382,56 @@ export function hostLayerSnapshot(): LayerSnapshot {
     truncated: false,
     verdict: 'unknown',
     loadedAt: null,
-    note: null,
+    note,
+    ...over,
   }
+}
+
+/**
+ * 宿主层：已装载清单（宿主写）vs 磁盘清单（Gateway 现算）。
+ *
+ * root：**本进程自己的**宿主层根（Gateway 传 <包根>/lib）。给了就必须与清单里的 root 一致 ——
+ * 共享目录里可能躺着别的安装/仓库副本写下的清单；拿它来对拍等于用别人的指纹给自己发合格证。
+ */
+export function hostLayerSnapshot(opts: { root?: string } = {}): LayerSnapshot {
+  const manifestPath = String(process.env[HOST_MANIFEST_ENV] || '')
+  const expected = String(opts.root || '').trim()
   if (!manifestPath) {
-    empty.note =
+    return unavailableHost(
+      expected || null,
       '宿主层不可自证：Gateway 不由插件宿主 spawn（缺 ' +
-      HOST_MANIFEST_ENV +
-      '）→ 只看运行时层；宿主层改动请用 blender_session action=reload'
-    return empty
+        HOST_MANIFEST_ENV +
+        '）→ 只看运行时层；宿主层改动请用 blender_session action=reload',
+    )
   }
   const manifest = readHostManifest(manifestPath)
   if (!manifest) {
-    empty.note = '宿主层清单读不到或 schema 不匹配（' + manifestPath + '）→ 只看运行时层'
-    return empty
+    return unavailableHost(
+      expected || null,
+      '宿主层清单读不到或 schema 不匹配（' + manifestPath + '）→ 只看运行时层',
+    )
+  }
+  if (expected && !sameRoot(manifest.root, expected)) {
+    // 现场（2026-11-19）：manifest.root = 仓库开发副本 lib，本 Gateway 从 profile 安装副本跑。
+    // 旧实现照单全收 → 仓库 lib 对仓库 lib = current，宿主 fiber 的旧代码永远"已是最新"。
+    return unavailableHost(
+      expected,
+      '宿主层判不了：这份清单属于另一处装载（manifest.root=' +
+        manifest.root +
+        '，本 Gateway 的宿主层=' +
+        expected +
+        '）→ 已忽略。换回本安装的清单（重装/重组合会重写），别拿别人的指纹自证',
+      { loadedHash: manifest.hash, loadedAt: manifest.loadedAt || null },
+    )
   }
   let disk: LayerScan
   try {
     disk = scanLayer(manifest.root, HOST_LAYER_SKIP)
   } catch (e) {
-    empty.root = manifest.root
-    empty.loadedHash = manifest.hash
-    empty.note = '宿主层磁盘扫描失败：' + (e instanceof Error ? e.message : String(e))
-    return empty
+    return unavailableHost(manifest.root, '宿主层磁盘扫描失败：' + (e instanceof Error ? e.message : String(e)), {
+      loadedHash: manifest.hash,
+      loadedAt: manifest.loadedAt || null,
+    })
   }
   const { changed, count } = diffLayers(manifest.files, disk.files)
   const page = capped(changed)

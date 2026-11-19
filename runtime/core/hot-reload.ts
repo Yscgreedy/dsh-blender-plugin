@@ -134,15 +134,23 @@ export function splitChanged(
 
 /**
  * 模式判定（纯函数，也是契约用例的判据）：
- * - 两层都 current → noop（**不得**动 pid）
  * - 宿主层有变 → hmr（重组合会把 Gateway 一起换新）
  * - 只有运行时层有变 → gateway-restart
+ * - 宿主层**判不了**（清单缺失/读不到/不属于本安装）→ hmr：判不了 ≠ 已是最新。
+ *   能把它变成可判的只有宿主重组合（新 fiber 会重写清单）—— 旧实现在这里回 noop，
+ *   于是「镜像被中断 → 清单丢了/被别人覆盖」之后两层都自证 current，src 层修复永远装不上。
+ * - 两层都 current 且宿主层可判 → noop（**不得**动 pid）
  */
 export function decideReloadMode(input: {
   hostChanged: number
   runtimeStale: boolean
+  /** false = 宿主层没有可信的「已装载」证据（默认 true，兼容既有调用） */
+  hostKnown?: boolean
 }): ReloadMode {
   if (input.hostChanged > 0) return 'hmr'
+  // 宿主层判不了 → 也许同时有运行时层变化；hmr 会连 Gateway 一起换（dispose 杀子进程），
+  // 所以先选它，别先回一个「重启 Gateway 就算完」的假 ok。
+  if (input.hostKnown === false) return 'hmr'
   if (input.runtimeStale) return 'gateway-restart'
   return 'noop'
 }

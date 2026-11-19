@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // mocked node:child_process, so issue #51's spawn options and listener order are
 // proven behaviorally on every platform (including Windows).
 //
-// H1 (hot reload, round 2): spawnChild now also injects the host layer manifest —
-// `env.DSH_BLENDER_HOST_MANIFEST` + a manifest written before the spawn. The
-// assertions below therefore pin the **whole** argv/env/stdio contract instead of
-// "the first two argv entries", and they check the manifest write itself
-// (schema / root / files / hash), because a spawn child without the manifest is
-// exactly the degraded path where the host layer can no longer prove itself.
+// H1 (hot reload, round 2): spawnChild also injects the host layer manifest —
+// `env.DSH_BLENDER_HOST_MANIFEST` + a manifest written before the spawn.
+//
+// 复测第四轮（2026-11-19）：清单改成「**装载那一刻**的扫描结果」写盘（writeLayerManifest 收 scan），
+// 文件名带宿主层根指纹（别的安装/仓库副本不会覆盖本安装）。这里钉住接线：扫一次、装载时定型、
+// 每次 spawn 复用同一份、路径与 Gateway 收到的 env 一致。
 
 const h = vi.hoisted(() => {
   const listeners: Record<string, Array<(...a: unknown[]) => void>> = {}
@@ -33,21 +33,39 @@ const h = vi.hoisted(() => {
     return child
   })
   const winKillPids = vi.fn((pids: number[]) => pids.map(String))
+  const scan = { hash: 'abc123def456', files: { 'index.js': 'aaaa11112222' }, fileCount: 1, bytes: 42 }
   // 清单的真实扫描/落盘在 runtime/core/layers.ts（有独立用例）；这里只要证明
-  // spawn 之前的**接线**：清单文件路径 + 元数据（pluginVersion / hostPid / pluginRoot）。
-  const writeHostManifest = vi.fn((root: string, file: string, meta: any) => ({
+  // ① 扫描发生在**模块求值那一刻**（LOAD_SCAN），② spawn 之前只写一次，③ 元数据齐全。
+  let scanCalls = 0
+  const scanLayer = vi.fn(() => {
+    scanCalls += 1
+    return scan
+  })
+  const sha12 = vi.fn(() => 'feedfacecafe')
+  const writeLayerManifest = vi.fn((s: any, root: string, file: string, meta: any) => ({
     schema: 1,
     root,
-    loadedAt: '2026-11-16T00:00:00.000Z',
+    loadedAt: '2026-11-19T00:00:00.000Z',
     pluginVersion: meta && meta.pluginVersion,
     hostPid: meta && meta.hostPid,
     pluginRoot: meta && meta.pluginRoot,
-    hash: 'abc123def456',
-    files: { 'index.js': 'aaaa11112222' },
-    fileCount: 1,
-    bytes: 42,
+    ...s,
   }))
-  return { listeners, calls, events, child, spawn, winKillPids, writeHostManifest }
+  const diffLayers = vi.fn(() => ({ changed: [], count: 0 }))
+  return {
+    listeners,
+    calls,
+    events,
+    child,
+    spawn,
+    winKillPids,
+    scan,
+    scanLayer,
+    scanCalls: () => scanCalls,
+    sha12,
+    writeLayerManifest,
+    diffLayers,
+  }
 })
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -55,7 +73,11 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 vi.mock('../../../src/host/runtime-bridge.js', () => ({
   winKillPids: h.winKillPids,
-  writeHostManifest: h.writeHostManifest,
+  scanLayer: h.scanLayer,
+  sha12: h.sha12,
+  writeLayerManifest: h.writeLayerManifest,
+  diffLayers: h.diffLayers,
+  HOST_LAYER_SKIP: ['runtime'],
   HOST_MANIFEST_ENV: 'DSH_BLENDER_HOST_MANIFEST',
 }))
 
@@ -85,7 +107,7 @@ afterEach(() => {
   h.child.unref.mockClear()
   h.child.on.mockClear()
   h.spawn.mockClear()
-  h.writeHostManifest.mockClear()
+  h.writeLayerManifest.mockClear()
   h.child.exitCode = null
   h.child.signalCode = null
 })
@@ -104,18 +126,19 @@ describe('spawnChild spawn options (issue #51)', () => {
     expect(args[2]).toBe('9877')
     expect(opts.env.ELECTRON_RUN_AS_NODE).toBe('1')
     expect(opts.env.PATH).toBe(process.env.PATH)
-    // H1：清单路径经 env 传给 Gateway；它就是刚才写出的那个文件，且带 schema/root/files/hash
+    // H1：清单路径经 env 传给 Gateway；文件名带宿主层根指纹，且就是刚才写出的那个文件
     const manifestPath = String(opts.env.DSH_BLENDER_HOST_MANIFEST || '')
-    expect(manifestPath).toMatch(/host-manifest\.json$/)
+    expect(manifestPath).toMatch(/host-manifest-[0-9a-z]+\.json$/)
     expect(manifestPath).toBe(hostManifestPath())
-    expect(h.writeHostManifest).toHaveBeenCalledTimes(1)
-    const [root, wrote, meta] = h.writeHostManifest.mock.calls[0] as [string, string, any]
+    expect(h.writeLayerManifest).toHaveBeenCalledTimes(1)
+    const [scan, root, wrote, meta] = h.writeLayerManifest.mock.calls[0] as [any, string, string, any]
+    expect(scan).toBe(h.scan)
     expect(wrote).toBe(manifestPath)
     expect(String(root).endsWith('lib')).toBe(true)
     expect(meta.pluginVersion).toBe(PLUGIN_VERSION)
     expect(meta.hostPid).toBe(process.pid)
     expect(typeof meta.pluginRoot).toBe('string')
-    const manifest = h.writeHostManifest.mock.results[0].value
+    const manifest = h.writeLayerManifest.mock.results[0].value
     expect(manifest).toMatchObject({
       schema: 1,
       root,
@@ -154,11 +177,14 @@ describe('spawnChild spawn options (issue #51)', () => {
     expect(childAlive()).toBe(false)
   })
 
-  it('reuses the manifest written when this host fiber loaded (no re-scan per spawn)', () => {
+  it('reuses the manifest scan taken when this host fiber loaded (no re-scan per spawn)', () => {
     spawnChild(9877)
     spawnChild(9878)
     // H1 的核心：清单是「宿主装载那一刻」的快照。若每次 spawn 都重扫，
     // 只重启 Gateway 就会把旧宿主层洗成 current —— 那正是被验收打回来的洞。
+    // 复测第四轮再加一条：被打断的镜像也不能算「已装载」→ 扫描只在模块求值时发生一次。
+    // 装载时扫过一次（模块求值），之后每次 spawn 都不再重扫
+    expect(h.scanCalls()).toBe(1)
     const manifestPath = String((h.spawn.mock.calls[0] as any)[2].env.DSH_BLENDER_HOST_MANIFEST)
     for (const call of h.spawn.mock.calls) {
       expect(String((call as any)[2].env.DSH_BLENDER_HOST_MANIFEST)).toBe(manifestPath)

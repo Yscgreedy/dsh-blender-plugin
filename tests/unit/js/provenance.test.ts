@@ -185,3 +185,63 @@ describe('host layer provenance (H1: the loaded side is the host manifest)', () 
     expect(String(pr.host.note)).toContain('降级')
   })
 })
+
+// 复测第四轮（2026-11-19，BlenderProject）：假 noop 的两个成因。
+//   ① 清单在**共享目录**里，别的装载（仓库副本 / 另一个 profile）写下的那份会被当成「本安装已装载」；
+//   ② 清单如果是在「镜像完成之后」才现扫的，它会把新磁盘记成已装载。
+// 判据：清单必须属于本安装（root 一致）；「已装载」必须来自装载那一刻的扫描。
+describe('host manifest identity + load-time scan (round 4)', () => {
+  const HOSTLIB = path.join(TMP, 'lib')
+  const OTHER = path.join(TMP, 'lib-other')
+  const MANIFEST = path.join(TMP, 'host-manifest-identity.json')
+  let layers: any
+
+  beforeAll(async () => {
+    fs.mkdirSync(OTHER, { recursive: true })
+    fs.writeFileSync(path.join(OTHER, 'constants.js'), 'export const PLUGIN_VERSION = "other"\n', 'utf8')
+    layers = await import(
+      pathToFileURL(path.join(COPY_RT, 'core', 'layers.js')).href + '?layers4=' + String(Date.now())
+    )
+  })
+
+  afterAll(() => {
+    delete process.env.DSH_BLENDER_HOST_MANIFEST
+  })
+
+  it('sameRoot 只认同一处（分隔符/尾斜杠无关，空值永远不等）', () => {
+    expect(layers.sameRoot(HOSTLIB, HOSTLIB + path.sep)).toBe(true)
+    expect(layers.sameRoot(HOSTLIB, OTHER)).toBe(false)
+    expect(layers.sameRoot('', '')).toBe(false)
+  })
+
+  it('writeLayerManifest 保存装载时的逐文件指纹：磁盘后来变了也不改写', () => {
+    fs.writeFileSync(path.join(HOSTLIB, 'constants.js'), 'export const PLUGIN_VERSION = "load-1"\n', 'utf8')
+    const scan = layers.scanLayer(HOSTLIB, ['runtime'])
+    const written = layers.writeLayerManifest(scan, HOSTLIB, MANIFEST, {
+      pluginVersion: 'probe',
+      hostPid: 4242,
+    })
+    expect(written.files['constants.js']).toBe(scan.files['constants.js'])
+    // 「装载之后」磁盘又变了（= 镜像完成、fiber 还是旧的）
+    fs.writeFileSync(path.join(HOSTLIB, 'constants.js'), 'export const PLUGIN_VERSION = "disk-2"\n', 'utf8')
+    const reread = layers.readHostManifest(MANIFEST)
+    expect(reread.files['constants.js']).toBe(scan.files['constants.js'])
+    expect(reread.files['constants.js']).not.toBe(
+      layers.scanLayer(HOSTLIB, ['runtime']).files['constants.js'],
+    )
+  })
+
+  it('不属于本安装的清单 → host 判不了（unknown），不拿别人的指纹自证 current', () => {
+    const foreign = layers.writeHostManifest(OTHER, path.join(TMP, 'foreign.json'), {
+      pluginVersion: 'other-install',
+      hostPid: 999,
+    })
+    expect(foreign.root).toBe(OTHER)
+    process.env.DSH_BLENDER_HOST_MANIFEST = path.join(TMP, 'foreign.json')
+    const pr = mod.engineProvenance({ fresh: true })
+    expect(pr.host.verdict).toBe('unknown')
+    expect(pr.host.source).not.toBe('manifest')
+    expect(String(pr.host.note)).toContain('另一处装载')
+  })
+})
+

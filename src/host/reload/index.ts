@@ -26,7 +26,9 @@ import {
   settleReloadState,
   writeReloadState,
 } from '../runtime-bridge.js'
-import type { ReloadReport } from '../runtime-bridge.js'
+import type { ReloadMode, ReloadReport } from '../runtime-bridge.js'
+import { hostSelfProvenance } from '../backend/host-manifest.js'
+import type { HostSelfProvenance } from '../backend/host-manifest.js'
 import { resolveProfileDir, triggerProfileHmr } from './profile.js'
 import type { PatchReceipt } from './profile.js'
 
@@ -51,6 +53,14 @@ export interface HostReloadInput {
   recover?: (port: number) => Promise<boolean>
   /** 测试注入：现在 */
   now?: () => Date
+  /**
+   * 测试注入：宿主自己的层自证（默认 hostSelfProvenance：**装载时**指纹 vs 磁盘现在）。
+   * 工具面用它兜底 Gateway 的诊断 —— 清单可能缺失/被别的安装覆盖，但那都不影响宿主自己知道
+   * 「我装载的是哪一代」。
+   */
+  hostSelf?: () => HostSelfProvenance
+  /** true = 不看判据，强制重组合一次（把中断过的热更救回来）；dry-run 时只报会做什么 */
+  force?: boolean
 }
 
 /** Gateway 的 pid（来自 /health.backend.pid；拿不到返回 null）。 */
@@ -212,7 +222,14 @@ export async function hostReload(input: HostReloadInput): Promise<ReloadReport> 
     report.pidAfter = report.pidBefore
     return finish()
   }
-  const mode = String(report.mode || 'noop')
+  const diagMode = String(report.mode || 'noop')
+  // 宿主自己知道装载的是哪一代：装载时指纹 vs 磁盘。判不了/不一致就不许 noop ——
+  // Gateway 可能拿的是别人的清单，或者清单根本没写成（2026-11-19 的假绿）。
+  const self = (input.hostSelf || hostSelfProvenance)()
+  report.layers = { ...report.layers, hostSelf: self }
+  const escalated = input.force === true || self.verdict === 'stale'
+  const mode: ReloadMode = escalated ? 'hmr' : (diagMode as ReloadMode)
+  report.mode = mode
 
   if (mode === 'noop') {
     report.ok = true
@@ -228,9 +245,53 @@ export async function hostReload(input: HostReloadInput): Promise<ReloadReport> 
   }
 
   // 两种动作都由宿主完成，且都**就地**改写同一份 report（工具面拿到的就是它）
-  if (mode === 'hmr') await hostLayerReload(report, input, apply, now, diag.report)
+  const basis =
+    mode === 'hmr'
+      ? escalatedDiag(diag.report, self, input.force === true)
+      : diag.report
+  if (escalated) {
+    report.changed = basis.changed
+    report.changedCount = basis.changedCount
+    report.staleLayer = basis.staleLayer
+    report.needsRestart = basis.needsRestart
+  }
+  if (mode === 'hmr') await hostLayerReload(report, input, apply, now, basis)
   else await runtimeLayerReload(report, input, apply, diag.report)
+  if (escalated) {
+    // 成功触发时 needsRestart 按语义清空（pending=true 就是"已经动手了"），所以「为什么升成
+    // hmr」必须写进 note，否则下游只看到 mode=hmr 而不知道为什么。
+    const why =
+      input.force === true
+        ? 'force=true：不看判据，强制重组合'
+        : '宿主层装载时指纹与磁盘不一致（' +
+          String(self.changedCount) +
+          ' 个文件）：不采信 Gateway 的 noop'
+    report.note = why + '；' + report.note
+  }
   return finish()
+}
+
+/**
+ * 把「宿主自己判出旧一代 / force」并进 diag：hmr 路径的 reasons 与 changed 都从 diag 取，
+ * 不并进去就会出现 mode=hmr 但 changedCount.host=0、needsRestart=[] 的空回执。
+ */
+function escalatedDiag(
+  diag: ReloadReport,
+  self: HostSelfProvenance,
+  force: boolean,
+): ReloadReport {
+  const files = self.changedFiles.length ? self.changedFiles : []
+  const why = force
+    ? 'force=true：跳过判据，强制重组合一次'
+    : '宿主层装载时指纹与磁盘不一致（' + String(self.changedCount) + ' 个文件）'
+  return {
+    ...diag,
+    mode: 'hmr',
+    changed: { ...diag.changed, host: files.map((p) => 'lib/' + p) },
+    changedCount: { ...diag.changedCount, host: self.changedCount },
+    staleLayer: Array.from(new Set([...(diag.staleLayer || []), 'host'])),
+    needsRestart: [...needsOf(diag), why + '：要宿主重组合（HMR）后才能自证'],
+  }
 }
 
 /** 宿主层：写 profile 的 cordis.patch.yml，让 dsh-hmr 拆旧 fiber / 拉新 fiber。 */
@@ -251,9 +312,11 @@ async function hostLayerReload(
       'dry-run（dry_run=true / apply=false）：只诊断，没有写 profile patch',
     ]
     report.note =
-      'dry-run：宿主层变了 ' +
+      'dry-run：宿主层需要重组合（变了 ' +
       String(diag.changedCount?.host ?? reasons.length) +
-      ' 处，未触发重组合'
+      ' 处；' +
+      String(reasons[0] || '见 needsRestart') +
+      '），未写 profile patch'
     return report
   }
   const trigger = input.trigger || triggerProfileHmr

@@ -13,12 +13,17 @@ export { serverPidsFromProcRows } from '../../lib/runtime/ports.js'
 // 不允许在 src 里再写第二套，否则两层会各自「自证」成 current。
 export {
   scanLayer,
+  sha12,
+  sameRoot,
+  diffLayers,
+  writeLayerManifest,
   writeHostManifest,
   forgetHostManifest,
   LAYER_SCHEMA,
   HOST_LAYER_SKIP,
   HOST_MANIFEST_ENV,
 } from '../../lib/runtime/core/layers.js'
+export type { LayerScan, LayerSnapshot } from '../../lib/runtime/core/layers.js'
 export type { LayerManifest, HostManifestMeta } from '../../lib/runtime/core/layers.js'
 // H2：reload 回执结构 + 两次落盘的状态文件。宿主只做「动作」，结构与语义只有这一份
 // （runtime/core/hot-reload.ts / reload-state.ts），工具面与 HTTP 面因此天然同构。
