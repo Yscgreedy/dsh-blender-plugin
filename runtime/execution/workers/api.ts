@@ -21,6 +21,11 @@ export interface WorkerRecord {
   stderrTail: string
   boot?: unknown
   lastUsed?: number
+  /**
+   * The in-flight start for this name. A retried/concurrent start joins it instead of
+   * killing a booting child and racing for the same port (field report 3.2.0-alpha.1).
+   */
+  starting?: Promise<Record<string, unknown>> | null
 }
 
 export interface WorkersCtx {
@@ -67,11 +72,14 @@ export function workerAlive(w: WorkerRecord | null | undefined): boolean {
 }
 
 export function workerSnapshot(w: WorkerRecord): Record<string, unknown> {
+  const alive = workerAlive(w)
   return {
     name: w.name,
-    alive: workerAlive(w),
+    alive: alive,
     ready: w.ready,
-    pid: w.pid,
+    // pid 只在进程活着时有意义：stop 之后任何路径残留的 pid 都会被读成「还在跑」
+    //（复测现场：stop 之后立刻 status 出现 alive:false + 旧 pid，读起来像没停干净）。
+    pid: alive ? w.pid : null,
     port: w.port,
     uptimeMs: w.startedAt ? Date.now() - w.startedAt : null,
     idleMs: w.lastUsed ? Date.now() - w.lastUsed : null,

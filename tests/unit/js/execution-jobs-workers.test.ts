@@ -37,7 +37,15 @@ vi.mock('node:child_process', async () => {
     child.exe = exe
     child.args = args
     child.spawnOpts = opts
-    child.kill = vi.fn()
+    // Model Node: a killed child settles with a signal code and emits exit/close.
+    // Without this a mock child stayed "alive" forever, which is how the old
+    // stop receipt could claim success while the port was still held.
+    child.kill = vi.fn((signal?: string) => {
+      child.signalCode = signal || 'SIGTERM'
+      child.emit('exit', null, child.signalCode)
+      child.emit('close', null, child.signalCode)
+      return true
+    })
     h.spawnCalls.push(child)
     return child
   })
@@ -604,8 +612,9 @@ describe('jobs', () => {
         throw new Error('ENOENT')
       },
     })
+    // 提交前预检：脚本路径不存在就直接报 input_missing，不再起进程
     expect(() => missing.api.jobStart({ outdir, scriptFile: 'C:/nope.py' })).toThrow(
-      /读不到脚本文件/,
+      /script_file 不存在/,
     )
 
     const { api } = makeJobs()
@@ -703,7 +712,49 @@ describe('workers', () => {
     expect(idle.ready).toBe(false)
   })
 
-  it('stop sends shutdown, waits 300ms and kills an unresponsive child', async () => {
+  it('stop reports a graceful exit and never escalates to SIGKILL', async () => {
+    const api = makeWorkers()
+    await bootWorker(api, { warmup: false }, 'default')
+    const child = lastSpawn()
+
+    const pidBefore = api.workerList()[0].pid
+    const stopping: Promise<any> = api.workerStop('default')
+    await flush()
+    const req = await answerSocket({ bye: true })
+    expect(req.op).toBe('shutdown')
+    // A healthy worker.py exits right after the bye frame; the receipt waits for that.
+    child.exitCode = 0
+    child.emit('close', 0, null)
+    const r: any = await stopping
+
+    expect(r.stopped).toBe(true)
+    expect(r.wasAlive).toBe(true)
+    expect(r.alive).toBe(false)
+    expect(r.signaled).toBe(false)
+    expect(r.bye).toEqual({ id: req.id, bye: true })
+    expect(child.kill).not.toHaveBeenCalled()
+    expect(api.workerList()[0].ready).toBe(false)
+    // 复测现场：stop 之后立刻 status 还带旧 pid（alive:false + pid），读起来像没停干净。
+    // 现在回执说明清掉了什么，快照里死进程的 pid 一律为 null。
+    expect(r.cleared).toEqual({ pid: pidBefore, ready: true })
+    expect(r.pid).toBe(null)
+    const after: any = api.workerList()[0]
+    expect(after.alive).toBe(false)
+    expect(after.pid).toBe(null)
+  })
+
+  it('a snapshot never reports a pid for a dead worker', () => {
+    // 直接钉住不变量：pid 有值 ⇒ 进程活着。否则 stop/status 的竞态还会在别处重演。
+    const api = makeWorkers()
+    const rec: any = api.workerState('stale')
+    rec.pid = 4100
+    rec.child = null
+    const snap: any = api.workerSnapshot(rec)
+    expect(snap.alive).toBe(false)
+    expect(snap.pid).toBe(null)
+  })
+
+  it('stop escalates to SIGKILL after the grace window and reports the real exit', async () => {
     vi.useFakeTimers()
     const api = makeWorkers()
     await bootWorker(api, { warmup: false }, 'default')
@@ -713,20 +764,63 @@ describe('workers', () => {
     await flush()
     const req = await answerSocket({ bye: true })
     expect(req.op).toBe('shutdown')
-    await vi.advanceTimersByTimeAsync(300)
+    // Nothing exits during the grace window -> SIGKILL -> the mock settles like Node.
+    await vi.advanceTimersByTimeAsync(2000)
     const r: any = await stopping
 
     expect(r.stopped).toBe(true)
-    expect(r.wasAlive).toBe(true)
-    expect(r.bye).toEqual({ id: req.id, bye: true })
+    expect(r.alive).toBe(false)
+    expect(r.signaled).toBe(true)
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
     expect(api.workerList()[0].ready).toBe(false)
+    expect(api.workerList()[0].pid).toBe(null)
+  })
+
+  it('never reports stopped when the process survives the kill', async () => {
+    vi.useFakeTimers()
+    const api = makeWorkers()
+    await bootWorker(api, { warmup: false }, 'default')
+    const child = lastSpawn()
+    // A wedged process: kill() is accepted but the OS never reaps it.
+    child.kill = vi.fn(() => true)
+
+    const stopping: Promise<any> = api.workerStop('default')
+    await flush()
+    await answerSocket({ bye: true })
+    await vi.advanceTimersByTimeAsync(4000)
+    const r: any = await stopping
+
+    expect(r.stopped).toBe(false)
+    expect(r.alive).toBe(true)
+    expect(r.wasAlive).toBe(true)
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(api.workerList()[0].alive).toBe(true)
   })
 
   it('stop of a worker that was never started is a no-op', async () => {
     const api = makeWorkers()
     const r: any = await api.workerStop('ghost')
-    expect(r).toEqual({ name: 'ghost', stopped: false, wasAlive: false })
+    expect(r).toMatchObject({ name: 'ghost', stopped: false, wasAlive: false, alive: false })
+    expect(r.pid).toBe(null)
+    // 本来就没有 pid 可清 → cleared 不编造内容
+    expect(r.cleared).toBe(null)
+  })
+
+  it('a second start while the first is booting joins it instead of respawning', async () => {
+    const api = makeWorkers()
+    const first: Promise<any> = api.workerStart({ warmup: false }, 'default')
+    const second: Promise<any> = api.workerStart({ warmup: false }, 'default')
+    expect(h.spawnCalls).toHaveLength(1)
+    lastSpawn().stdout.write('DSH_WORKER ' + JSON.stringify({ ok: true, pid: 4242 }) + NL)
+    await flush()
+    const a: any = await first
+    const b: any = await second
+    expect(a.pid).toBe(4242)
+    expect(b.joined).toBe(true)
+    expect(b.pid).toBe(4242)
+    // One process, one port: the retry never spawned a competitor.
+    expect(h.spawnCalls).toHaveLength(1)
+    expect(h.metrics.workerStarts).toBe(1)
   })
 
   it('restart stops the old child and starts a fresh one', async () => {
@@ -738,7 +832,8 @@ describe('workers', () => {
     const restarting: Promise<any> = api.workerRestart('default', { warmup: false })
     await flush()
     await answerSocket({ bye: true })
-    await vi.advanceTimersByTimeAsync(300)
+    // The old child never exits on its own here -> the grace window expires -> SIGKILL.
+    await vi.advanceTimersByTimeAsync(2000)
     for (let i = 0; i < 200 && h.spawnCalls.length < 2; i += 1) await Promise.resolve()
     expect(h.spawnCalls).toHaveLength(2)
     const fresh = lastSpawn()
@@ -827,7 +922,7 @@ describe('workers', () => {
     await flush()
     const req = await answerSocket({ bye: true })
     expect(req.op).toBe('shutdown')
-    await vi.advanceTimersByTimeAsync(300)
+    await vi.advanceTimersByTimeAsync(2000)
     await flush()
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
     expect(api.workerList()[0].ready).toBe(false)

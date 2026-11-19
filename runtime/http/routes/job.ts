@@ -20,6 +20,20 @@ async function handleQueueSurface(
   return true
 }
 
+/**
+ * 失败信封：透出结构化 code，并带上解析证据（input_missing 的 tried/bases 是"按哪些根找过"
+ * 的唯一凭据，不能只留一句错误文本）。
+ */
+function jobFailure(e: unknown, op: string, lastError: string): Record<string, unknown> {
+  return {
+    ok: false,
+    op: op,
+    error: lastError,
+    code: errorField(e, 'code') || errorCode(e) || null,
+    evidence: errorField(e, 'evidence') || null,
+  }
+}
+
 // HTTP 路由 /job：作业层
 export function createJobRoutes(E: HttpRouteDeps) {
   const { engine, isReadOnly, json, leaseGate, pushRtt, readBody, stats, streamJson } = E
@@ -52,12 +66,7 @@ export function createJobRoutes(E: HttpRouteDeps) {
             return { ok: true, op: op, job: j }
           } catch (e) {
             stats.lastError = errorMessage(e)
-            return {
-              ok: false,
-              op: op,
-              error: stats.lastError,
-              code: errorField(e, 'code') || errorCode(e) || null,
-            }
+            return jobFailure(e, op, stats.lastError)
           }
         })
         return
@@ -88,12 +97,7 @@ export function createJobRoutes(E: HttpRouteDeps) {
       } catch (e) {
         stats.lastError = errorMessage(e)
         // 把 blender_exe_missing 等结构化 code 透出，工具层才能给配置指引而不是泛化 backend_error。
-        json(res, 200, {
-          ok: false,
-          op: op,
-          error: stats.lastError,
-          code: errorField(e, 'code') || errorCode(e) || null,
-        })
+        json(res, 200, jobFailure(e, op, stats.lastError))
       } finally {
         pushRtt('job', Date.now() - t0j)
       }

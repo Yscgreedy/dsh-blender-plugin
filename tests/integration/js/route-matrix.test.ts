@@ -159,6 +159,7 @@ const engine: any = {
     see: async () => ok('workerSee', { ok: true }),
     watch: async () => ok('workerWatch', { ok: true }),
     reset: async () => ok('workerReset', { ok: true }),
+    aux: async (op: string) => ok('workerAux', { ok: true, op: op }),
     status: async () => ok('workerStatus', { ok: true, name: 'default', alive: true }),
     stop: async () => ok('workerStop', { ok: true }),
     restart: async () => ok('workerRestart', { ok: true }),

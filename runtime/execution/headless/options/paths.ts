@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { winToWsl, wslToWin } from '../../../config.js'
 import { WIN_TMP } from '../../../paths.js'
 import { describeMissingInput, validateFileOpt } from '../../../file_guard.js'
+import { inputPathBaseList, resolveExistingInput } from '../../input-paths.js'
 import { fileFingerprint } from '../../../core/scripts.js'
 import { errorMessage } from '../../../core/json.js'
 import { slipFixPath } from '../../../core/output/index.js'
@@ -29,12 +30,16 @@ export function resolveHeadlessPaths(opts: HeadlessOpts, deps: HeadlessDeps): He
   // v0.9.1（93-B3）：scriptFile= 显式收 .py；file= 传 .py 时自动改当脚本（老语义 file= 仍是 .blend）
   let scriptFileInfo: ScriptFileInfo | null = null
   let script = opts.script ? String(opts.script) : ''
-  const fileOpt = validateFileOpt(opts.file) // F-09：空串/类型错显式报错（直连 /headless 的兜底；工具端另有 ALIAS 拦截）
+  // 痛点2：相对路径按 workdir → 会话工作区 → 工作区 env → Gateway cwd 解析，且**在起进程之前**校验存在性。
+  // 会话工作区由工具层显式传进来（workspace）：本机 Gateway 进程里那三个 env 是空的。
+  const bases = inputPathBaseList(opts.workdir, process.env, opts.workspace)
+  let fileOpt = validateFileOpt(opts.file) // F-09：空串/类型错显式报错（直连 /headless 的兜底；工具端另有 ALIAS 拦截）
   const fileLooksPython = !!(fileOpt && /\.py$/i.test(String(fileOpt)))
   if (opts.scriptFile || fileLooksPython) {
     const given = String(opts.scriptFile || fileOpt)
+    const absolute = resolveExistingInput(given, bases, opts.scriptFile ? 'script_file' : 'file')
     try {
-      const rp = deps.readScriptPath(given)
+      const rp = deps.readScriptPath(absolute)
       script = fs.readFileSync(rp.wsl, 'utf8')
       scriptFileInfo = {
         given: given,
@@ -51,6 +56,9 @@ export function resolveHeadlessPaths(opts: HeadlessOpts, deps: HeadlessDeps): He
       )
     }
   }
+  // 痛点2：file= 的 .blend 也必须在起进程之前存在（旧行为是 Blender 起来后才报 Cannot read file）。
+  // 解析结果写回 fileOpt，下游 spawn 参数因此拿到绝对路径。
+  if (fileOpt && !fileLooksPython) fileOpt = resolveExistingInput(String(fileOpt), bases, 'file')
   // ---- v0.9.3：inputFile 指纹 —— 探针跑在 02:55 版、04:07 才发现文件已被重存（浪费 4 次探针）
   // （必须在 fileLooksPython 之后：否则 TDZ ReferenceError —— 实测踩过）
   const inputFileInfo =

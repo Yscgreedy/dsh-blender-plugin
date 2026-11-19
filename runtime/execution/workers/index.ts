@@ -66,6 +66,27 @@ export function createWorkersApi(E: WorkersDeps) {
       throw e
     }
   }
+  /**
+   * checkpoint / revert / checkpoints （痛点8） share the same shape: one op name,
+   * one spec, the same worker. They go through workerCall like every other op.
+   */
+  async function workerAux(
+    op: string,
+    spec: unknown,
+    nameArg?: unknown,
+  ): Promise<Record<string, unknown>> {
+    const w = workerState(ctx, nameArg)
+    if (!workerAlive(w) || !w.ready) await workerStart(ctx, {}, w.name)
+    w.lastUsed = Date.now()
+    metrics.workerExecs = (metrics.workerExecs || 0) + 1
+    try {
+      return await workerCall(w, { op: op, spec: spec || {} }, 120000)
+    } catch (e) {
+      w.lastError = errorMessage(e)
+      throw e
+    }
+  }
+
   async function workerReset(nameArg?: unknown): Promise<Record<string, unknown>> {
     const w = workerState(ctx, nameArg)
     if (!workerAlive(w) || !w.ready) await workerStart(ctx, {}, w.name)
@@ -95,6 +116,7 @@ export function createWorkersApi(E: WorkersDeps) {
     workerSee,
     workerWatch,
     workerReset,
+    workerAux,
     workerStatus,
     workerStop: (nameArg?: unknown) => workerStop(ctx, nameArg),
     workerRestart: (nameArg?: unknown, opts?: Record<string, unknown>) =>

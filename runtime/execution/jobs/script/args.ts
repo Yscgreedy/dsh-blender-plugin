@@ -5,6 +5,7 @@ import { WIN_TMP } from '../../../paths.js'
 import { PLUGIN_VERSION } from '../../../core/evidence.js'
 import { slipFixPath } from '../../../core/output/index.js'
 import { describeMissingInput, validateFileOpt } from '../../../file_guard.js'
+import { inputPathBaseList, resolveExistingInput } from '../../input-paths.js'
 import { fileFingerprint } from '../../../core/scripts.js'
 import { errorMessage } from '../../../core/json.js'
 import { jobDir } from '../snapshot.js'
@@ -52,12 +53,16 @@ export function prepareJobArgs(E: JobsDeps, opts: Record<string, unknown> = {}):
   // ---- script_file（与 headless 同一套语义：显式收 .py；file= 传 .py 自动改当脚本）
   let scriptFileInfo: ScriptFileInfo | null = null
   let script = opts.script ? String(opts.script) : ''
-  const fileOpt = validateFileOpt(opts.file) // F-09：空串/类型错显式报错，不再静默当"没传"
+  // 痛点2：与 headless 同一条预检 —— 相对路径先按 workdir → 会话工作区 → 工作区 env → cwd 解析，
+  // 不存在就在排队/起进程之前报 input_missing（不再让 Blender 起来后才 Cannot read file）。
+  const bases = inputPathBaseList(opts.workdir, process.env, opts.workspace)
+  let fileOpt = validateFileOpt(opts.file) // F-09：空串/类型错显式报错，不再静默当"没传"
   const fileLooksPython = !!(fileOpt && /\.py$/i.test(String(fileOpt)))
   if (opts.scriptFile || fileLooksPython) {
     const given = String(opts.scriptFile || fileOpt)
+    const absolute = resolveExistingInput(given, bases, opts.scriptFile ? 'script_file' : 'file')
     try {
-      const rp = E.readScriptPath(given)
+      const rp = E.readScriptPath(absolute)
       script = fs.readFileSync(rp.wsl, 'utf8')
       scriptFileInfo = {
         given: given,
@@ -72,6 +77,7 @@ export function prepareJobArgs(E: JobsDeps, opts: Record<string, unknown> = {}):
       )
     }
   }
+  if (fileOpt && !fileLooksPython) fileOpt = resolveExistingInput(String(fileOpt), bases, 'file')
   const inputFileInfo =
     fileOpt && !fileLooksPython
       ? fileFingerprint(wslToWin(String(fileOpt)), winToWsl(String(fileOpt)))

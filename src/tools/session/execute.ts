@@ -10,6 +10,7 @@ import { backendJson } from '../../host/http.js'
 import { toolError } from '../errors.js'
 import { gatewayFailure, isFailureBody, listSessions, sessionAction } from '../shared/session.js'
 import {
+  formatConsent,
   formatDoctor,
   formatSessionList,
   formatSessionResult,
@@ -19,7 +20,11 @@ import {
 import { executeReload } from './reload.js'
 import { executeTxn } from './txn.js'
 
+/** consent 动作：请求/批准/拒绝都只带 request_id（与 session 归属无关）。 */
+const CONSENT_ACTIONS = ['consent_request', 'consent_status', 'consent_approve', 'consent_deny']
+
 const CAMEL: Record<string, string> = {
+  request_id: 'requestId',
   session_id: 'sessionId',
   instance_id: 'instanceId',
   kind: 'kind',
@@ -85,6 +90,13 @@ const NEED_SESSION = [
 ]
 
 function validate(action: string, args: Record<string, unknown>): string | null {
+  if (
+    CONSENT_ACTIONS.includes(action) &&
+    action !== 'consent_request' &&
+    action !== 'consent_status' &&
+    !present(args.request_id)
+  )
+    return action + ' 需要 request_id（从 action=start 的 consent_required 回执里取）'
   if (action === 'start') {
     const kind = present(args.kind) ? text(args.kind) : 'virtual-gui'
     if (kind !== 'virtual-gui')
@@ -168,6 +180,28 @@ export async function executeSession(
   const bad = validate(action, args)
   if (bad) return toolError('invalid_params', bad, 'action=help 查看可用动作与参数')
   const body = await sessionAction(port, action, payloadFor(action, args))
-  if (isFailureBody(body)) return gatewayFailure(body, 'SESSION ' + action)
+  if (isFailureBody(body)) return consentOrFailure(action, body)
   return { text: formatSessionResult(action, asRecord(body)) }
+}
+
+/**
+ * consent_required 不是一句普通错误：它是**给人类看的请求**。带上 request_id 与
+ * 可直接复制的一行 approve 命令返回，agent 照着转述即可；其余失败保持原样。
+ */
+function consentOrFailure(
+  action: string,
+  body: Record<string, unknown> | Record<string, unknown>,
+): unknown {
+  if (String(body.code || '') === 'consent_required')
+    return {
+      text: formatConsent(body),
+      envelope: {
+        code: 'consent_required',
+        action: action,
+        request_id: body.request_id || asRecord(body.evidence).request_id || null,
+        human_action: body.human_action || null,
+        policy: asRecord(body.evidence).policy || 'ask',
+      },
+    }
+  return gatewayFailure(body, 'SESSION ' + action)
 }

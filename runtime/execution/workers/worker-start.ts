@@ -230,6 +230,24 @@ export async function workerStart(
 ): Promise<Record<string, unknown>> {
   const w = workerState(ctx, nameArg !== undefined ? nameArg : opts.name)
   if (workerAlive(w) && w.ready) return workerSnapshot(w)
+  // 同一个 name 的并发/重试 start 共享一次启动：否则第二个会 SIGKILL 掉正在 boot 的进程，
+  // 紧接着再 spawn 一个抢同一个端口（复测现场：反向 FAIL 回执诱导重试 → 端口撞车）。
+  const inflight: Promise<Record<string, unknown>> | null | undefined = w.starting
+  if (inflight) return Object.assign({}, await inflight, { joined: true })
+  const task = launchWorker(ctx, w, opts)
+  w.starting = task
+  try {
+    return await task
+  } finally {
+    if (w.starting === task) w.starting = null
+  }
+}
+
+async function launchWorker(
+  ctx: WorkersCtx,
+  w: WorkerRecord,
+  opts: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   // 预检必须在 prepareBootFile 写盘与 spawn 之前：exe 为空时不再触发 Node 原始 TypeError。
   // P2-9：走 resolver —— 缓存路径在磁盘上不存在时（版本被卸载）先重探测一次，不必重启后端。
   const exe = resolveBlenderExe() || (BLENDER_EXE as string | null)

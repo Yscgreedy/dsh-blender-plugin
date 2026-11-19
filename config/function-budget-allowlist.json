@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Function-level budget registry (two-level exception model): every 80-120 line function is registered with a real classification, reason, class owner and future reviewBy; unregistered, unclassified, expired and stale entries fail. Functions over 120 lines always fail. Path-level file-budget exceptions live in config/exceptions.json.",
-  "generatedAt": "2026-11-17T04:56:47.660Z",
+  "generatedAt": "2026-11-19T05:40:21.112Z",
   "functions": [
     {
       "file": "extension/dsh_blender_bridge/commands/core/bpy_lookup.py",
@@ -123,7 +123,7 @@
     {
       "file": "runtime/core/queue/spawn-executor.ts",
       "name": "buildJobArgs",
-      "lines": 92,
+      "lines": 104,
       "classification": "parsing",
       "reason": "Headless job prelude + argv assembly: POSIX-style args splitting, env merge, KERNEL_BOOTSTRAP inline and the -- separator; the length is the string surgery, not nested branching.",
       "owner": "host",
@@ -195,7 +195,7 @@
     {
       "file": "runtime/execution/workers/index.ts",
       "name": "createWorkersApi",
-      "lines": 96,
+      "lines": 118,
       "classification": "dispatch-table",
       "reason": "Worker API factory: one handler per worker start/exec/status/stop/restart op.",
       "owner": "runtime",
@@ -204,7 +204,7 @@
     {
       "file": "runtime/gateway/app.ts",
       "name": "createGatewayApp",
-      "lines": 85,
+      "lines": 99,
       "classification": "dispatch-table",
       "reason": "Gateway app factory: the route-dependency table (29 routes worth of deps) plus transport/engine assembly and the close exit.",
       "owner": "runtime",
@@ -239,8 +239,17 @@
     },
     {
       "file": "runtime/http/routes/worker.ts",
+      "name": "<anonymous>",
+      "lines": 91,
+      "classification": "dispatch-table",
+      "owner": "runtime",
+      "reason": "Hot-worker route op switch (start/exec/see/watch/reset/checkpoint/revert/checkpoints/stop/restart/list); one case per wire op.",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/http/routes/worker.ts",
       "name": "createWorkerRoutes",
-      "lines": 102,
+      "lines": 116,
       "classification": "dispatch-table",
       "reason": "HTTP route table for the worker endpoint.",
       "owner": "runtime",
@@ -249,7 +258,7 @@
     {
       "file": "runtime/http/routes/worker.ts",
       "name": "worker",
-      "lines": 97,
+      "lines": 111,
       "classification": "dispatch-table",
       "reason": "Worker route handler: payload parse, lease gate and op dispatch; length tracks the wire protocol surface.",
       "owner": "runtime",
@@ -670,6 +679,15 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "runtime/py/core/worker.py",
+      "name": "main",
+      "lines": 83,
+      "classification": "dispatch-table",
+      "owner": "runtime",
+      "reason": "Worker accept loop and op dispatch (ping/status/exec/see/watch/reset/checkpoint/revert/checkpoints/shutdown) inside one blocking main thread.",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "runtime/py/export/deliver_impl/verify.py",
       "name": "_deliver_verify_p1",
       "lines": 91,
@@ -753,7 +771,7 @@
     {
       "file": "runtime/py/geometry/surface_impl/api.py",
       "name": "_surface_selftest_p1",
-      "lines": 90,
+      "lines": 104,
       "classification": "validation",
       "reason": "Surface self-test phase 1: builds fixture surfaces and collects evidence.",
       "owner": "qa",
@@ -762,7 +780,7 @@
     {
       "file": "runtime/py/geometry/surface_impl/api.py",
       "name": "_surface_selftest_p2",
-      "lines": 85,
+      "lines": 107,
       "classification": "validation",
       "reason": "Surface self-test phase 2: continuity and validation assertions.",
       "owner": "qa",
@@ -982,6 +1000,24 @@
       "classification": "orchestration",
       "reason": "Host lifecycle wiring: manifest refresh, two-phase reload settle, 15s watchdog whose probe budget and backoff counters must stay in one closure (splitting would leak mutable state).",
       "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "src/tools/run/execute.ts",
+      "name": "executeRun",
+      "lines": 94,
+      "classification": "dispatch-table",
+      "owner": "runtime",
+      "reason": "blender_run action dispatcher: one branch per action (submit/status/wait/collect/cancel/list/perf/tune/worker) whose length tracks the tool surface.",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "src/tools/run/index.ts",
+      "name": "buildRunTool",
+      "lines": 97,
+      "classification": "dispatch-table",
+      "owner": "runtime",
+      "reason": "Tool schema declaration for blender_run: the length is the documented parameter surface the model reads, not branching logic.",
       "reviewBy": "2027-06-30"
     },
     {

@@ -29,15 +29,25 @@ function buildSeeTool(ctx: HostContext, port: number) {
       },
       aspect: {
         type: 'string',
-        description: '1:1 | 4:3 | 16:9（默认 16:9）。viewport/custom/sequence 用；camera 不接受',
+        description:
+          '1:1（544/768/1024/1280）| 4:3（640/960/1280）| 16:9（1024/1152/1280，默认）。viewport/custom/sequence 用；camera 不接受',
       },
       max_size: {
         type: 'integer',
         description:
-          '固定档位：1:1 544/768/1024/1280；4:3 640/960/1280；16:9 1024/1152/1280；camera 544/768/1024/1280。默认 1024',
+          '固定档位，必须与 aspect 配对：1:1 544/768/1024/1280；4:3 640/960/1280；16:9 1024/1152/1280；camera 544/768/1024/1280。默认 1024。' +
+          '跨档位直接 invalid_params（例：aspect=16:9 + max_size=768 被拒，768 只属于 1:1/camera），不夹取',
       },
-      from: { type: 'string', description: '【custom】相机位置 "x,y,z"（世界坐标）' },
-      look_at: { type: 'string', description: '【custom】看向的点 "x,y,z"' },
+      from: {
+        type: 'json',
+        description:
+          '【custom】相机位置（世界坐标）："7,-7,5" / "7, -7, 5" / [7,-7,5] 都收，共 3 个数字；坏值回 invalid_params 并回显原值',
+      },
+      look_at: {
+        type: 'json',
+        description:
+          '【custom】看向的点（世界坐标）："0,0,1" / "0, 0, 1" / [0,0,1] 都收，共 3 个数字',
+      },
       lens: { type: 'number', description: '【custom】焦距 mm，默认 50' },
       ortho: { type: 'boolean', description: '【custom】正交投影（配合 ortho_scale）' },
       ortho_scale: { type: 'number', description: '【custom】正交尺度（贴长边），默认 10' },

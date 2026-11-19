@@ -4,12 +4,17 @@
  * submit 立即返回 jobId；之后用 status/wait/collect/cancel/list/perf 观察。
  * 没有同步模式、没有第二个作业工具。tune 保留旧 Cycles 分析（/perf）。
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { BACKEND_HINT } from '../../constants.js'
 import type { AvailabilityStage } from '../../contracts/availability.js'
 import { text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import { backendPost, jsonPayload } from '../../host/http.js'
+import type { WorkspaceView } from '../../host/workspace.js'
+import { workspaceNote, workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
+import { executeWorker } from './worker.js'
 import {
   formatCancel,
   formatCollect,
@@ -20,6 +25,8 @@ import {
   formatWait,
   runHelp,
 } from './presenter.js'
+
+const LF = String.fromCharCode(10)
 
 const RENDER_KEYS = [
   'file',
@@ -53,7 +60,101 @@ const HEADLESS_KEYS = [
   'gpu',
   'run_id',
 ]
-const ACTIONS = ['submit', 'status', 'wait', 'collect', 'cancel', 'list', 'perf', 'tune', 'help']
+const ACTIONS = [
+  'submit',
+  'status',
+  'wait',
+  'collect',
+  'cancel',
+  'list',
+  'perf',
+  'tune',
+  'worker',
+  'help',
+]
+
+/**
+ * 痛点2：提交前把相对路径绝对化并校验存在性。
+ *
+ * 现场：script_file="out/.../step1.py" 被后端按 Gateway 进程 cwd（DSH profile 目录）
+ * 解析，先起进程再报 FileNotFoundError。3.2.0-alpha.1 复测又抓到第二层：宿主进程 cwd
+ * 也不是会话工作区，而三个工作区 env 在本机是空的 —— "工作区环境变量"那一档等于没有。
+ * 所以基址改从**调用方 exec** 取（见 host/workspace.ts）：workingDirectory 服务 →
+ * Session header 的 cwd → 工作区 env → 宿主 cwd；只落到最后一档时回执必须点名回落。
+ */
+const INPUT_KEYS = ['file', 'script_file'] as const
+
+function isAbsolute(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || p.slice(0, 2) === '\\\\' || p.startsWith('/')
+}
+
+interface PreflightHit {
+  path?: string
+  /** The base the relative input was resolved against (undefined for absolute input). */
+  base?: string
+  error?: string
+}
+
+/** 绝对化一个输入路径；相对路径按给定基址依次尝试，找不到就报错。 */
+function preflightInput(key: string, given: string, bases: string[]): PreflightHit {
+  const raw = given.trim()
+  if (!raw) return { error: key + ' 是空字符串 —— 要么给真实路径，要么不要传' }
+  if (isAbsolute(raw)) {
+    if (fs.existsSync(raw)) return { path: raw }
+    return { error: key + ' 不存在：' + raw + '（本次没有启动任何 Blender 进程）' }
+  }
+  const tried: string[] = []
+  for (const base of bases) {
+    const candidate = path.resolve(base, raw)
+    tried.push(candidate)
+    if (fs.existsSync(candidate)) return { path: candidate, base }
+  }
+  return {
+    error:
+      key +
+      ' 是相对路径且找不到：' +
+      raw +
+      '（本次没有启动任何 Blender 进程）已尝试：' +
+      tried.join(' , ') +
+      ' —— 给绝对路径或传 workdir=<工作区根>',
+  }
+}
+
+/**
+ * 把 workdir 与 file/script_file 就地绝对化（headless 与 render 共用）。
+ * 返回解析所用的基址（回执要写清是"会话工作区"还是"回落"），出错则只给 error。
+ */
+function absolutizePayload(
+  payload: Record<string, unknown>,
+  view: WorkspaceView,
+): { error?: string; base?: string } {
+  const roots = view.roots.map((r) => r.path)
+  const given =
+    payload.workdir !== undefined && payload.workdir !== null && String(payload.workdir).trim()
+      ? String(payload.workdir).trim()
+      : ''
+  const workdir = given
+    ? isAbsolute(given)
+      ? given
+      : path.resolve(roots[0] || process.cwd(), given)
+    : ''
+  if (workdir) payload.workdir = workdir
+  const bases: string[] = []
+  for (const b of [workdir, ...roots]) if (b && !bases.includes(b)) bases.push(b)
+  let base: string | undefined
+  for (const key of INPUT_KEYS) {
+    const value = payload[key]
+    if (value === undefined || value === null || String(value).trim() === '') continue
+    const hit = preflightInput(key, String(value), bases)
+    if (hit.error) return { error: hit.error }
+    payload[key] = hit.path
+    if (!base && hit.base) base = hit.base
+  }
+  // 会话工作区也给后端一份：它自己的相对解析（workdir 之后的第二档）就不再靠那几个空 env。
+  const workspace = workspacePayload(view)
+  if (workspace) payload.workspace = workspace
+  return { base }
+}
 
 function present(v: unknown): boolean {
   return v !== undefined && v !== null && String(v).trim() !== ''
@@ -146,7 +247,12 @@ async function tune(port: number, args: Record<string, unknown>): Promise<unknow
   return { text: 'RUN tune ' + op + ' ' + JSON.stringify(r.result ?? r) }
 }
 
-export async function executeRun(port: number, args: Record<string, unknown>): Promise<unknown> {
+export async function executeRun(
+  ctx: unknown,
+  port: number,
+  args: Record<string, unknown>,
+  exec?: unknown,
+): Promise<unknown> {
   const action = text(args.action).trim() || (present(args.kind) ? 'submit' : 'list')
   if (action === 'help') return { text: runHelp() }
   if (!ACTIONS.includes(action))
@@ -162,14 +268,28 @@ export async function executeRun(port: number, args: Record<string, unknown>): P
       BACKEND_HINT,
     )
   if (action === 'tune') return tune(port, args)
+  // 痛点7/8：同一个热进程里连续 exec/see + checkpoint 栈（不再每次冷启动、不再手工另存 .blend）
+  if (action === 'worker') return executeWorker(ctx, port, args)
 
   if (action === 'submit') {
     const built = submitPayload(args)
     if (typeof built === 'string')
       return toolError('invalid_params', built, 'action=help 查看 render/headless 参数')
+    const ws = workspaceRoots(exec, ctx)
+    const resolved = absolutizePayload(built, ws)
+    if (resolved.error)
+      return toolError(
+        'input_missing',
+        resolved.error,
+        '给绝对路径，或传 workdir=<工作区根>',
+        workspaceNote(ws),
+      )
     const body = await postQueue(port, built, 60000)
     if (body.ok !== true) return failureOf(body, action)
-    return { text: formatSubmit(body.job as Record<string, unknown>) }
+    return {
+      text:
+        formatSubmit(body.job as Record<string, unknown>) + LF + workspaceNote(ws, resolved.base),
+    }
   }
   if (action === 'list') {
     const payload: Record<string, unknown> = { op: 'list' }

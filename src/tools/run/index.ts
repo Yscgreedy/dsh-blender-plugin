@@ -6,17 +6,28 @@ import { T } from '../../constants.js'
 import { renderOne } from '../../ui/cards.js'
 import { executeRun } from './execute.js'
 
-const ACTIONS = ['submit', 'status', 'wait', 'collect', 'cancel', 'list', 'perf', 'tune', 'help']
+const ACTIONS = [
+  'submit',
+  'status',
+  'wait',
+  'collect',
+  'cancel',
+  'list',
+  'perf',
+  'tune',
+  'worker',
+  'help',
+]
 
 function buildRunTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_run',
     description:
-      '【作业 / 渲染】唯一作业入口：submit 立即返回 jobId（无同步模式），之后 status/wait/collect/cancel/list/perf。' +
-      'kind=render 是声明式最终渲染（相机、帧区间、分辨率、采样、引擎、输出文件；不接受 script；支持相机动画）；kind=headless 是 fresh blender -b 跑脚本（script/script_file/file/outdir/timeout_ms/preload/args/env...）。' +
-      '队列有界：pending 64、GPU 1、CPU 2；满队列返回 QUEUE_FULL。wait 默认 120s、上限 600s，超时不取消作业。' +
-      'collect 取日志与产物；cancel 幂等并清进程树。action=tune 保留旧 Cycles 渲染分析（status/analyze/apply/revert）。' +
-      '旧工具迁移：blender_rt_headless / blender_rt_job → action=submit（kind=headless / render）；blender_rt_perf → action=tune。',
+      '【作业 / 渲染】唯一作业入口：submit 立即返回 jobId；status/wait/collect/cancel/list/perf 观察。' +
+      'kind=render 是声明式最终渲染（相机/帧/分辨率/采样/引擎/输出，不收 script）；kind=headless 是 fresh blender -b 跑脚本（script/script_file/file/outdir/workdir/preload/args/env）。' +
+      '队列有界 pending 64、GPU 1、CPU 2，满则 QUEUE_FULL；wait 默认 120s、上限 600s（超时不取消）。' +
+      'action=worker 是持久无头内核：同一常驻进程连续 exec/see/watch，并用 checkpoint/revert/checkpoints 做文件级 undo（不再每次冷启动，也不用手工另存 .blend）。' +
+      'action=tune 是旧 Cycles 分析。旧工具迁移：blender_rt_headless / blender_rt_job → submit；blender_rt_perf → tune。',
     parameters: {
       action: {
         type: 'string',
@@ -77,14 +88,31 @@ function buildRunTool(ctx: HostContext, port: number) {
       },
       op: {
         type: 'string',
-        description: 'tune：status | analyze | apply | revert | help（默认 status）',
+        description:
+          'tune：status | analyze | apply | revert | help；worker：exec | see | watch | checkpoint | revert | checkpoints | reset | status | start | stop | restart | list（默认 status）',
+      },
+      session: {
+        type: 'string',
+        description: 'worker：热进程名（默认 default；多个场景并行时各用一个名字）',
+      },
+      label: {
+        type: 'string',
+        description: 'worker checkpoint/revert：档位名（revert 可给 last）',
+      },
+      purge: { type: 'string', description: 'worker exec：热重载前清掉的模块前缀（逗号分隔）' },
+      spec: {
+        type: 'json',
+        description:
+          'worker see/watch：{width,height,from,look_at,lens,shading,seconds,fps,frames,code}',
       },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
     isConcurrencySafe: () => false,
     timeoutMs: T.headless,
-    async execute(args: Record<string, unknown>) {
-      return executeRun(port, args)
+    async execute(args: Record<string, unknown>, exec?: unknown) {
+      // exec 带的是调用方身份（agent.session）：相对路径要按**会话工作区**绝对化，
+      // 而不是宿主进程 cwd（= DSH profile 目录，见 host/workspace.ts）。
+      return executeRun(ctx, port, args, exec)
     },
   })
 }

@@ -102,7 +102,10 @@ afterEach(() => {
 
 function readState() {
   return JSON.parse(
-    readFileSync(path.join(process.env.DSH_BLENDER_WORKDIR || '', 'state', 'last-reload.json'), 'utf8'),
+    readFileSync(
+      path.join(process.env.DSH_BLENDER_WORKDIR || '', 'state', 'last-reload.json'),
+      'utf8',
+    ),
   )
 }
 

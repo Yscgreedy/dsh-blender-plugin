@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """Split from surface_orig.py; behavior preserved by the facade."""
+from .advmath import fit_loft_sections, offset_vertices
 from .common import *  # noqa: F401,F403
-from .objects import _bbox_mm, surface_blend, surface_loft, surface_offset, surface_patch, surface_sweep, surface_tessellate
-from .validate import _circle_pts, _cleanup_objects, _meshes_equal, surface_validate
+from .objects import (_bbox_mm, _create_object, _faces_to_tris, _mm_mesh_from_source,
+                      surface_blend, surface_loft, surface_patch, surface_sweep,
+                      surface_tessellate)
+from .validate import (_circle_pts, _cleanup_objects, _meshes_equal, _self_intersection,
+                       surface_validate)
 
 
 
@@ -56,6 +60,20 @@ def _surface_selftest_p1(st):
         if r_helmet.get("object"):
             made.append(r_helmet["object"])
         ev["helmet_ok"] = bool(r_helmet.get("ok") and r_helmet.get("verts", 0) > 0)
+        # ---- M3 fit：圆柱点云 → 切环拟合（残差应在亚毫米） ----
+        cloud = []
+        for k in range(12):
+            z = 20.0 * k
+            for j in range(24):
+                ang = 2.0 * math.pi * j / 24.0
+                cloud.append([18.0 * math.cos(ang), 18.0 * math.sin(ang), z])
+        r_fit = json.loads(surface_fit(points=cloud, sections=6, ring=24,
+                                       name="__surface_eval_fit"))
+        if r_fit.get("object"):
+            made.append(r_fit["object"])
+        ev["fit_ok"] = bool(r_fit.get("ok") and r_fit.get("object") and r_fit.get("verts", 0) > 0)
+        ev["fit_residual_mm"] = (r_fit.get("residual_mm") or {}).get("rmse_mm")
+        ev["fit_verdict"] = r_fit.get("verdict")
         for key, r in (("bottle", r_bottle), ("fender", r_fender), ("helmet", r_helmet)):
             ev["%s_spec_hash_64" % key] = bool(len(str(r.get("spec_hash") or "")) == 64)
             v = json.loads(surface_validate(r.get("spec") or r.get("object"), draft=False))
@@ -100,6 +118,7 @@ def _surface_selftest_p1(st):
 
 def _surface_selftest_p2(st):
     _bm, r_bottle, sections, thin = st.get("_bm"), st.get("r_bottle"), st.get("sections"), st.get("thin")
+    cloud = st.get("cloud") or []
     ev, made, t0 = (st.get("ev"), st.get("made"), st.get("t0"))
     try:
         made.append(str(thin.name))
@@ -150,6 +169,23 @@ def _surface_selftest_p2(st):
             made.append(t_obj["object"])
         ev["tessellate_spec_ok"] = bool(t_spec.get("ok") and t_spec.get("verts", 0) > 0)
         ev["tessellate_object_ok"] = bool(t_obj.get("ok") and t_obj.get("mode") == "object_bake")
+        # ---- M5 offset：瓶身 +2mm（bbox 应变大、verdict 要给三态） ----
+        r_off = json.loads(surface_offset(spec_or_object=r_bottle.get("object"),
+                                          distance_mm=2.0, name="__surface_eval_offset"))
+        if r_off.get("object"):
+            made.append(r_off["object"])
+        ev["offset_ok"] = bool(r_off.get("ok") and r_off.get("object"))
+        ev["offset_verdict"] = r_off.get("verdict")
+        # ---- M5 blend：两条环 → 过渡面 ----
+        ring_a = [[20.0 * math.cos(2.0 * math.pi * k / 24),
+                   20.0 * math.sin(2.0 * math.pi * k / 24), 0.0] for k in range(24)]
+        ring_b = [[14.0 * math.cos(2.0 * math.pi * k / 24),
+                   14.0 * math.sin(2.0 * math.pi * k / 24), 30.0] for k in range(24)]
+        r_bl = json.loads(surface_blend(a=ring_a, b=ring_b, rows=10, samples=24,
+                                        name="__surface_eval_blend"))
+        if r_bl.get("object"):
+            made.append(r_bl["object"])
+        ev["blend_ok"] = bool(r_bl.get("ok") and r_bl.get("verts", 0) > 0)
         # ---- 坏参数 ----
         bad = {}
         bad["loft_missing_sections"] = json.loads(surface_loft(sections=[])).get("ok") is False
@@ -162,6 +198,10 @@ def _surface_selftest_p2(st):
         bad["validate_bad_spec"] = json.loads(surface_validate({"kind": "loft", "sections": []})).get("ok") is False
         bad["blend_okfalse"] = json.loads(surface_blend(a="x", b="y")).get("ok") is False
         bad["offset_okfalse"] = json.loads(surface_offset(distance_mm=1.0)).get("ok") is False
+        bad["fit_no_points"] = json.loads(surface_fit(points=[])).get("ok") is False
+        bad["fit_bad_axis"] = json.loads(surface_fit(points=cloud, axis="w")).get("ok") is False
+        bad["offset_zero_distance"] = json.loads(
+            surface_offset(spec_or_object=r_bottle.get("object"), distance_mm=0)).get("ok") is False
         bad["tessellate_bad"] = json.loads(surface_tessellate(spec_or_object="__surface_no_such")).get("ok") is False
         ev["bad_params_okfalse"] = all(bad.values())
         ev["bad_params_detail"] = bad
@@ -305,22 +345,102 @@ def surface_export(spec_or_object=None, out_dir=None, name=None, apply_modifiers
 
 
 
-# ────────────────────────────── M3：fit 只留接口（不假装实现） ──────────────────────────────
-_M3_FIT_MSG = "fit not implemented in pure-python, point-cloud/BRep solver required (M3)"
+# ────────────────────────────── M3：切环拟合（纯 numpy 近似） ──────────────────────────────
+def surface_fit(points=None, axis="z", sections=8, ring=24, degree=2, continuity="G1",
+                closed=True, tessellation=None, tolerance_mm=None, name=None, collection=None,
+                units="mm", constraints=None):
+    """点云 → SurfaceSpec（loft）：按 axis 切环、极角排序、等弧长重采样后走 loft 插值。
+
+    不是 BRep/点云求解器：每个截面独立拟合，跨截面只做 B-spline 插值；残差是原始切环点到
+    重采样环的最短距离（mm）。残差 > tolerance_mm（默认 max(0.25mm, bbox 对角 ×0.5%)）时
+    verdict=degraded —— 拟合能用，但不许当"精确还原"。
+    """
+    t0 = time.perf_counter()
+    if units != "mm":
+        return _err("fit 只支持 units=mm", stage="M3", op="fit", code="FIT_BAD_UNITS")
+    try:
+        fit = fit_loft_sections(points, axis=axis, sections=sections, ring=ring, closed=closed)
+    except ValueError as exc:
+        return _err(str(exc), stage="M3", op="fit", code="FIT_BAD_POINTS",
+                    hint="points=[[x,y,z],...]（≥12 个有效点）；axis 是切环轴；点太稀会不足 2 个截面")
+    raw = {"kind": "loft", "units": "mm", "sections": fit["sections"], "degree": degree,
+           "continuity": continuity, "closed": bool(closed), "tessellation": tessellation,
+           "constraints": constraints}
+    res = json.loads(surface_loft(spec=raw, name=name, collection=collection))
+    if not res.get("ok"):
+        return _j(res)
+    size = (res.get("bbox_mm") or {}).get("size_mm") or [0.0, 0.0, 0.0]
+    diag = float(np.linalg.norm(np.asarray(size, dtype=np.float64)))
+    tol = _num(tolerance_mm)
+    if tol is None or tol <= 0:
+        tol = max(0.25, diag * 0.005)
+    rmse = float(fit["residual"]["rmse_mm"])
+    verdict = "pass" if rmse <= tol else "degraded"
+    res.update({"op": "fit", "method": "sliced_ring_fit", "quality": "approximate",
+                "axis": fit["axes"]["axis"], "plane_axes": fit["axes"]["plane"],
+                "ring": fit["ring"], "sections_used": fit["residual"]["sections_used"],
+                "residual_mm": fit["residual"], "tolerance_mm": _r(tol, 6),
+                "verdict": verdict,
+                "note": "按 axis 切环 + 极角排序 + 等弧长重采样，再走 loft 的 B-spline 插值；"
+                        "不是 BRep/点云求解器；残差是原始点到重采样环的距离"})
+    if verdict != "pass":
+        res["next"] = ("调 sections/ring、抽稀点云，或把 tolerance_mm 按项目公差写清；"
+                       "残差大常见于点云噪声或切环跨过了特征")
+    return _j(res)
 
 
-def surface_fit(*args, **kwargs):
-    """M3 接口：把点云/参考曲线拟合为 SurfaceSpec 需要外部求解器（本包不依赖），明确拒绝。"""
-    return _err(_M3_FIT_MSG, stage="M3", op="fit", code="M3_NOT_IMPLEMENTED",
-                next_action="当前用 op=loft/sweep/patch 手工给截面/控制网格；或 vehicle_fit 的参数化 polyline 路线",
-                hint="纯 bpy+numpy 不做稳健曲面拟合；需要 OCCT/点云拟合后端接线后再开放。")
+def surface_offset(spec_or_object=None, distance_mm=None, max_tris=120000, name=None,
+                   collection=None):
+    """M5：沿顶点法线等距偏置（纯 numpy 近似）。正=向外，负=向内。
+
+    不是 BRep offset：尖角/凹处可能自交，回执给 verdict 与 self_intersections；
+    稳健圆角/偏置仍需 OCCT 后端。放在 api.py 是为了不引入 objects↔validate 循环。
+    """
+    t0 = time.perf_counter()
+    d = _num(distance_mm)
+    if d is None or abs(d) < 1e-9:
+        return _err("distance_mm 必须是非零有限数", stage="M5", op="offset",
+                    code="OFFSET_BAD_INPUT", hint="正数=沿法线向外，负数=向内；0 会被拒绝")
+    try:
+        verts_mm, faces, source, src_hash = _mm_mesh_from_source(spec_or_object)
+        tris = _faces_to_tris(faces)
+        if len(tris) == 0:
+            raise ValueError("源网格没有面")
+        off = offset_vertices(verts_mm, tris, d)
+    except ValueError as exc:
+        return _err(str(exc), stage="M5", op="offset", code="OFFSET_BAD_INPUT",
+                    hint="给 SurfaceSpec（dict）或 mesh 对象名；退化网格先修再偏置")
+    norm = {"kind": "offset", "units": "mm", "distance_mm": d, "source": source,
+            "source_hash": src_hash, "tessellation": {"u": 0, "v": 0}}
+    norm["spec_hash"] = _spec_hash(norm)
+    try:
+        _ob, info = _create_object({"verts_mm": off["verts"], "faces": tris.tolist()},
+                                   "offset", norm, name=name, collection=collection)
+    except ValueError as exc:
+        return _err("offset 生成失败：%s" % exc, stage="M5", op="offset",
+                    code="OFFSET_BUILD_FAILED")
+    si = _self_intersection(off["verts"], tris, max_tris)
+    verdict = ("fail" if si.get("state") == "fail"
+               else ("degraded" if si.get("state") == "degraded" else "pass"))
+    body = {"ok": True, "op": "offset", "kind": "offset", "method": "vertex_normal",
+            "quality": "approximate", "source": source, "distance_mm": _r(d, 6),
+            "object": info["object"], "collection": info["collection"], "mesh": info["mesh"],
+            "verts": info["verts"], "tris": info["tris"], "bbox_mm": info["bbox_mm"],
+            "zero_normal_verts": off["zero_normal"], "spec_hash": norm["spec_hash"],
+            "self_intersections": si.get("pairs"), "self_intersections_state": si.get("state"),
+            "verdict": verdict,
+            "note": "沿顶点法线的近似偏置（numpy），不是 BRep offset；尖角/凹处可能自交，看 verdict"}
+    if verdict != "pass":
+        body["next"] = "降低 |distance_mm|、提高源网格 tessellation，或改用内外两条 loft 建壁厚"
+    return _j(_receipt(body, t0))
 
 
 def surface_help():
     return _j({
         "module": "surface.py", "version": SURFACE_VERSION,
         "what": "曲面算法包：SurfaceSpec(M0) → loft/sweep/patch/tessellate 生成 bmesh 网格(M1) → "
-                "连续性/曲率/自交/厚度/质量体检(M2)；M5 blend/offset 明确未实现（需 OCCT）。纯 bpy+numpy。",
+                "连续性/曲率/自交/厚度/质量体检(M2)；M3 fit（切环拟合）、M5 offset（法线偏置）/"
+                "blend（过渡面）为纯 numpy 近似。稳健 BRep 圆角/偏置仍需 OCCT。",
         "ops": {
             "loft": {"sig": "sections=[{z_mm,points_mm:[[x,y],...]}], degree=3, continuity=G0|G1|G2, "
                            "closed=false, tessellation={u,v}|draft|normal|fine, name?, collection?",
@@ -336,12 +456,15 @@ def surface_help():
             "validate": {"sig": "spec_or_object, continuity=true, curvature=true, self_intersection=true, "
                                 "thickness=true, draft=false, min_thickness_mm?, max_curvature?, max_tris=120000",
                          "out": "ok/verdict(pass|fail|degraded)/metrics/checks/defects/skipped/next"},
-            "blend": {"sig": "a,b,...", "out": "M5：ok:false + 'not implemented in pure-python, OCCT backend required'"},
-            "offset": {"sig": "spec_or_object,distance_mm", "out": "M5：同上（纯 Python offset 会自交/翻面）"},
+            "blend": {"sig": "a,b（对象名=开放面片的边界环，或 [[x,y,z],...]）, rows=16, samples=24, closed=true",
+                      "out": "M5 近似：smoothstep 过渡面；method=smoothstep_bridge/quality=approximate"},
+            "offset": {"sig": "spec_or_object, distance_mm（正=向外）, max_tris=120000",
+                       "out": "M5 近似：顶点法线偏置；method=vertex_normal + verdict + self_intersections"},
             "export": {"sig": "spec_or_object, out_dir, name, apply_modifiers=true, selection_only=true, max_tris?",
                        "out": "直接导 GLB（工作台内置查看器可看，免渲染三视图）"},
-            "fit": {"sig": "points/curves + tolerance",
-                    "out": "M3：ok:false + 'not implemented in pure-python'（需点云/BRep 求解器）"},
+            "fit": {"sig": "points=[[x,y,z],...], axis=x|y|z, sections=8, ring=24, degree=2, "
+                           "tolerance_mm?",
+                    "out": "M3 近似：切环 → 极角排序 → 等弧长重采样 → loft；回执带 residual_mm 与 verdict"},
             "selftest": {"sig": "无参", "out": "三基准 + 自交/薄壁/连续性负例 + 坏参数"},
             "help": {"sig": "无参"},
         },
@@ -358,7 +481,10 @@ def surface_help():
             "自交：三角数超 max_tris ⇒ degraded（不当作无自交）；厚度只对闭合壳有意义",
         ],
         "deps": {"required": "K.dsh_kit", "optional": "audit（可再交叉跑 audit_mesh，本模块不强制）"},
-        "honest_limits": ["离散曲率/射线厚度都是近似", "M3 fit 未实现（需点云/BRep 求解器）", "M5 blend/offset 未实现（需 OCCT）",
+        "honest_limits": ["离散曲率/射线厚度都是近似",
+                          "M3 fit = 切环拟合（截面独立），不是 BRep/点云求解器；残差要看 residual_mm",
+                          "M5 offset = 顶点法线偏置、blend = smoothstep 过渡面；都可能自交/不保证相切",
+                          "稳健 BRep 圆角/偏置 / 真正 BRep 拟合仍需 OCCT（本包含纯 numpy）",
                           "patch/sweep 的连续性只查有接缝的方向；单张面片无内部缝",
                           "loft 的 z 沿 v 线性（不额外摆动）；截面参数按 z 归一化"],
     })

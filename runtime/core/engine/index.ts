@@ -46,6 +46,8 @@ export interface WorkerView {
   see: WorkerApi['workerSee']
   watch: WorkerApi['workerWatch']
   reset: WorkerApi['workerReset']
+  /** checkpoint / revert / checkpoints （痛点8）: file-level undo inside the hot worker. */
+  aux: WorkerApi['workerAux']
   status: WorkerApi['workerStatus']
   stop: WorkerApi['workerStop']
   restart: WorkerApi['workerRestart']

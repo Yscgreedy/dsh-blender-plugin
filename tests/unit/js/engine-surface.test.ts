@@ -45,6 +45,7 @@ describe('engine assembly', () => {
       expect(typeof engine[k], k).toBe('function')
     }
     expect(Object.keys(engine.worker).sort()).toEqual([
+      'aux',
       'exec',
       'list',
       'reset',

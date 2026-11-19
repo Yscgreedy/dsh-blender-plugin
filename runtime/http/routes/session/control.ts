@@ -8,6 +8,7 @@
 import type { HttpRouteDeps } from '../deps.js'
 import { objArg } from '../deps.js'
 import { hostProvenance } from '../../../core/evidence.js'
+import type { HostLayerProvenance } from '../../../core/evidence.js'
 import {
   decideReloadMode,
   emptyReloadReport,
@@ -57,6 +58,52 @@ function runtimeRelPath(prov: Record<string, unknown>): string {
   return 'lib/runtime/' + String(tail || 'engine.js')
 }
 
+/** hmr 的成因分三种：宿主层真有变 / 判不了 / force。回执必须说清是哪一种。 */
+function explainHmr(
+  host: HostLayerProvenance,
+  force: boolean,
+): {
+  root_cause: string
+  needsRestart: string[]
+  note: string
+} {
+  const changed = Number(host.changedCount || 0)
+  const files = Array.isArray(host.changedFiles) ? host.changedFiles.slice(0, 3).join(', ') : ''
+  if (changed > 0) {
+    return {
+      root_cause:
+        '宿主层变了 ' +
+        String(changed) +
+        ' 个文件（' +
+        files +
+        '）：重组合 profile 只有宿主做得到，Gateway 只能诊断',
+      needsRestart: [
+        '宿主层变了 ' +
+          String(changed) +
+          ' 个文件：必须由宿主重组合 profile（HMR）——工具面 blender_session action=reload 会写 ' +
+          'profile 的 cordis.patch.yml 触发它；HTTP 面拿不到这一步',
+      ],
+      note: 'Gateway 自身无需换：宿主层换代码必须由宿主重组合',
+    }
+  }
+  const why = force
+    ? 'force=true：跳过判据，强制重组合一次'
+    : '宿主层判不了（' +
+      String(host.note || '没有可信的已装载清单') +
+      '）：无法证明宿主 fiber 已是磁盘这一代'
+  return {
+    root_cause: why + '；判不了 ≠ 已是最新，所以不回 noop',
+    needsRestart: [
+      why +
+        '：只有宿主重组合能重写清单并自证 —— 工具面 blender_session action=reload 会写 profile 的 ' +
+        'cordis.patch.yml；HTTP 面拿不到这一步',
+    ],
+    note: force
+      ? 'force=true：已跳过判据，交给宿主重组合后重新自证'
+      : '宿主层判不了（清单缺失/读不到/不属于本安装）→ 交给宿主重组合，别再拿增量 diff 当「已是最新」',
+  }
+}
+
 /** 比对磁盘与已装载，给出 ReloadReport。apply=false 只诊断不动进程（dry-run）。 */
 export function buildReloadReport(
   E: HttpRouteDeps,
@@ -67,7 +114,12 @@ export function buildReloadReport(
   // 宿主层必须吃 fresh：刚构建完就问，不能命中 /health 的短 TTL 缓存
   const host = hostProvenance(true)
   const runtimeStale = runtimeVerdictOf(prov) === 'stale'
-  const mode: ReloadMode = decideReloadMode({ hostChanged: host.changedCount, runtimeStale })
+  // current / stale = 有可信的「已装载」两侧；unknown = 判不了（缺清单 / 别人的清单）
+  const hostKnown = host.verdict === 'current' || host.verdict === 'stale'
+  const force = payload.force === true || payload.force === 'true'
+  const mode: ReloadMode = force
+    ? 'hmr'
+    : decideReloadMode({ hostChanged: host.changedCount, runtimeStale, hostKnown })
 
   const paths: string[] = host.changedFiles.map((p) => 'lib/' + p)
   if (runtimeStale) paths.push(runtimeRelPath(prov))
@@ -81,10 +133,12 @@ export function buildReloadReport(
     pidAfter: process.pid,
     verdict: (mode === 'noop'
       ? 'current'
-      : String(prov.verdict || 'unknown')) as ReloadReport['verdict'],
+      : host.verdict === 'stale' || runtimeStale
+        ? 'stale'
+        : 'unknown') as ReloadReport['verdict'],
     staleLayer: Array.isArray(prov.staleLayer) ? (prov.staleLayer as string[]) : [],
     hotReload: hotReloadView(),
-    layers: { host, runtime: objArg(prov.runtime) },
+    layers: { host, runtime: objArg(prov.runtime), hostKnown, forced: force },
     ms: 0,
     note: '',
   })
@@ -99,22 +153,13 @@ export function buildReloadReport(
     // 连 mode 都读不到（下游第二轮验收的原话：被包成 "SESSION reload 失败 · request failed"）。
     report.code = 'reload_host_layer'
     report.stage = 'config'
-    report.root_cause =
-      '宿主层变了 ' +
-      String(host.changedCount) +
-      ' 个文件（' +
-      host.changedFiles.slice(0, 3).join(', ') +
-      '）：重组合 profile 只有宿主做得到，Gateway 只能诊断'
+    const why = explainHmr(host, force)
+    report.root_cause = why.root_cause
     report.fix =
       'blender_session action=reload（宿主面：写 profile 的 cordis.patch.yml 触发 HMR，并把同一份 ' +
       'ReloadReport 原样回给模型）；HTTP 面 POST /lease{action:"reload"} 只诊断'
-    report.needsRestart = [
-      '宿主层变了 ' +
-        String(host.changedCount) +
-        ' 个文件：必须由宿主重组合 profile（HMR）——工具面 blender_session action=reload 会写 ' +
-        'profile 的 cordis.patch.yml 触发它；HTTP 面拿不到这一步',
-    ]
-    report.note = 'Gateway 自身无需换：宿主层换代码必须由宿主重组合'
+    report.needsRestart = why.needsRestart
+    report.note = why.note
   } else if (mode === 'gateway-restart') {
     report.pending = true
     report.pidAfter = null

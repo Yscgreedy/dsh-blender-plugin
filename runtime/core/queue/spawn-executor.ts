@@ -7,11 +7,13 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CFG, IS_WIN } from '../../config.js'
+import { CFG, IS_WIN, wslToWin } from '../../config.js'
 import { BLENDER_EXE } from '../../paths.js'
 import { KERNEL_BOOTSTRAP } from '../kernel/bootstrap.js'
 import { preloadChunk } from '../kernel/api.js'
 import { envPrelude, scriptFileBlock, workdirBlock } from '../scripts.js'
+import { isRecord } from '../json.js'
+import { inputPathBaseList, resolveExistingInput } from '../../execution/input-paths.js'
 import type { JobExecutionResult, JobExecutor, JobHandle, JobRecord } from './types.js'
 
 export interface SpawnExecutorOptions {
@@ -31,6 +33,13 @@ function workRoot(): string {
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true })
+}
+
+// Relative job inputs: explicit workdir → caller session workspace → workspace env →
+// Gateway cwd. `workspace` is sent by the tool layer because the three env vars are
+// unset in the Gateway process on a default install (field report 3.2.0-alpha.1 P2).
+function jobPathBases(params: Record<string, unknown>) {
+  return inputPathBaseList(params.workdir, process.env, params.workspace)
 }
 
 interface Prepared {
@@ -148,7 +157,12 @@ function headlessPrelude(
     }
   }
   if (params.workdir) parts.push(workdirBlock(String(params.workdir)))
-  if (params.script_file) parts.push(scriptFileBlock(String(params.script_file)))
+  if (params.script_file)
+    parts.push(
+      scriptFileBlock(
+        resolveExistingInput(String(params.script_file), jobPathBases(params), 'script_file'),
+      ),
+    )
   return { code: parts.filter(Boolean).join('\n'), preloads: mods, bootstrap }
 }
 
@@ -224,9 +238,10 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
     DSH_ENV_KEYS: JSON.stringify(Object.keys(customEnv)),
   }
   if (job.kind === 'render') {
-    const file = asString(params.file)
+    const rawFile = asString(params.file)
+    const file = rawFile ? resolveExistingInput(rawFile, jobPathBases(params), 'file') : rawFile
     const args: string[] = []
-    if (file) args.push(file)
+    if (file) args.push(wslToWin(file))
     let output = asString(params.output)
     // A render without an explicit output still needs a persistent, writable place:
     // Blender's own fallback (C:/tmp on Windows) is not writable in every install.
@@ -254,13 +269,20 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
       bootstrap: false,
     }
   }
-  const file = asString(params.file)
+  // 痛点2：.blend 也必须在起进程之前存在。旧行为是把相对路径原样交给 Blender，
+  // 等它报 "Cannot read file" —— 一次 1.3 s 的进程白烧，而且回执只说 Blender exit 1。
+  const rawFile = asString(params.file)
+  const file = rawFile ? resolveExistingInput(rawFile, jobPathBases(params), 'file') : rawFile
   const args: string[] = []
-  if (file) args.push(file)
+  if (file) args.push(wslToWin(file))
   args.push('-b')
   if (params.factory_startup !== false) args.push('--factory-startup')
   const script = asString(params.script)
-  const scriptFile = asString(params.script_file)
+  const rawScriptFile = asString(params.script_file)
+  // 脚本路径同样先解析再写进 job.py（_dsh_target 与 prelude 用同一个绝对路径）
+  const scriptFile = rawScriptFile
+    ? resolveExistingInput(rawScriptFile, jobPathBases(params), 'script_file')
+    : rawScriptFile
   const prelude = headlessPrelude(params, env)
   if (script) {
     const scriptPath = path.join(tempDir, 'job.py')
@@ -319,6 +341,10 @@ function prepareFailure(
   code: 'blender_exe_missing' | 'job_prepare_failed' = 'blender_exe_missing',
 ): JobExecutionResult {
   const reason = e instanceof Error ? e.message : String(e)
+  // input_missing 的 tried / bases 是"到底按哪些根找过"的唯一证据，不能在这里丢掉。
+  const rawEvidence = (e as { evidence?: unknown } | null | undefined)?.evidence
+  const detail = isRecord(rawEvidence) ? rawEvidence : {}
+  const evidence = Object.keys(detail).length ? { blenderExe, ...detail } : { blenderExe }
   if (code === 'job_prepare_failed')
     return {
       exitCode: null,
@@ -332,7 +358,7 @@ function prepareFailure(
         root_cause: 'Could not prepare the Blender job: ' + reason,
         fix: 'Fix the reported cause (preload module name, args/env type), then resubmit.',
         fallback: { kind: 'unavailable', summary: 'fix the job parameters and resubmit' },
-        evidence: { blenderExe },
+        evidence,
       },
     }
   return {

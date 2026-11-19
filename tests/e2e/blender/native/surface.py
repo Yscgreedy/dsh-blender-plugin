@@ -130,8 +130,9 @@ def test_surface(ctx):
     try:
         bpy.context.scene.unit_settings.scale_length = 0.001       # 1 单位 = 1 mm
         h = _safe("help", {})
-        _rec("api.version", h.get("version") == 1, version=h.get("version"))
-        need = {"loft", "sweep", "patch", "tessellate", "validate", "selftest", "help"}
+        _rec("api.version", h.get("version") == 2, version=h.get("version"))
+        need = {"loft", "sweep", "patch", "tessellate", "validate", "fit", "blend", "offset",
+                "selftest", "help"}
         _rec("api.help_ops", need.issubset(set((h.get("ops") or {}).keys())),
              ops=sorted((h.get("ops") or {}).keys()))
 
@@ -247,11 +248,43 @@ def test_surface(ctx):
         _rec("tessellate.spec", ts.get("ok") is True and ts.get("mode") == "spec")
         _rec("tessellate.object", to.get("ok") is True and to.get("mode") == "object_bake")
 
-        # ---- M5：明确未实现 ----
+        # ---- M3 fit：圆柱点云 → 切环拟合 ----
+        cloud = []
+        for k in range(12):
+            z = 20.0 * k
+            for j in range(24):
+                ang = 2.0 * math.pi * j / 24.0
+                cloud.append([18.0 * math.cos(ang), 18.0 * math.sin(ang), z])
+        fit = _safe("fit", points=cloud, sections=6, ring=24, name="__surface_eval_fit")
+        if fit.get("object"):
+            MADE.append(fit["object"])
+        _rec("m3.fit_ok", fit.get("ok") is True and fit.get("verts", 0) > 0,
+             error=fit.get("error"), verdict=fit.get("verdict"))
+        resid = (fit.get("residual_mm") or {}).get("rmse_mm")
+        _rec("m3.fit_residual_submm", resid is not None and float(resid) < 0.5,
+             residual=fit.get("residual_mm"))
+
+        # ---- M5 offset / blend：可用近似（quality=approximate），不再 ok:false ----
+        off = _safe("offset", spec_or_object=bottle.get("object"), distance_mm=2.0,
+                    name="__surface_eval_offset")
+        if off.get("object"):
+            MADE.append(off["object"])
+        _rec("m5.offset_ok", off.get("ok") is True and off.get("method") == "vertex_normal",
+             error=off.get("error"), verdict=off.get("verdict"))
+        _rec("m5.offset_verdict", off.get("verdict") in ("pass", "degraded", "fail"))
+        ring_a = [[20.0 * math.cos(2.0 * math.pi * k / 24),
+                   20.0 * math.sin(2.0 * math.pi * k / 24), 0.0] for k in range(24)]
+        ring_b = [[14.0 * math.cos(2.0 * math.pi * k / 24),
+                   14.0 * math.sin(2.0 * math.pi * k / 24), 30.0] for k in range(24)]
+        bl = _safe("blend", a=ring_a, b=ring_b, rows=8, samples=24,
+                   name="__surface_eval_blend")
+        if bl.get("object"):
+            MADE.append(bl["object"])
+        _rec("m5.blend_ok", bl.get("ok") is True and bl.get("method") == "smoothstep_bridge"
+             and bl.get("verts", 0) > 0, error=bl.get("error"))
         rb = _safe("blend", a="x", b="y")
         ro = _safe("offset", distance_mm=1.0)
-        _rec("m5.blend_okfalse", rb.get("ok") is False and "OCCT" in str(rb.get("error") or ""))
-        _rec("m5.offset_okfalse", ro.get("ok") is False and "OCCT" in str(ro.get("error") or ""))
+        _rec("m5.bad_input_okfalse", rb.get("ok") is False and ro.get("ok") is False)
 
         # ---- 坏参数 ok:false ----
         badc = {

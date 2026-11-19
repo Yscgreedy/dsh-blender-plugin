@@ -145,7 +145,7 @@ describe('ext install hint stays pasteable and absolute', () => {
 
   it('offers the platform-specific open3d venv command', () => {
     const win = extInstallHint({ op: 'open3d', extDir, winPath: 'x', isWin: true, tried: [] })
-    expect(String(win.install)).toContain('py -3 -m venv venv')
+    expect(String(win.install)).toContain('python -m venv venv')
     expect(String(win.install)).toContain('venv\\Scripts\\pip install open3d')
     const posix = extInstallHint({ op: 'open3d', extDir, winPath: 'x', isWin: false, tried: [] })
     expect(String(posix.install)).toContain('python3 -m venv venv')
@@ -263,6 +263,41 @@ describe('extCheckOp public behavior (mocked child_process)', () => {
     >
     expect(out).toMatchObject({ tool: 'open3d', objects: 3 })
     expect(out.used).toBeTruthy()
+  })
+
+  it('turns a missing validator module into the install hint with readiness', async () => {
+    H.spawnSync.mockReturnValue({
+      stdout:
+        'RAW {"ok":false,"error":"validator 加载失败: Cannot find module \'./node_modules/gltf-validator\'"}',
+      stderr: '',
+      status: 0,
+      error: null,
+    })
+    const out = (await extCheckOp('gltf_validate', { path: 'D:\\x.glb' })) as Record<
+      string,
+      unknown
+    >
+    expect(out.ok).toBe(false)
+    expect(out.installed).toBe(false)
+    expect(String(out.dependency_error)).toContain('Cannot find module')
+    expect(typeof out.readiness).toBe('object')
+    expect(String(out.fix)).toContain('npm run setup:ext')
+  })
+
+  it('does not disguise a file error as a missing dependency', async () => {
+    H.spawnSync.mockReturnValue({
+      stdout: 'RAW {"ok":false,"error":"ENOENT: no such file or directory"}',
+      stderr: '',
+      status: 0,
+      error: null,
+    })
+    const out = (await extCheckOp('gltf_validate', { path: 'D:\\missing.glb' })) as Record<
+      string,
+      unknown
+    >
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('ENOENT')
+    expect(out.readiness).toBeUndefined()
   })
 
   it('returns the install hint when every candidate fails', async () => {

@@ -181,6 +181,14 @@
       "reason": "历史融合分析：P0-P2 是优先级分组，不是计划任务。"
     },
     {
+      "path": "docs/OCCT后端-接入计划.md",
+      "prefixes": [
+        "P",
+        "M"
+      ],
+      "reason": "暂缓的 OCCT 接入计划：P0-P6 是阶段编号，不是计划仓任务 ID。"
+    },
+    {
       "path": "docs/证据分级与读图纪律.md",
       "prefixes": [
         "E"
@@ -368,6 +376,41 @@
         "P"
       ],
       "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/core/queue/spawn-executor.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "src/host/workspace.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "src/tools/run/worker.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "tests/unit/js/session-workspace.test.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "tests/unit/js/worker-receipt.test.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
     }
   ]
 }

@@ -30,6 +30,7 @@ export function gltfResult(
     hints: iss.numHints,
     messages: msgs,
     used: run.used,
+    ...(parsed && parsed.error ? { error: String(parsed.error).slice(0, 300) } : {}),
     info:
       parsed && parsed.info
         ? (() => {

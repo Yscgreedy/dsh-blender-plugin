@@ -158,6 +158,50 @@ describe('model tool execution semantics (six-tool surface)', () => {
     })
   })
 
+  it('blender_see normalizes a custom from/look_at string into arrays for /view', async () => {
+    // 现场 bug：from="7,-7,5" 原样发给 addon 的 _spec → float(",") ValueError → 502
+    const mark = backend.requests.length
+    const out = await run('blender_see', {
+      viewpoint: 'custom',
+      from: '7,-7,5',
+      look_at: '0, 0, 1',
+    })
+    expect(out.text).toContain('SEE custom · 1024x576')
+    expect(requestSince(mark, 'POST', '/view')?.body).toMatchObject({
+      mode: 'viewport',
+      from: [7, -7, 5],
+      look_at: [0, 0, 1],
+      width: 1024,
+      height: 576,
+    })
+    // presence 也吃数组：字符串喂过去画不出视锥（isinstance(list) 判定）
+    const published = requestsSince(mark).filter(
+      (r: any) => r.path === '/lease' && r.body?.action === 'update_view',
+    )
+    expect(published[0]?.body.view).toMatchObject({
+      viewpoint: 'custom',
+      from: [7, -7, 5],
+      lookAt: [0, 0, 1],
+    })
+  })
+
+  it('blender_see accepts array and bracketed custom vectors', async () => {
+    const mark = backend.requests.length
+    await run('blender_see', { viewpoint: 'custom', from: [1, -2, 3], look_at: '(0 0 1)' })
+    expect(requestSince(mark, 'POST', '/view')?.body).toMatchObject({
+      from: [1, -2, 3],
+      look_at: [0, 0, 1],
+    })
+  })
+
+  it('blender_see rejects an unparsable custom vector before calling /view', async () => {
+    const mark = backend.requests.length
+    const out = await run('blender_see', { viewpoint: 'custom', from: '7,,x', look_at: '0,0,1' })
+    expect(out.text).toContain('invalid_params')
+    expect(out.text).toContain('7,,x')
+    expect(requestsSince(mark).some((r: any) => r.path === '/view')).toBe(false)
+  })
+
   it('blender_see captures the evaluated camera without moving it', async () => {
     const mark = backend.requests.length
     const out = await run('blender_see', { viewpoint: 'camera', force: true })

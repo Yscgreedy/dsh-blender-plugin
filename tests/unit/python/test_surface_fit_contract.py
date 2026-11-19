@@ -1,8 +1,8 @@
-"""Static contract for the honest surface_fit receipt.
+"""Static contract for surface_fit / surface_blend / surface_offset.
 
 This test never imports bpy: it parses runtime/py/geometry/surface.py plus its
-surface_impl package and asserts the catalog-declared `fit` op is actually
-registered with an explicit M3 refusal.
+surface_impl package and asserts the catalog-declared ops are implemented as the
+honest pure-numpy approximations (not the old "M3/M5 refusal" stubs).
 """
 import ast
 import json
@@ -25,10 +25,6 @@ def _trees():
     return [(path, ast.parse(source)) for path, source in _sources()]
 
 
-def _tree():
-    return ast.parse(SURFACE.read_text(encoding="utf-8"))
-
-
 def test_surface_fit_is_registered():
     found = False
     for _, tree in _trees():
@@ -46,11 +42,21 @@ def test_surface_fit_is_registered():
     assert found, "surface.py must register the catalog-declared fit op"
 
 
-def test_surface_fit_is_honest():
+def test_surface_fit_is_implemented_not_a_stub():
     source = "\n".join(text for _, text in _sources())
     assert "def surface_fit(" in source
-    assert "M3_NOT_IMPLEMENTED" in source
-    assert '"fit": {' in source
+    assert "fit_loft_sections(" in source
+    assert "sliced_ring_fit" in source
+    assert "M3_NOT_IMPLEMENTED" not in source
+    assert "not implemented in pure-python" not in source
+
+
+def test_surface_blend_and_offset_are_implemented():
+    source = "\n".join(text for _, text in _sources())
+    assert "def surface_blend(" in source and "blend_rings(" in source
+    assert "def surface_offset(" in source and "offset_vertices(" in source
+    assert "_OCCT_MSG" not in source
+    assert 'quality": "approximate"' in source
 
 
 def test_catalog_and_lock_agree_on_surface_ops():
@@ -58,43 +64,3 @@ def test_catalog_and_lock_agree_on_surface_ops():
     surface = next(f for f in lock["families"] if f["f"] == "surface")
     assert surface["ops"] == 11
     assert lock["ops_count"] == 261
-
-
-def _surface_fit_function():
-    """Compile the real surface_fit body without importing bpy/numpy."""
-    for path, tree in _trees():
-        fn = next(
-            (node for node in tree.body
-             if isinstance(node, ast.FunctionDef) and node.name == "surface_fit"),
-            None,
-        )
-        if fn is None:
-            continue
-        message = next(
-            node for node in tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "_M3_FIT_MSG" for target in node.targets)
-        )
-        namespace = {
-            "_err": lambda msg, **kw: {
-                "ok": False,
-                "error": str(msg),
-                "hint": kw.pop("hint", None),
-                **kw,
-            }
-        }
-        exec(compile(ast.Module(body=[message, fn], type_ignores=[]), str(path), "exec"), namespace)
-        return namespace["surface_fit"]
-    raise AssertionError("surface_fit not found in surface.py or surface_impl")
-
-
-def test_surface_fit_executes_the_honest_refusal():
-    """The op must actually refuse with ok:false + reason + next_action."""
-    receipt = _surface_fit_function()(points=[])
-    assert receipt["ok"] is False
-    assert receipt["stage"] == "M3"
-    assert receipt["op"] == "fit"
-    assert receipt["code"] == "M3_NOT_IMPLEMENTED"
-    assert "fit not implemented" in receipt["error"]
-    assert receipt["next_action"].strip()
-    assert receipt["hint"].strip()

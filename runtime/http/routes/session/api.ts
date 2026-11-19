@@ -9,6 +9,11 @@ import { currentCaller } from '../../caller.js'
 import type { AvailabilityFailure } from '../../../core/availability.js'
 import type { SessionRegistry } from '../../../core/sessions/registry.js'
 import type { CallerIdentity, SessionResult, ViewPose } from '../../../core/sessions/types.js'
+import {
+  approveConsentRequest,
+  consentApproveCommand,
+  denyConsentRequest,
+} from '../../../core/sessions/consent-requests.js'
 
 function statusFor(result: AvailabilityFailure): number {
   if (result.code === 'invalid_params') return 400
@@ -36,6 +41,89 @@ export interface SessionControl {
   /** 回执自带 ok/code 字段（与 SessionResult 同构），直接当 body 透给调用方。 */
   reload: (payload: Record<string, unknown>) => Record<string, unknown>
   shutdown: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** Base URL of this Gateway (for the human consent command in a receipt). */
+  httpBase?: string
+}
+
+/** Add the exact human approve/deny commands to a consent_required receipt. */
+function withHumanAction(
+  body: Record<string, unknown>,
+  control?: SessionControl,
+): Record<string, unknown> {
+  if (String(body.code || '') !== 'consent_required') return body
+  const evidence = (body.evidence || {}) as Record<string, unknown>
+  const requestId = String(evidence.request_id || '')
+  const base = control && control.httpBase ? control.httpBase : ''
+  if (!requestId || !base) return body
+  return {
+    ...body,
+    request_id: requestId,
+    human_action: {
+      approve: consentApproveCommand(base, requestId),
+      deny: consentApproveCommand(base, requestId, 'consent_deny'),
+      form: 'run it in any terminal on the Gateway host (PowerShell or bash)',
+      then: 'call blender_session action=start kind=virtual-gui again; the approved request is consumed once',
+      preapprove_env: 'DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow on the Gateway host skips this step',
+    },
+  }
+}
+
+/**
+ * The human side of the consent gate. A terminal has no DSH identity headers, so
+ * approve/deny are the only actions allowed without a caller — and they need the
+ * unguessable request id that a start just showed to the human.
+ */
+function humanConsentAction(
+  action: string,
+  payload: Record<string, unknown>,
+): SessionApiResult | null {
+  if (action !== 'consent_approve' && action !== 'consent_deny') return null
+  const decided =
+    action === 'consent_approve'
+      ? approveConsentRequest(payload.requestId, 'human')
+      : denyConsentRequest(payload.requestId, String(payload.reason || 'human denied'))
+  if (!decided.ok)
+    return {
+      status: decided.reason === 'missing' ? 404 : 409,
+      body: {
+        ok: false,
+        code: 'consent_' + decided.reason,
+        root_cause: 'consent request ' + String(payload.requestId || '') + ' is ' + decided.reason,
+        fix:
+          decided.reason === 'missing'
+            ? 'use the request_id from the blender_session action=start receipt'
+            : 'ask the agent to call action=start again to file a fresh request',
+        evidence: { requestId: payload.requestId || null, reason: decided.reason },
+      },
+    }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      decided: action === 'consent_approve' ? 'approved' : 'denied',
+      request: decided.request,
+      then: 'the agent calls blender_session action=start kind=virtual-gui again',
+    },
+  }
+}
+
+/** Agent-facing consent actions (identity present). */
+function agentConsentAction(
+  registry: SessionRegistry,
+  action: string,
+  payload: Record<string, unknown>,
+): SessionResult<Record<string, unknown>> | null {
+  if (action === 'consent_request')
+    return registry.requestConsent(currentCaller() as CallerIdentity)
+  if (action === 'consent_status') return registry.consentStatus(currentCaller() as CallerIdentity)
+  if (action === 'consent_approve')
+    return registry.approveConsent(
+      payload.requestId,
+      'agent:' + String(payload.source || 'explicit'),
+    )
+  if (action === 'consent_deny')
+    return registry.denyConsent(payload.requestId, String(payload.reason || 'denied'))
+  return null
 }
 
 export async function dispatchSessionAction(
@@ -46,6 +134,8 @@ export async function dispatchSessionAction(
 ): Promise<SessionApiResult> {
   const caller = currentCaller()
   if (!caller) {
+    const human = humanConsentAction(action, payload)
+    if (human) return human
     return {
       status: 400,
       body: {
@@ -55,9 +145,13 @@ export async function dispatchSessionAction(
       },
     }
   }
-  const result = await runSessionAction(registry, caller, action, payload, control)
+  const consent = agentConsentAction(registry, action, payload)
+  const result = consent || (await runSessionAction(registry, caller, action, payload, control))
   if (!result.ok)
-    return { status: statusFor(result), body: result as unknown as Record<string, unknown> }
+    return {
+      status: statusFor(result),
+      body: withHumanAction(result as unknown as Record<string, unknown>, control),
+    }
   return { status: 200, body: result as unknown as Record<string, unknown> }
 }
 
@@ -100,7 +194,7 @@ async function runSessionAction(
       return { ok: true, sessions: registry.listFor(caller) }
     case 'attach':
     case 'claim':
-      return registry.attach(caller, {
+      return registry.attachChecked(caller, {
         instanceId: payload.instanceId === undefined ? undefined : String(payload.instanceId),
         kind: payload.kind === undefined ? undefined : (String(payload.kind) as 'user-gui'),
       })
@@ -170,7 +264,7 @@ async function runSessionAction(
         code: 'invalid_params',
         stage: 'config',
         root_cause: 'unknown session action: ' + action,
-        fix: 'use list, attach, claim, detach, release, status, doctor, consent, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
+        fix: 'use list, attach, claim, detach, release, status, doctor, consent, consent_request, consent_status, consent_approve, consent_deny, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
         fallback: { kind: 'unavailable', summary: 'the session action was not executed' },
         evidence: { action },
       }

@@ -191,7 +191,9 @@ export class VirtualGuiLifecycle {
       lastActivityAt: now,
     }
     this.host.addSession(session)
-    return { ok: true, session: sessionView(session) }
+    // consent_source tells the caller why it was allowed (policy / token / human
+    // approval) — the field the 3.1 receipt was missing when start was refused.
+    return { ok: true, session: { ...sessionView(session), consent_source: gated.consent_source } }
   }
 
   async stop(

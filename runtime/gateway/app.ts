@@ -93,13 +93,27 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
   installPresencePublisher(addonClient)
   const engine = createEngine({ addonClient: addonClient as unknown as AddonClient })
   const selectionStore = createSelectionStore()
-  const sessionRegistry = new SessionRegistry(() =>
-    (gatewayInstances(addonClient) || []).map((x) => ({
-      instanceId: x.instanceId,
-      kind: x.kind,
-      ready: x.ready,
-      project: x.project,
-    })),
+  const sessionRegistry = new SessionRegistry(
+    () =>
+      (gatewayInstances(addonClient) || []).map((x) => ({
+        instanceId: x.instanceId,
+        kind: x.kind,
+        ready: x.ready,
+        project: x.project,
+      })),
+    {
+      // attachChecked: the transport-level ping is the only proof that the
+      // addon inside that Blender still runs its command loop.
+      verify: async (instanceId: string): Promise<boolean> => {
+        try {
+          const reply = await addonClient.send('ping', {}, 3000, { instanceId })
+          const rec = reply && typeof reply === 'object' ? (reply as Record<string, unknown>) : {}
+          return rec.ok !== false
+        } catch {
+          return false
+        }
+      },
+    },
   )
   registryRef.current = sessionRegistry
   setSessionRegistry(sessionRegistry)

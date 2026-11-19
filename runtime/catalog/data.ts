@@ -130,7 +130,7 @@ export const PLAN_CATALOG: PlanFamily[] = [
     write_scope: 'exclusive',
     prefix: 'audit_',
     when: '装配体检与出厂门：连通 / 干涉 / 包络 / 漂移 / 量测 / 重复件 / 浮块',
-    not: '主观"像不像"（那走 qc_*）；**别目测代替体检** —— 用 audit_*（summary_only 瘦身）；**装配口径**：连通门是「单体船」口径（默认 0.3 mm）—— 222 个独立零件的正常装配必然被报浮空；多零件请调 micro_gap_mm（1–2 mm）或走 gate_plan(preset="assembly")',
+    not: '主观"像不像"（那走 qc_*）；**别目测代替体检** —— 用 audit_*（summary_only 瘦身）；**门档**：audit_scene 默认 profile="screen" 是初筛（跳过自交 ⇒ gate_ready=false），要当门用 profile="gate"（自动 self_intersect=true + summary_only=true）；**装配口径**：连通门是「单体船」口径（默认 0.3 mm）—— 222 个独立零件的正常装配必然被报浮空；多零件请调 micro_gap_mm（1–2 mm）或走 gate_plan(preset="assembly")',
     sk: 'blender_op(op="audit_scene", args={}) → "audit_mesh"(objects=[...]) → "audit_gate"(scope="COL_Geo", envelope=[[min],[max]])',
     ops: [
       'mesh',
@@ -148,7 +148,7 @@ export const PLAN_CATALOG: PlanFamily[] = [
       'gate_selftest',
       'help',
     ],
-    key: '相接口径 micro_gap_mm 默认 0.3（3D 打印口径）；带设计间隙的装配件按工艺给 1–2；audit_interference/overlap 支持 file= 跨 .blend；回执太大时加 summary_only=true / top_k=N（实测 40 对象场景 9,176→1,148 字符，判定不变）',
+    key: '相接口径 micro_gap_mm 默认 0.3（3D 打印口径）；带设计间隙的装配件按工艺给 1–2；audit_interference/overlap 支持 file= 跨 .blend；回执太大时加 summary_only=true / top_k=N（实测 40 对象场景 9,176→1,148 字符，判定不变）；audit_scene 读 gate_ready：false 表示这次没跑自交、不能当门',
   },
   {
     f: 'qc',
@@ -385,7 +385,7 @@ export const PLAN_CATALOG: PlanFamily[] = [
     write_scope: 'exclusive',
     prefix: 'surface_',
     when: '复杂曲面要参数化候选：loft/sweep/patch → tessellate → validate → export(GLB)',
-    not: '不是雕刻/有机建模；**M1 截面间 B-spline 插值、z 线性；M3 fit、M5 blend/offset 未实现（需 OCCT）**；**参考图 IoU / 材质 / 打印检查仍需 qc_render_views / print_report**',
+    not: '不是雕刻/有机建模；**M1 截面间 B-spline 插值、z 线性；M3 fit、M5 blend/offset 为纯 numpy 近似（quality=approximate；稳健 BRep 圆角/偏置需 OCCT）**；**参考图 IoU / 材质 / 打印检查仍需 qc_render_views / print_report**',
     sk: 'op="surface_loft", args={sections:[{z_mm:0,points_mm:[[-100,-50],...]},{z_mm:200,...}], tessellation:{u:24}, name:"R1-A"} → op="surface_tessellate"（拿 object）→ op="surface_export", args={spec_or_object:"SURF_loft_xxx", out_dir:"D:/out", name:"R1-A"}',
 
     ops: [

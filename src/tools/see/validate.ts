@@ -5,6 +5,7 @@
  * toolError envelope（{ text, envelope }），execute 层原样返回给模型。
  */
 import { text } from '../../contracts/dynamic.js'
+import { numTriple } from '../../host/http.js'
 import { toolError } from '../errors.js'
 
 const ASPECT_SIZES: Record<string, [number, number]> = {
@@ -23,6 +24,7 @@ const DEFAULT_ASPECT = '16:9'
 const CUSTOM_ONLY = ['lens', 'ortho', 'ortho_scale'] as const
 const ASPECT_FIX =
   'aspect=1:1|4:3|16:9；max_size 必须是对应比例的固定档位（1:1: 544/768/1024/1280；4:3: 640/960/1280；16:9: 1024/1152/1280）'
+const VEC_FIX = '写法 from="7,-7,5" / "7, -7, 5" / [7,-7,5]（世界坐标 x,y,z，三个数字）'
 
 export interface Dims {
   aspect: string
@@ -38,8 +40,8 @@ export interface FramePlan {
   full?: boolean
   area?: number
   camera?: string
-  from?: string
-  lookAt?: string
+  from?: number[]
+  lookAt?: number[]
   lens?: number
   ortho?: boolean
   orthoScale?: number
@@ -53,8 +55,8 @@ export interface SequencePlan {
   kind: 'sequence'
   viewpoint: 'viewport' | 'custom'
   dims: Dims
-  from?: string
-  lookAt?: string
+  from?: number[]
+  lookAt?: number[]
   lens?: number
   ortho?: boolean
   orthoScale?: number
@@ -90,6 +92,28 @@ function invalidParams(message: string, fix: string): Failure {
 
 function has(v: unknown): boolean {
   return v !== undefined && v !== null && String(v).trim() !== ''
+}
+
+/**
+ * from / look_at 归一化：字符串 "7,-7,5"（含空格、分号、[] () 包裹）与数组都收，
+ * 统一转成 [x,y,z] 再发给 /view。
+ *
+ * 现场 bug（3.2.0-alpha.1 复测）：这里原来把原样字符串塞进 /view，addon 的 _spec 对字符串
+ * 迭代字符 → `float(",")` ValueError → HTTP 502 backend_error，模型只看到一句
+ * "SEE custom 失败 · view 失败"，完全看不出是自己写法的问题。现在解析前置：坏值回
+ * invalid_params 并带上**原串**，好值发数组（presence 也要求数组才画视锥）。
+ */
+function vec3(value: unknown, field: string): number[] | Failure {
+  // 与 addon 的 _vec3 同口径：先去掉 "[...]" / "(...)" 外壳，再按逗号/空白切
+  let subject: unknown = typeof value === 'string' ? value.trim() : value
+  if (typeof subject === 'string' && /^[[(].*[\])]$/.test(subject)) subject = subject.slice(1, -1)
+  const nums = numTriple(subject)
+  if (!nums || nums.length !== 3 || !nums.every((n) => Number.isFinite(n)))
+    return invalidParams(
+      field + ' 需要 3 个数字，收到 ' + JSON.stringify(value === undefined ? null : value),
+      VEC_FIX,
+    )
+  return nums
 }
 
 /** 固定档位解析；失败时给出统一 fix。 */
@@ -159,6 +183,17 @@ function sequenceView(
   return rejectCustomOnly('viewport', args)
 }
 
+/** custom 的 from/look_at（存在性由调用方先查；这里只负责解析）。 */
+function customVectors(
+  args: Record<string, unknown>,
+): { from: number[]; lookAt: number[] } | Failure {
+  const from = vec3(args.from, 'from')
+  if (!Array.isArray(from)) return from
+  const lookAt = vec3(args.look_at, 'look_at')
+  if (!Array.isArray(lookAt)) return lookAt
+  return { from, lookAt }
+}
+
 function buildSequence(
   args: Record<string, unknown>,
   viewpoint: 'viewport' | 'custom',
@@ -171,12 +206,14 @@ function buildSequence(
   if ('text' in dims) return dims
   const viewRejected = sequenceView(args, viewpoint)
   if (viewRejected) return viewRejected
+  const vectors = viewpoint === 'custom' ? customVectors(args) : null
+  if (vectors && 'text' in vectors) return vectors
   return {
     kind: 'sequence',
     viewpoint,
     dims,
-    from: text(args.from) || undefined,
-    lookAt: text(args.look_at) || undefined,
+    from: vectors ? vectors.from : undefined,
+    lookAt: vectors ? vectors.lookAt : undefined,
     lens: args.lens === undefined ? undefined : Number(args.lens),
     ortho: args.ortho === undefined ? undefined : !!args.ortho,
     orthoScale: args.ortho_scale === undefined ? undefined : Number(args.ortho_scale),
@@ -243,12 +280,14 @@ function customFrame(args: Record<string, unknown>): FramePlan | Failure {
     )
   const dims = dimsOrFailure(text(args.aspect).trim() || DEFAULT_ASPECT, args.max_size)
   if ('text' in dims) return dims
+  const vectors = customVectors(args)
+  if ('text' in vectors) return vectors
   return {
     kind: 'frame',
     viewpoint: 'custom',
     dims,
-    from: text(args.from),
-    lookAt: text(args.look_at),
+    from: vectors.from,
+    lookAt: vectors.lookAt,
     lens: args.lens === undefined ? undefined : Number(args.lens),
     ortho: args.ortho === undefined ? undefined : !!args.ortho,
     orthoScale: args.ortho_scale === undefined ? undefined : Number(args.ortho_scale),

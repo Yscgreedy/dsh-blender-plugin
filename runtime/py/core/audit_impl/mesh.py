@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Split from audit.py; behavior preserved by the facade."""
 from .common import *  # noqa: F401,F403
+from .scene_profile import GATE_HINT, resolve_scene_profile
 
 
 def _mesh_totals():
@@ -461,15 +462,22 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
     _genus_finalize(total)
     return _j(_mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect))
 
-def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_k=None,
-                self_intersect=False):
+def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=None, top_k=None,
+                self_intersect=None, profile="screen"):
     """全场景体检：先给你"哪几个对象最脏"，再按需 audit_mesh 深挖。
 
     v0.9.6（瘦身）：summary_only=true 只回判据字段；top_k=N 只回最脏的 N 个（默认沿用 limit）。
     v0.9.6（复审修复）：自交检查**默认不跑**（保持"一次便宜的初筛"这个性能契约），但这时结论只能是
-        **degraded**（clean=false）——"跳过检查"不许读成"没问题"。要一条能当门用的完整结论，
-        传 self_intersect=true（全场景逐对象跑一遍 BVH 自交，代价按面数走）。
+        **degraded**（clean=false）——"跳过检查"不许读成"没问题"。
+    v3.2（门档）：profile="gate" 强制 self_intersect=True + summary_only=True，回执 gate_ready=true；
+        profile="screen"（默认）是初筛，gate_ready=false 且回执带 next —— 别把初筛读成门，也别为
+        一个"没跑的检查"去改几何。
     """
+    prof, perr = resolve_scene_profile(profile, self_intersect, summary_only)
+    if perr:
+        return _j(dict(perr, ok=False, op="scene"))
+    summary_only = prof["summary_only"]
+    self_intersect = prof["self_intersect"]
     objs = [o for o in bpy.context.scene.objects if o.type == "MESH"]
     if not objs:
         return _j({"ok": False, "error": "场景里 0 个 mesh（build 空跑？）"})
@@ -508,7 +516,7 @@ def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_
         rows_out = [{kk: vv for kk, vv in row.items() if kk in _keep} for row in rows_out]
     reason = ""
     if state == "degraded":
-        reason = ("初筛跳过了自交检查" if not self_intersect else "") + \
+        reason = ("初筛（profile=screen）跳过了自交检查" if not self_intersect else "") + \
                  ("；" if not self_intersect else "") + \
                  ("%d 个对象判不出来（见 worst[].normals_state/state）" % len([x for x in states if x == "degraded"])
                   if any(x == "degraded" for x in states) else "")
@@ -516,12 +524,16 @@ def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=False, top_
     payload = {"ok": True, "count": len(objs), "totals": tot, "worst": rows_out,
                "clean": bool(r.get("clean") and state == "pass" and self_intersect),
                "state": state, "verdict": state, "reason": reason,
+               "profile": prof["profile"], "gate_ready": bool(prof["gate_ready"]),
+               "profile_forced": list(prof["forced"]),
                "self_intersections_analyzed": bool(self_intersect), "aabb": r.get("aabb"),
                "slim": {"summary_only": bool(summary_only), "top_k": k, "rows_returned": len(rows_out)},
                "note": "worst 按 score=boundary+3*nonmanifold+2*degenerate+2*selfint+loose 排序；"
                        "深挖用 audit_mesh(objects=[...])；"
-                       "本 op 默认**不跑自交检查** ⇒ verdict=degraded（clean=false）——"
-                       "要能当门用的完整结论请传 self_intersect=true；回执太大时加 summary_only=true / top_k=N"}
+                       "screen 档默认**不跑自交检查** ⇒ verdict=degraded（clean=false）且 gate_ready=false；"
+                       "要当门用传 profile=\"gate\"（或 self_intersect=true）；回执太大时加 summary_only=true / top_k=N"}
+    if not prof["gate_ready"]:
+        payload["next"] = GATE_HINT
     if state == "degraded":
         payload["warn"] = "DEGRADED ≠ 通过：" + reason
     return _j(payload)

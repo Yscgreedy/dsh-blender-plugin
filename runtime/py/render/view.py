@@ -21,7 +21,7 @@
   camera           当前帧 evaluated 相机（含约束/驱动器）的视角；不改 scene.camera/帧/选择，输出渲染比例
   render           临时相机 + bpy.ops.render.opengl（Workbench/EEVEE 快渲），用完彻底还原
 """
-import bpy, json, time, os, struct, zlib, tempfile
+import bpy, json, time, os, re, struct, zlib, tempfile
 
 VIEW_VERSION = 3
 
@@ -47,6 +47,28 @@ _j = _KIT.j  # 共享内核（原自带实现已删）
 def _kernel():
     import sys
     return sys.modules.get("dsh_rt_kernel")
+
+# ---------------------------------------------------------------- 坐标解析
+_VEC_SPLIT = re.compile(r"[,\s;]+")
+
+def _vec3(value, default, field="vector"):
+    """字符串 "7,-7,5" / "[7,-7,5]" 与数组 [7,-7,5] 都收 → [x,y,z]。
+    现场 bug（3.2.0-alpha.1）：_spec 曾 [float(v) for v in frm] 迭代字符串 → float(",") ValueError
+    → custom 取帧 502。失败一律报**原串**，否则远程只看到逗号。
+    """
+    raw = value
+    if isinstance(value, str):
+        body = value.strip().strip("[]()")
+        value = [part for part in _VEC_SPLIT.split(body) if part]
+    if value is None:
+        return [float(v) for v in default]
+    try:
+        out = [float(v) for v in value]
+        if len(out) != 3:
+            raise ValueError("需要 3 个分量")
+        return out
+    except (TypeError, ValueError):
+        raise ValueError("%s 解析失败：%r —— 要 3 个数字，形如 '7,-7,5' 或 [7,-7,5]" % (field, raw))
 
 
 # ---------------------------------------------------------------- 矩阵
@@ -144,13 +166,14 @@ def _find_view3d(area_index=None):
 
 def _spec(spec):
     s = dict(spec or {})
-    frm = s.get("from") or s.get("loc") or s.get("location") or [7.0, -7.0, 5.0]
-    look = s.get("look_at") or s.get("target") or s.get("to") or [0.0, 0.0, 1.0]
+    frm = s.get("from") or s.get("loc") or s.get("location")
+    look = s.get("look_at") or s.get("target") or s.get("to")
     w = int(s.get("width") or (s.get("resolution") or [960, 540])[0])
     h = int(s.get("height") or (s.get("resolution") or [960, 540])[1])
     return {
-        "from": [float(v) for v in frm],
-        "look_at": [float(v) for v in look],
+        # 字符串 "7,-7,5" 与数组 [7,-7,5] 都收；解析失败报原串（见 _vec3）
+        "from": _vec3(frm, [7.0, -7.0, 5.0], "from"),
+        "look_at": _vec3(look, [0.0, 0.0, 1.0], "look_at"),
         "lens": float(s.get("lens", 50.0)),
         "sensor": float(s.get("sensor_width", s.get("sensor", 36.0))),
         "sensor_fit": str(s.get("sensor_fit", "AUTO")),

@@ -18,8 +18,8 @@ export interface SequenceOpts {
   seconds: number
   fps: number
   force: boolean
-  from?: string
-  lookAt?: string
+  from?: number[]
+  lookAt?: number[]
   lens?: number
   ortho?: boolean
   orthoScale?: number

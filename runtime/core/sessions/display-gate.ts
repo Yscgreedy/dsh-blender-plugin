@@ -1,6 +1,7 @@
 // Pre-spawn gate for virtual-gui sessions. It returns the same availability
 // envelope as the rest of the Gateway and never spawns Blender/display helpers.
-import { consentFailure, consumeConsentToken } from './consent.js'
+import { consentFailure, consentPolicy, consumeConsentToken } from './consent.js'
+import { ensureConsentRequest, takeApprovedToken } from './consent-requests.js'
 import { fail } from './types.js'
 import type { CallerIdentity, SessionRecord, SessionResult } from './types.js'
 import type { DisplayCapabilities } from '../../display/types.js'
@@ -15,7 +16,7 @@ export interface VirtualGuiStartInput {
 
 export function startVirtualGuiGate(
   input: VirtualGuiStartInput,
-): SessionResult<{ capability: DisplayCapabilities }> {
+): SessionResult<{ capability: DisplayCapabilities; consent_source?: string }> {
   const { capability, existing } = input
   if ((input.kind || 'virtual-gui') !== 'virtual-gui')
     return fail(
@@ -65,7 +66,22 @@ export function startVirtualGuiGate(
       capability.fix,
       evidence,
     )
+  // Consent resolution, in the order the human would expect:
+  //   host policy → one-time token → a request this caller already got approved.
+  const policy = consentPolicy()
+  if (policy === 'deny')
+    return consentFailure<{ capability: DisplayCapabilities }>('policy_denied', { policy })
+  if (policy === 'allow') return { ok: true, capability, consent_source: 'policy:' + policy }
   const consent = consumeConsentToken(input.caller, input.consentToken)
-  if (consent !== 'ok') return consentFailure<{ capability: DisplayCapabilities }>(consent)
-  return { ok: true, capability }
+  if (consent === 'ok') return { ok: true, capability, consent_source: 'token' }
+  if (consent === 'missing' && takeApprovedToken(input.caller))
+    return { ok: true, capability, consent_source: 'approved_request' }
+  // Nothing to consume: file (or reuse) the request the human can approve, so the
+  // failure carries an id instead of a dead end.
+  const request = ensureConsentRequest(input.caller)
+  return consentFailure<{ capability: DisplayCapabilities }>(consent, {
+    policy,
+    requestId: request.requestId,
+    expiresAt: request.expiresAt,
+  })
 }

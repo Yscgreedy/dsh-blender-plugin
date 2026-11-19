@@ -11,11 +11,17 @@ export const TOOL_DETAIL: Record<string, string> = {
     LF +
     '动作：list | status | doctor | attach | claim | detach | release | grant | revoke | grants |' +
     LF +
-    '  pause | resume | mark_read | presence | heartbeat | start | stop | txn | help' +
+    '  pause | resume | mark_read | presence | heartbeat | start | stop | consent_request | consent_status |' +
+    LF +
+    '  consent_approve | consent_deny | txn | help' +
     LF +
     'attach：用户已打开 Blender 后在 N 面板点 Connect；多实例必须给 instance_id（status 里能看到）。' +
     LF +
-    'start/stop 只作用 virtual-gui；第一次 start 返回 consent_required，等用户授权后由宿主带一次性 token 重试。' +
+    'attach 会做一次 live ping：addon 掉线回 addon_disconnected / addon_unresponsive，不再回 ok/ready。' +
+    LF +
+    'start/stop 只作用 virtual-gui；第一次 start 返回 consent_required，回执带 request_id 与人类要跑的一行' +
+    LF +
+    '  approve/deny 命令（批准只消费一次），或在 Gateway 主机设 DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow 预批准。' +
     LF +
     '写到别的 agent 的场景区域需要 grant scope：exclusive | collection:名 | prefix:名 | object:名；' +
     LF +
@@ -69,7 +75,11 @@ export const TOOL_DETAIL: Record<string, string> = {
     LF +
     '固定档位 aspect=1:1（544/768/1024/1280）、4:3（640/960/1280）、16:9（1024/1152/1280），默认 16:9+1024；' +
     LF +
-    '  只给 aspect 取该比例最小档；非法 max_size 直接 invalid_params（不夹取）；view_size 已删除。' +
+    '  必须配对：aspect=16:9 + max_size=768 直接 invalid_params（768 只属于 1:1 / camera），不夹取；' +
+    LF +
+    '  只给 aspect 取该比例最小档；view_size 已删除。' +
+    LF +
+    'from/look_at（custom）收字符串 "7,-7,5" / "7, -7, 5" 或数组 [7,-7,5]；坏值回 invalid_params 并回显原值。' +
     LF +
     'camera 只 frame：用当前帧 evaluated 相机（object matrix/约束/驱动器/lens/sensor/shift/ortho），不改 scene.camera、' +
     LF +
@@ -86,6 +96,14 @@ export const TOOL_DETAIL: Record<string, string> = {
     '  不接受 script；frames 给区间自动 -a，支持相机动画）；kind=headless 用 fresh blender -b 跑脚本' +
     LF +
     '  （script / script_file / file / outdir / timeout_ms / engine / preload / factory_startup / bootstrap / workdir / args / env）。' +
+    LF +
+    '  script_file / file 的相对路径按 workdir → 工作区 env → Gateway cwd 解析，且提交前校验存在性（缺文件报' +
+    LF +
+    '  input_missing，不起进程）。' +
+    LF +
+    'action=worker：持久无头内核（同一常驻 blender -b，连续 exec/see/watch），op=exec|see|watch|checkpoint|' +
+    LF +
+    '  revert|checkpoints|reset|status|start|stop|restart|list；checkpoint/revert 是文件级 undo（回执给 path）。' +
     LF +
     'action=status|wait|collect|cancel id=<jobId>；wait 默认 120s、上限 600s，超时不取消作业；collect 取日志与产物；' +
     LF +

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DSH 曲面算法包（surface）v1 —— M0–M2/M4，纯 bpy + numpy（不依赖 OCCT）。
+"""DSH 曲面算法包（surface）v2 —— M0–M5，纯 bpy + numpy（不依赖 OCCT）。
 
 为什么要它：插件已有 geo.loft/sweep 这类建模基元，但缺一条「曲面规格 → 网格 → 质量控制」的闭环：
   M0 SurfaceSpec（kind/units/sections/degree/continuity/closed/constraints/tessellation）校验与 spec_hash；
@@ -8,7 +8,8 @@
   M2 validate：G0/G1/G2 连续性、曲率 max/mean/热点、自交（BVH tri-tri，限三角数，超限 degraded）、
      厚度（射线近似）、网格质量（长宽比/法线一致性/水密）→ ok/verdict/metrics/defects/next；
   M4 help + selftest（瓶身/翼子板/头盔简化三基准 + 自交/薄壁/坏参数负例）；
-  M5 blend/offset 只留接口：纯 Python 不做，明确返回 ok:false + OCCT 需求（不假装实现）。
+  M3 fit：点云按 axis 切环 → 极角排序 → 等弧长重采样 → loft（残差回执，不是 BRep 拟合）；
+  M5 blend：两条边界环之间的 smoothstep 过渡面；offset：顶点法线等距偏置（都标 quality=approximate）。
 
 口径（写死，改算法先改这里）：
   * 所有长度入参/回执单位 mm；内部按 scene.unit_settings.scale_length（K.dsh_kit.units()）折算成 Blender 单位；
@@ -38,7 +39,7 @@ import bpy as bpy
 
 import numpy as np
 
-SURFACE_VERSION = 1
+SURFACE_VERSION = 2   # 2：M3 fit / M5 blend+offset 从"诚实拒绝"变为纯 numpy 近似（quality=approximate）
 KINDS = ("loft", "sweep", "patch")
 CONTINUITY = ("G0", "G1", "G2")
 ORIENTATIONS = ("auto", "up_z", "up_y", "fixed")

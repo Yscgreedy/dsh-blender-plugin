@@ -40,6 +40,8 @@ export function createHeadlessRoutes(E: HttpRouteDeps) {
             error: stats.lastError,
             hint: errorField(e, 'hint') || null,
             code: errorCode(e) || null,
+            // input_missing 的 tried / bases 是排障的关键证据，不能只留一句错误文本。
+            evidence: errorField(e, 'evidence') || null,
           }
         }
       })

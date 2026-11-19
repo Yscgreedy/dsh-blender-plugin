@@ -294,8 +294,11 @@ describe('3.1 queue executor command shape', () => {
   })
 
   it('render uses the fixed declarative entry and never a caller script', () => {
+    // file= 的 .blend 现在起进程前就要存在（痛点2），fixture 必须是真的文件。
+    const blend = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-')), 'scene.blend')
+    fs.writeFileSync(blend, 'x')
     const { args } = buildJobArgs(
-      record('render', { file: 'scene.blend', resolution: [64, 64], frames: [1, 2] }),
+      record('render', { file: blend, resolution: [64, 64], frames: [1, 2] }),
       os.tmpdir(),
     )
     expect(args).toContain('--python-expr')
@@ -305,9 +308,11 @@ describe('3.1 queue executor command shape', () => {
   })
 
   it('render with camera + frames previews an animation without a GUI session', () => {
+    const blend = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-')), 'scene.blend')
+    fs.writeFileSync(blend, 'x')
     const { args } = buildJobArgs(
       record('render', {
-        file: 'scene.blend',
+        file: blend,
         camera: 'Camera',
         frames: [3, 7],
         resolution: [160, 90],

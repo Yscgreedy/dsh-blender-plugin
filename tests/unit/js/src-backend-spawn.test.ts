@@ -33,7 +33,12 @@ const h = vi.hoisted(() => {
     return child
   })
   const winKillPids = vi.fn((pids: number[]) => pids.map(String))
-  const scan = { hash: 'abc123def456', files: { 'index.js': 'aaaa11112222' }, fileCount: 1, bytes: 42 }
+  const scan = {
+    hash: 'abc123def456',
+    files: { 'index.js': 'aaaa11112222' },
+    fileCount: 1,
+    bytes: 42,
+  }
   // 清单的真实扫描/落盘在 runtime/core/layers.ts（有独立用例）；这里只要证明
   // ① 扫描发生在**模块求值那一刻**（LOAD_SCAN），② spawn 之前只写一次，③ 元数据齐全。
   let scanCalls = 0
@@ -131,7 +136,12 @@ describe('spawnChild spawn options (issue #51)', () => {
     expect(manifestPath).toMatch(/host-manifest-[0-9a-z]+\.json$/)
     expect(manifestPath).toBe(hostManifestPath())
     expect(h.writeLayerManifest).toHaveBeenCalledTimes(1)
-    const [scan, root, wrote, meta] = h.writeLayerManifest.mock.calls[0] as [any, string, string, any]
+    const [scan, root, wrote, meta] = h.writeLayerManifest.mock.calls[0] as [
+      any,
+      string,
+      string,
+      any,
+    ]
     expect(scan).toBe(h.scan)
     expect(wrote).toBe(manifestPath)
     expect(String(root).endsWith('lib')).toBe(true)

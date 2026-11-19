@@ -1,5 +1,13 @@
 import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
-import { issueConsentToken } from './consent.js'
+import type { AttachLiveness } from './attach.js'
+import { consentPolicy, issueConsentToken } from './consent.js'
+import {
+  approveConsentRequest,
+  consentRequestView,
+  consentRequestsFor,
+  denyConsentRequest,
+  ensureConsentRequest,
+} from './consent-requests.js'
 import { CFG } from '../../config.js'
 import { selectDisplayProvider } from '../../display/provider.js'
 import { systemVirtualGuiLimits } from '../../display/limits.js'
@@ -40,6 +48,12 @@ export interface SessionRegistryOptions {
   selectProvider?: ProviderSelector
   waitForInstance?: (instanceId: string, timeoutMs: number) => Promise<boolean>
   limits?: () => VirtualGuiLimits
+  /**
+   * Live liveness probe for one addon instance (the transport-level ping).
+   * attachChecked uses it so an attach never reports ready for a socket that
+   * still looks listed but no longer answers.
+   */
+  verify?: (instanceId: string) => Promise<boolean>
 }
 
 function defaultProviderSelector(capabilities: DisplayCapabilities): DisplayProvider | null {
@@ -55,6 +69,14 @@ export class SessionRegistry {
    */
   private sawInstances = false
   private humanPaused = new Map<string, boolean>()
+  /**
+   * Last instance each caller attached. prune() releases a user-gui record the
+   * moment its socket drops (3.1 semantics: a reconnect claims fresh), so after a
+   * window reset attach used to answer "no ready instance" — which reads as "there
+   * is no session" when the truth is "your Blender just went away". The tombstone
+   * keeps the honest answer without keeping the ownership.
+   */
+  private lastInstance = new Map<string, { instanceId: string; at: number }>()
 
   constructor(
     instances: () => InstanceRef[],
@@ -70,8 +92,10 @@ export class SessionRegistry {
       opts.waitForInstance ||
       ((instanceId, timeoutMs) =>
         waitForAddonInstance(() => this.listInstances(), instanceId, timeoutMs))
+    this.verifyFn = opts.verify || null
     this.lifecycle = new VirtualGuiLifecycle(this, opts.selectProvider || defaultProviderSelector)
   }
+  private readonly verifyFn: ((instanceId: string) => Promise<boolean>) | null
   private listInstances: () => InstanceRef[]
   private readonly displayFn: () => DisplayCapabilities
   private readonly limitsFn: () => VirtualGuiLimits
@@ -124,6 +148,13 @@ export class SessionRegistry {
     return free.length === 1 ? (free[0] as SessionRecord) : null
   }
 
+  /** Is the instance behind this record in the live ready list right now? */
+  private livenessOf(session: SessionRecord): AttachLiveness {
+    const ready = this.instances.filter((x) => x.ready)
+    const own = ready.some((x) => x.instanceId === session.instanceId)
+    return { instanceReady: own, readyInstances: ready.length }
+  }
+
   private ensureAttached(
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
@@ -131,9 +162,16 @@ export class SessionRegistry {
     this.prune()
     const requested = opts.instanceId ? 'user-gui:' + String(opts.instanceId) : ''
     const existing = requested ? (this.sessions.get(requested) ?? null) : this.findForCaller(c)
-    if (existing) return this.adopt(claimExisting(existing, c), c)
+    if (existing) return this.adopt(claimExisting(existing, c, this.livenessOf(existing)), c)
     const picked = pickInstance(this.listInstances(), opts)
-    if (!('instance' in picked)) return picked
+    if (!('instance' in picked)) {
+      // No live instance: prefer "your Blender disconnected" over "no session".
+      if (picked.code === 'session_unavailable') {
+        const gone = this.disconnectedFailure(c)
+        if (gone) return gone
+      }
+      return picked
+    }
     const knownVirtual = this.sessions.get('virtual-gui:' + picked.instance.instanceId)
     if (knownVirtual) {
       if (knownVirtual.status !== 'ready')
@@ -153,24 +191,51 @@ export class SessionRegistry {
           'ask the owner to release it',
           { sessionId: knownVirtual.id },
         )
-      return this.adopt(claimExisting(knownVirtual, c), c)
+      return this.adopt(claimExisting(knownVirtual, c, this.livenessOf(knownVirtual)), c)
     }
     const known = this.sessions.get('user-gui:' + picked.instance.instanceId)
-    if (known) return this.adopt(claimExisting(known, c), c)
+    if (known) return this.adopt(claimExisting(known, c, this.livenessOf(known)), c)
     const created = createSession(picked.instance, c)
     created.paused = this.humanPaused.get(picked.instance.instanceId) === true
     if (created.paused) created.pausedAt = Date.now()
     this.sessions.set(created.id, created)
     touchAgent(created, c)
-    return { ok: true, session: created }
+    return this.adopt({ ok: true, session: created }, c)
   }
 
   private adopt(
     result: SessionResult<{ session: SessionRecord }>,
     c: CallerIdentity,
   ): SessionResult<{ session: SessionRecord }> {
-    if (result.ok) touchAgent(result.session, c)
+    if (result.ok) {
+      touchAgent(result.session, c)
+      if (result.session.instanceId)
+        this.lastInstance.set(callerKey(c), {
+          instanceId: result.session.instanceId,
+          at: Date.now(),
+        })
+    }
     return result
+  }
+
+  /** The instance this caller attached last, while that memory is still fresh. */
+  private tombstoneFor(c: CallerIdentity): string | null {
+    const last = this.lastInstance.get(callerKey(c))
+    return last && Date.now() - last.at < 30 * 60_000 ? last.instanceId : null
+  }
+
+  private disconnectedFailure(c: CallerIdentity): SessionResult<never> | null {
+    const instanceId = this.tombstoneFor(c)
+    if (!instanceId) return null
+    return fail(
+      'addon_disconnected',
+      'session',
+      'the Blender instance you were attached to is no longer connected (' + instanceId + ')',
+      're-enable DSH Blender Bridge 2.0.0 in that Blender and press Connect in the N panel, then ' +
+        'blender_session action=attach; a window reset (wm.read_factory_settings / read_homefile) ' +
+        'disables the addon, so the session cannot come back on its own',
+      { instanceId: instanceId, ready_instances: 0, tombstone: true },
+    ) as SessionResult<never>
   }
 
   list(): Record<string, unknown>[] {
@@ -195,7 +260,31 @@ export class SessionRegistry {
   ): SessionResult<{ session: Record<string, unknown> }> {
     this.prune()
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session)
+    if (!session) {
+      // A released record is gone by design; still answer what happened instead of
+      // a bare session_not_found, using the last instance this caller attached.
+      const instanceId = this.tombstoneFor(c)
+      if (instanceId && !sessionId)
+        return {
+          ok: true,
+          session: {
+            id: 'user-gui:' + instanceId,
+            kind: 'user-gui',
+            instanceId,
+            status: 'stopped',
+            owner: null,
+            agents: [],
+            grants: [],
+            paused: false,
+            activePy: null,
+            humanModified: null,
+            display: null,
+            createdAt: null,
+            lastActivityAt: null,
+            live: { instanceReady: false, readyInstances: 0 },
+            reason: 'addon_disconnected_after_release',
+          },
+        }
       return fail(
         'session_not_found',
         'session',
@@ -203,8 +292,11 @@ export class SessionRegistry {
         'call blender_session list to see live sessions',
         { sessionId: sessionId || null },
       )
+    }
     if (ownerMatches(session.owner, c) || session.agents.has(callerKey(c))) touchAgent(session, c)
-    return { ok: true, session: sessionView(session) }
+    // live=false is the honest answer for "the record exists but its Blender is
+    // gone"; attach refuses to revive it, so status must not imply otherwise.
+    return { ok: true, session: { ...sessionView(session), live: this.livenessOf(session) } }
   }
 
   attach(
@@ -230,6 +322,42 @@ export class SessionRegistry {
     opts: { instanceId?: string } = {},
   ): SessionResult<{ session: Record<string, unknown> }> {
     return this.attach(c, opts)
+  }
+
+  /**
+   * attach + a live ping. The static receipt answers "is there a session record
+   * that matches you"; this answers "does the Blender behind it still talk".
+   * A silent socket is reported as addon_unresponsive and the record is dropped
+   * to stopped so the next attach is a fresh claim instead of a stale one.
+   */
+  async attachChecked(
+    c: CallerIdentity,
+    opts: { instanceId?: string; kind?: SessionKind } = {},
+  ): Promise<SessionResult<{ session: Record<string, unknown> }>> {
+    const attached = this.attach(c, opts)
+    if (!attached.ok) return attached
+    const instanceId = String(attached.session.instanceId || '')
+    if (!this.verifyFn || !instanceId) return attached
+    const alive = await this.verifyFn(instanceId).catch(() => false)
+    if (alive) return attached
+    const record = this.sessions.get(String(attached.session.id || ''))
+    if (record) {
+      record.status = 'stopped'
+      record.owner = null
+      record.agents.clear()
+      record.grants.clear()
+      record.activePy = null
+    }
+    return fail(
+      'addon_unresponsive',
+      'session',
+      'the Blender instance behind this session is listed but did not answer a live ping (' +
+        instanceId +
+        ')',
+      'the addon is not running inside that Blender: re-enable DSH Blender Bridge 2.0.0 and ' +
+        'press Connect in the N panel, then blender_session action=attach again',
+      { instanceId: instanceId, probe: 'ping', sessionId: attached.session.id || null },
+    )
   }
 
   detach(c: CallerIdentity, sessionId?: string): SessionResult<{ released: boolean }> {
@@ -382,6 +510,51 @@ export class SessionRegistry {
   }
   issueConsent(c: CallerIdentity): SessionResult<{ consentToken: string; expiresAt: number }> {
     return { ok: true, ...issueConsentToken(c) }
+  }
+
+  /** File (or reuse) the pending virtual-gui consent request for this caller. */
+  requestConsent(c: CallerIdentity): SessionResult<Record<string, unknown>> {
+    const filed = ensureConsentRequest(c)
+    return {
+      ok: true,
+      request: consentRequestView(filed.requestId),
+      reused: filed.reused,
+      policy: consentPolicy(),
+    }
+  }
+
+  /** Record the human's approval for a filed request (no caller identity needed). */
+  approveConsent(requestId: unknown, source = 'human'): SessionResult<Record<string, unknown>> {
+    const decided = approveConsentRequest(requestId, source)
+    if (!decided.ok)
+      return fail(
+        'consent_' + decided.reason,
+        'session',
+        'consent request ' + String(requestId || '') + ' is ' + decided.reason,
+        decided.reason === 'missing'
+          ? 'use the request_id from the blender_session action=start receipt'
+          : 'call action=start again to file a fresh request',
+        { requestId: requestId || null, reason: decided.reason },
+      )
+    return { ok: true, request: decided.request }
+  }
+
+  denyConsent(requestId: unknown, reason = 'human denied'): SessionResult<Record<string, unknown>> {
+    const decided = denyConsentRequest(requestId, reason)
+    if (!decided.ok)
+      return fail(
+        'consent_' + decided.reason,
+        'session',
+        'consent request ' + String(requestId || '') + ' is ' + decided.reason,
+        'call action=start again to file a fresh request',
+        { requestId: requestId || null, reason: decided.reason },
+      )
+    return { ok: true, request: decided.request }
+  }
+
+  /** What this caller still has waiting on a human. */
+  consentStatus(c: CallerIdentity): SessionResult<Record<string, unknown>> {
+    return { ok: true, policy: consentPolicy(), requests: consentRequestsFor(c) }
   }
   async stop(c: CallerIdentity, sessionId?: string): Promise<SessionResult<{ stopped: boolean }>> {
     this.prune()

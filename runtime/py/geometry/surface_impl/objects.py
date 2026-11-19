@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Split from surface_orig.py; behavior preserved by the facade."""
 from .common import *  # noqa: F401,F403
+from .advmath import blend_rings, resample_ring
 from .build import surface_mesh_data
 
 # ────────────────────────────── 对象创建（bmesh，不碰 bpy.ops） ──────────────────────────────
@@ -253,22 +254,117 @@ def surface_tessellate(spec_or_object=None, quality="normal", name=None, collect
     return _err("spec_or_object 必须是 SurfaceSpec 对象或 mesh 对象名", stage="M0")
 
 
-# ────────────────────────────── M5：只留接口（不假装实现） ──────────────────────────────
-_OCCT_MSG = "not implemented in pure-python, OCCT backend required"
+# ────────────────────────────── M5：纯 numpy 近似（如实标注 quality） ──────────────────────────────
+def _mm_mesh_from_source(src):
+    """SurfaceSpec（dict）或 mesh 对象名 → (verts_mm, faces, source_label, spec_hash|None)。"""
+    mmu = max(_mmu(), 1e-12)
+    if isinstance(src, dict):
+        norm, errs = surface_spec_normalize(src)
+        if errs:
+            raise ValueError("spec 校验失败：%s" % (errs[:1],))
+        md = surface_mesh_data(norm)
+        return (np.asarray(md["verts_mm"], dtype=np.float64),
+                [tuple(int(i) for i in f) for f in md["faces"]],
+                "spec:%s" % norm["kind"], norm.get("spec_hash"))
+    if isinstance(src, str):
+        ob = bpy.data.objects.get(src)
+        if ob is None or ob.type != "MESH":
+            raise ValueError("对象不存在或不是 mesh: %r" % src)
+        baked = _object_eval_mesh(ob)
+        return (baked["verts"] * mmu,
+                [tuple(int(i) for i in t) for t in baked["tris"]],
+                "object:%s" % ob.name, None)
+    raise ValueError("spec_or_object 必须是 SurfaceSpec 对象或 mesh 对象名")
 
 
-def surface_blend(a=None, b=None, method=None, params=None):
-    """M5 接口：BRep 混合/圆角需要 OCCT 内核（本包不依赖），明确拒绝而不是给个假曲面。"""
-    return _err(_OCCT_MSG, stage="M5", op="blend",
-                hint="纯 bpy+numpy 不做 BRep 混合/倒角；需要 OCCT（pythonocc/OCP）后端接线后再开放。"
-                     "当前可用替代：用 loft/sweep/patch 手工搭过渡面，或 geo 模块的基元+倒角")
+def _boundary_ring(name, samples):
+    """开放面片的最长边界边环（mm）；闭合壳没有边界环 → 明确报错。"""
+    ob = bpy.data.objects.get(str(name))
+    if ob is None or ob.type != "MESH":
+        raise ValueError("对象不存在或不是 mesh: %r" % name)
+    baked = _object_eval_mesh(ob)
+    tris = np.asarray(baked["tris"], dtype=np.int64)
+    if len(tris) == 0:
+        raise ValueError("对象没有三角面")
+    edges = {}
+    for tri in tris.tolist():
+        for i in range(3):
+            a, b = tri[i], tri[(i + 1) % 3]
+            key = (a, b) if a < b else (b, a)
+            edges[key] = edges.get(key, 0) + 1
+    bnd = [e for e, n in edges.items() if n == 1]
+    if not bnd:
+        raise ValueError("对象是闭合壳（没有边界环）：blend 需要开放面片，或直接给 a/b 点列")
+    adj = {}
+    for a, b in bnd:
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    best, seen = [], set()
+    for start in sorted(adj):
+        if start in seen:
+            continue
+        loop, cur, prev = [start], start, None
+        seen.add(start)
+        while True:
+            nxt = [v for v in adj.get(cur, []) if v != prev and v not in seen]
+            if not nxt:
+                break
+            prev, cur = cur, nxt[0]
+            loop.append(cur)
+            seen.add(cur)
+        if len(loop) > len(best):
+            best = loop
+    if len(best) < 3:
+        raise ValueError("边界边链不成环")
+    pts = baked["verts"][best] * max(_mmu(), 1e-12)
+    return resample_ring(pts, samples, closed=True)
 
 
-def surface_offset(spec_or_object=None, distance_mm=None, params=None):
-    """M5 接口：等距偏置需要 OCCT（稳健 offset 在纯 Python 里会自交/翻面），明确拒绝。"""
-    return _err(_OCCT_MSG, stage="M5", op="offset",
-                hint="曲面等距偏置在纯 Python 里会自交/翻面，未实现；需要 OCCT 后端。"
-                     "当前可用替代：改截面参数重放样（如瓶身壁厚用内外两条 loft）")
+def _ring_source(src, samples, closed):
+    if isinstance(src, list):
+        return resample_ring(src, samples, closed=closed), "ring"
+    if isinstance(src, str):
+        return _boundary_ring(src, samples), "object:%s" % src
+    raise ValueError("a/b 必须是对象名或 [[x,y,z],...] 点列")
+
+
+def surface_blend(a=None, b=None, rows=16, samples=24, closed=True, name=None, collection=None):
+    """M5：两条边界环之间的 smoothstep 过渡面（纯 numpy 近似，不是 BRep 圆角）。"""
+    t0 = time.perf_counter()
+    try:
+        n_rows, n_samples = int(rows), int(samples)
+    except (TypeError, ValueError):
+        return _err("rows / samples 必须是整数", stage="M5", op="blend", code="BLEND_BAD_INPUT")
+    if not 2 <= n_rows <= 256:
+        return _err("rows 必须在 2..256", stage="M5", op="blend", code="BLEND_BAD_INPUT")
+    if not 3 <= n_samples <= 512:
+        return _err("samples 必须在 3..512", stage="M5", op="blend", code="BLEND_BAD_INPUT")
+    try:
+        ring_a, src_a = _ring_source(a, n_samples, closed)
+        ring_b, src_b = _ring_source(b, n_samples, closed)
+        bd = blend_rings(ring_a, ring_b, rows=n_rows, closed=closed)
+    except ValueError as exc:
+        return _err(str(exc), stage="M5", op="blend", code="BLEND_BAD_INPUT",
+                    hint="a/b 用对象名（开放面片的边界环）或 [[x,y,z],...] 两条同点数环")
+    norm = {"kind": "blend", "units": "mm", "rows": n_rows, "samples": n_samples,
+            "closed": bool(closed), "source_a": src_a, "source_b": src_b,
+            "tessellation": {"u": n_samples, "v": n_rows}}
+    norm["spec_hash"] = _spec_hash(norm)
+    try:
+        _ob, info = _create_object({"verts_mm": bd["verts"], "faces": bd["faces"]},
+                                   "blend", norm, name=name, collection=collection)
+    except ValueError as exc:
+        return _err("blend 生成失败：%s" % exc, stage="M5", op="blend",
+                    code="BLEND_BUILD_FAILED")
+    body = {"ok": True, "op": "blend", "kind": "blend", "method": "smoothstep_bridge",
+            "quality": "approximate", "object": info["object"],
+            "collection": info["collection"], "mesh": info["mesh"], "rows": n_rows,
+            "samples": n_samples, "closed": bool(closed), "reversed_b": bd["reversed"],
+            "verts": info["verts"], "tris": info["tris"], "bbox_mm": info["bbox_mm"],
+            "source_a": src_a, "source_b": src_b, "spec_hash": norm["spec_hash"],
+            "note": "点对点平滑过渡面（smoothstep）；不是 BRep 圆角/相切混合，"
+                    "接缝连续性未保证 —— 用 surface_validate 验收"}
+    return _j(_receipt(body, t0))
 # ────────────────────────────── M2：网格分析（全部 mm 口径） ──────────────────────────────
 class _SpecError(Exception):
     def __init__(self, errors):

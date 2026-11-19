@@ -1,19 +1,19 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-17T04:55:25.412Z",
+  "generatedAt": "2026-11-19T05:44:53.614Z",
   "mode": "warn",
   "totals": {
-    "all": 1409,
-    "exempt": 1409,
+    "all": 1449,
+    "exempt": 1449,
     "residual": 0
   },
   "byPrefix": {},
   "byKind": {},
   "files": {
     "CHANGELOG.md": {
-      "count": 220,
-      "exempt": 220,
+      "count": 226,
+      "exempt": 226,
       "residual": 0
     },
     "MIGRATIONS.md": {
@@ -22,8 +22,13 @@
       "residual": 0
     },
     "docs/AI-安装提示词.md": {
-      "count": 8,
-      "exempt": 8,
+      "count": 6,
+      "exempt": 6,
+      "residual": 0
+    },
+    "docs/OCCT后端-接入计划.md": {
+      "count": 20,
+      "exempt": 20,
       "residual": 0
     },
     "docs/Procedura-融合分析.md": {
@@ -62,8 +67,8 @@
       "residual": 0
     },
     "docs/操作教程.md": {
-      "count": 15,
-      "exempt": 15,
+      "count": 17,
+      "exempt": 17,
       "residual": 0
     },
     "docs/证据分级与读图纪律.md": {
@@ -107,6 +112,11 @@
       "residual": 0
     },
     "runtime/core/kernel/bootstrap.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/core/queue/spawn-executor.ts": {
       "count": 1,
       "exempt": 1,
       "residual": 0
@@ -186,9 +196,14 @@
       "exempt": 45,
       "residual": 0
     },
+    "runtime/py/geometry/surface_impl/advmath.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "runtime/py/geometry/surface_impl/api.py": {
-      "count": 14,
-      "exempt": 14,
+      "count": 21,
+      "exempt": 21,
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/build.py": {
@@ -197,13 +212,13 @@
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/common.py": {
-      "count": 9,
-      "exempt": 9,
+      "count": 12,
+      "exempt": 12,
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/objects.py": {
-      "count": 19,
-      "exempt": 19,
+      "count": 21,
+      "exempt": 21,
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/validate.py": {
@@ -251,14 +266,9 @@
       "exempt": 18,
       "residual": 0
     },
-    "skills/blender-modeling/README.md": {
-      "count": 1,
-      "exempt": 1,
-      "residual": 0
-    },
     "skills/blender-modeling/SKILL.md": {
-      "count": 29,
-      "exempt": 29,
+      "count": 28,
+      "exempt": 28,
       "residual": 0
     },
     "skills/blender-modeling/references/参考图通用还原SOP.md": {
@@ -267,13 +277,23 @@
       "residual": 0
     },
     "skills/blender-modeling/references/曲面算法.md": {
-      "count": 4,
-      "exempt": 4,
+      "count": 3,
+      "exempt": 3,
       "residual": 0
     },
     "skills/blender-modeling/references/验收清单.md": {
       "count": 2,
       "exempt": 2,
+      "residual": 0
+    },
+    "src/host/workspace.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "src/tools/run/worker.ts": {
+      "count": 1,
+      "exempt": 1,
       "residual": 0
     },
     "tests/BEHAVIOR_MATRIX.md": {
@@ -392,8 +412,8 @@
       "residual": 0
     },
     "tests/e2e/blender/native/surface.py": {
-      "count": 7,
-      "exempt": 7,
+      "count": 8,
+      "exempt": 8,
       "residual": 0
     },
     "tests/e2e/blender/native/txn.py": {
@@ -531,19 +551,24 @@
       "exempt": 16,
       "residual": 0
     },
-    "tests/unit/js/contract/surface-fit.test.ts": {
-      "count": 1,
-      "exempt": 1,
-      "residual": 0
-    },
     "tests/unit/js/dispatcher-routes.test.ts": {
       "count": 1,
       "exempt": 1,
       "residual": 0
     },
+    "tests/unit/js/session-workspace.test.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "tests/unit/js/worker-receipt.test.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "tests/unit/python/test_surface_fit_contract.py": {
-      "count": 2,
-      "exempt": 2,
+      "count": 1,
+      "exempt": 1,
       "residual": 0
     }
   }

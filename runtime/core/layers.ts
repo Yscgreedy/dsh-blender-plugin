@@ -368,7 +368,11 @@ export function forgetHostManifest(file: string): void {
 }
 
 /** 宿主层「判不了」的统一骨架（available=false → 调用方不许把它当 current）。 */
-function unavailableHost(root: string | null, note: string, over: Partial<LayerSnapshot> = {}): LayerSnapshot {
+function unavailableHost(
+  root: string | null,
+  note: string,
+  over: Partial<LayerSnapshot> = {},
+): LayerSnapshot {
   return {
     layer: 'host',
     available: false,
@@ -428,10 +432,14 @@ export function hostLayerSnapshot(opts: { root?: string } = {}): LayerSnapshot {
   try {
     disk = scanLayer(manifest.root, HOST_LAYER_SKIP)
   } catch (e) {
-    return unavailableHost(manifest.root, '宿主层磁盘扫描失败：' + (e instanceof Error ? e.message : String(e)), {
-      loadedHash: manifest.hash,
-      loadedAt: manifest.loadedAt || null,
-    })
+    return unavailableHost(
+      manifest.root,
+      '宿主层磁盘扫描失败：' + (e instanceof Error ? e.message : String(e)),
+      {
+        loadedHash: manifest.hash,
+        loadedAt: manifest.loadedAt || null,
+      },
+    )
   }
   const { changed, count } = diffLayers(manifest.files, disk.files)
   const page = capped(changed)

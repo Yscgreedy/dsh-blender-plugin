@@ -436,6 +436,117 @@ def _reset():
                 "traceback": traceback.format_exc()[-1200:]}
 
 
+# ---------------------------------------------------------------- 7) checkpoint / revert （痛点8）
+# 「改一步看一眼」的成本全在"回滚只能手工另存 .blend"：现场为三个废案存了五个中间档。
+# worker 是常驻进程，天然有"当前场景"——这里给它一个文件级 checkpoint 栈：
+#   {"op":"checkpoint","spec":{"label":"s2"}}  → 存 <dir>/NN_s2.blend 并压栈
+#   {"op":"revert","spec":{"label":"s1"|"last"}} → 读回该档（同一进程内生效）
+#   {"op":"checkpoints"}                         → 列栈
+# 保存用 copy=True：worker 自己的 filepath 不被改写，revert 前后状态可预测。
+
+_CHECKPOINTS = []
+
+
+def _ck_dir(spec):
+    d = str(spec.get("dir") or os.environ.get("DSH_WORKER_CHECKPOINT_DIR") or os.path.join(_frame_dir(), "dsh-checkpoints"))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _ck_index_path(d):
+    return os.path.join(d, "index.json")
+
+
+def _ck_load(d):
+    global _CHECKPOINTS
+    try:
+        with open(_ck_index_path(d), "r", encoding="utf-8") as f:
+            idx = json.load(f)
+        if isinstance(idx, list):
+            _CHECKPOINTS = idx
+    except Exception:
+        pass
+    return _CHECKPOINTS
+
+
+def _ck_save(d):
+    try:
+        with open(_ck_index_path(d), "w", encoding="utf-8") as f:
+            f.write(_j(_CHECKPOINTS))
+    except Exception:
+        pass
+
+
+def _ck_find(name):
+    want = str(name or "").strip()
+    if not want or want.lower() in ("last", "latest"):
+        return _CHECKPOINTS[-1] if _CHECKPOINTS else None
+    for rec in reversed(_CHECKPOINTS):
+        if str(rec.get("label") or "") == want or str(rec.get("path") or "") == want:
+            return rec
+    return None
+
+
+def _checkpoint(spec=None):
+    import bpy
+    import re
+    spec = dict(spec or {})
+    t0 = time.time()
+    d = _ck_dir(spec)
+    _ck_load(d)
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(spec.get("label") or spec.get("name") or "")).strip("._")
+    seq = len(_CHECKPOINTS) + 1
+    name = "%02d_%s" % (seq, label or "ck")
+    path = os.path.join(d, name + ".blend")
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=path, check_existing=False, copy=True)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, e), "dir": d,
+                "traceback": traceback.format_exc()[-1200:]}
+    rec = {"label": label or name, "path": path, "seq": seq,
+           "objects": len(bpy.data.objects), "created_at": int(time.time()),
+           "bytes": os.path.getsize(path) if os.path.exists(path) else None}
+    _CHECKPOINTS.append(rec)
+    _ck_save(d)
+    return {"ok": True, "mode": "file-checkpoint", "dir": d, "checkpoint": rec,
+            "count": len(_CHECKPOINTS), "ms": int((time.time() - t0) * 1000),
+            "revert": 'op=revert label="%s"' % rec["label"]}
+
+
+def _revert(spec=None):
+    import bpy
+    spec = dict(spec or {})
+    t0 = time.time()
+    d = _ck_dir(spec)
+    _ck_load(d)
+    rec = _ck_find(spec.get("label") or spec.get("name") or spec.get("checkpoint"))
+    if not rec:
+        return {"ok": False, "error": "没有匹配的 checkpoint", "dir": d,
+                "known": [r.get("label") for r in _CHECKPOINTS]}
+    path = str(rec.get("path") or "")
+    if not os.path.exists(path):
+        return {"ok": False, "error": "checkpoint 文件已不在磁盘：%s" % path, "dir": d}
+    try:
+        bpy.ops.wm.open_mainfile(filepath=path)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, e), "path": path,
+                "traceback": traceback.format_exc()[-1200:]}
+    _kernel_bootstrap()
+    return {"ok": True, "mode": "file-revert", "restored_from": rec, "path": path,
+            "objects": len(bpy.data.objects), "file": bpy.data.filepath or None,
+            "count": len(_CHECKPOINTS), "ms": int((time.time() - t0) * 1000)}
+
+
+def _checkpoints(spec=None):
+    spec = dict(spec or {})
+    d = _ck_dir(spec)
+    _ck_load(d)
+    out = [dict(r, exists=os.path.exists(str(r.get("path") or ""))) for r in _CHECKPOINTS]
+    return {"ok": True, "mode": "file-checkpoints", "dir": d, "count": len(out),
+            "stack": out, "last": out[-1] if out else None,
+            "revert": 'op=revert label="%s"' % (out[-1].get("label") if out else "")}
+
+
 def _purge_modules(prefixes):
     """热重载：按前缀清 sys.modules（改过的用户模块在热会话里会命中旧代码）"""
     import sys as _s, importlib as _i
@@ -537,6 +648,15 @@ def main():
                     resp = {"id": rid}; resp.update(r)
                 elif op == "reset":
                     r = _reset()
+                    resp = {"id": rid}; resp.update(r)
+                elif op == "checkpoint":
+                    r = _checkpoint(req.get("spec") or req.get("checkpoint") or {})
+                    resp = {"id": rid}; resp.update(r)
+                elif op == "revert":
+                    r = _revert(req.get("spec") or req.get("revert") or {})
+                    resp = {"id": rid}; resp.update(r)
+                elif op == "checkpoints":
+                    r = _checkpoints(req.get("spec") or {})
                     resp = {"id": rid}; resp.update(r)
                 elif op == "shutdown":
                     resp = {"id": rid, "ok": True, "bye": True}

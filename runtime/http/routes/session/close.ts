@@ -12,6 +12,7 @@ export function createLeaseHandler(E: HttpRouteDeps) {
   const control: SessionControl = {
     reload: (payload) => buildReloadReport(E, payload) as unknown as Record<string, unknown>,
     shutdown: (payload) => drainGateway(E, payload),
+    httpBase: 'http://' + String(E.HOST || '127.0.0.1') + ':' + String(E.PORT),
   }
   return async function lease(
     req: IncomingMessage,
@@ -25,6 +26,15 @@ export function createLeaseHandler(E: HttpRouteDeps) {
       payload = JSON.parse(raw)
     } catch (e) {
       payload = {}
+    }
+    // Query-string form: the human consent command must be copy-pasteable in
+    // PowerShell and bash without JSON quoting, so action/requestId may arrive
+    // as URL parameters (?action=consent_approve&requestId=…).
+    try {
+      const qs = new URL(req.url || '/', 'http://127.0.0.1')
+      for (const [k, v] of qs.searchParams) if (payload[k] === undefined) payload[k] = v
+    } catch {
+      /* malformed URL: fall back to the body */
     }
     if (typeof payload.action === 'string' && payload.action) {
       const result = await dispatchSessionAction(sessionRegistry, payload.action, payload, control)

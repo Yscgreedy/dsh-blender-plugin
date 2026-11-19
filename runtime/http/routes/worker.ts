@@ -52,11 +52,16 @@ export function createWorkerRoutes(E: HttpRouteDeps) {
       await streamJson(res, async () => {
         try {
           // v0.9.4：全部按 name 走（缺省 = 'default'，与老调用逐字节同义）
+          // start/restart 的 result 是 worker 快照（alive/ready/pid/port），本身没有 ok 字段；
+          // 补一个显式的 ok 让"信封真、result 真"两层一致（stop 不补：stopped=false 时不能假装成功）。
           if (op === 'start')
             return {
               ok: true,
               op: op,
-              result: await engine.worker.start(payload, payload && payload.name),
+              result: Object.assign(
+                { ok: true },
+                await engine.worker.start(payload, payload && payload.name),
+              ),
             }
           if (op === 'stop')
             return { ok: true, op: op, result: await engine.worker.stop(payload && payload.name) }
@@ -64,7 +69,10 @@ export function createWorkerRoutes(E: HttpRouteDeps) {
             return {
               ok: true,
               op: op,
-              result: await engine.worker.restart(payload && payload.name, payload),
+              result: Object.assign(
+                { ok: true },
+                await engine.worker.restart(payload && payload.name, payload),
+              ),
             }
           if (op === 'list')
             return { ok: true, op: op, result: { ok: true, workers: engine.worker.list() } }
@@ -115,6 +123,15 @@ export function createWorkerRoutes(E: HttpRouteDeps) {
           }
           if (op === 'reset') {
             return { ok: true, op: op, result: await engine.worker.reset(payload && payload.name) }
+          }
+          // 痛点8：文件级 checkpoint 栈（checkpoint / revert / checkpoints）—— 与 exec/see 同一个热进程。
+          if (op === 'checkpoint' || op === 'revert' || op === 'checkpoints') {
+            const spec = (payload.spec || payload.checkpoint || payload.revert || {}) as unknown
+            return {
+              ok: true,
+              op: op,
+              result: await engine.worker.aux(op, spec, payload && payload.name),
+            }
           }
           return {
             ok: true,

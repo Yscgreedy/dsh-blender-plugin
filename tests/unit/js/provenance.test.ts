@@ -198,7 +198,11 @@ describe('host manifest identity + load-time scan (round 4)', () => {
 
   beforeAll(async () => {
     fs.mkdirSync(OTHER, { recursive: true })
-    fs.writeFileSync(path.join(OTHER, 'constants.js'), 'export const PLUGIN_VERSION = "other"\n', 'utf8')
+    fs.writeFileSync(
+      path.join(OTHER, 'constants.js'),
+      'export const PLUGIN_VERSION = "other"\n',
+      'utf8',
+    )
     layers = await import(
       pathToFileURL(path.join(COPY_RT, 'core', 'layers.js')).href + '?layers4=' + String(Date.now())
     )
@@ -215,7 +219,11 @@ describe('host manifest identity + load-time scan (round 4)', () => {
   })
 
   it('writeLayerManifest 保存装载时的逐文件指纹：磁盘后来变了也不改写', () => {
-    fs.writeFileSync(path.join(HOSTLIB, 'constants.js'), 'export const PLUGIN_VERSION = "load-1"\n', 'utf8')
+    fs.writeFileSync(
+      path.join(HOSTLIB, 'constants.js'),
+      'export const PLUGIN_VERSION = "load-1"\n',
+      'utf8',
+    )
     const scan = layers.scanLayer(HOSTLIB, ['runtime'])
     const written = layers.writeLayerManifest(scan, HOSTLIB, MANIFEST, {
       pluginVersion: 'probe',
@@ -223,7 +231,11 @@ describe('host manifest identity + load-time scan (round 4)', () => {
     })
     expect(written.files['constants.js']).toBe(scan.files['constants.js'])
     // 「装载之后」磁盘又变了（= 镜像完成、fiber 还是旧的）
-    fs.writeFileSync(path.join(HOSTLIB, 'constants.js'), 'export const PLUGIN_VERSION = "disk-2"\n', 'utf8')
+    fs.writeFileSync(
+      path.join(HOSTLIB, 'constants.js'),
+      'export const PLUGIN_VERSION = "disk-2"\n',
+      'utf8',
+    )
     const reread = layers.readHostManifest(MANIFEST)
     expect(reread.files['constants.js']).toBe(scan.files['constants.js'])
     expect(reread.files['constants.js']).not.toBe(
@@ -244,4 +256,3 @@ describe('host manifest identity + load-time scan (round 4)', () => {
     expect(String(pr.host.note)).toContain('另一处装载')
   })
 })
-

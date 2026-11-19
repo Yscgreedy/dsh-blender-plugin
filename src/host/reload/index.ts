@@ -246,9 +246,7 @@ export async function hostReload(input: HostReloadInput): Promise<ReloadReport> 
 
   // 两种动作都由宿主完成，且都**就地**改写同一份 report（工具面拿到的就是它）
   const basis =
-    mode === 'hmr'
-      ? escalatedDiag(diag.report, self, input.force === true)
-      : diag.report
+    mode === 'hmr' ? escalatedDiag(diag.report, self, input.force === true) : diag.report
   if (escalated) {
     report.changed = basis.changed
     report.changedCount = basis.changedCount
@@ -275,11 +273,7 @@ export async function hostReload(input: HostReloadInput): Promise<ReloadReport> 
  * 把「宿主自己判出旧一代 / force」并进 diag：hmr 路径的 reasons 与 changed 都从 diag 取，
  * 不并进去就会出现 mode=hmr 但 changedCount.host=0、needsRestart=[] 的空回执。
  */
-function escalatedDiag(
-  diag: ReloadReport,
-  self: HostSelfProvenance,
-  force: boolean,
-): ReloadReport {
+function escalatedDiag(diag: ReloadReport, self: HostSelfProvenance, force: boolean): ReloadReport {
   const files = self.changedFiles.length ? self.changedFiles : []
   const why = force
     ? 'force=true：跳过判据，强制重组合一次'

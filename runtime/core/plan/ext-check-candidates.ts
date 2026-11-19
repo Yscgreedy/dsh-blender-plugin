@@ -102,7 +102,7 @@ export function extInstallHint(input: {
     op === 'gltf_validate'
       ? 'cd ' + (isWin ? '/d "' : '"') + extAbs + '" && npm i gltf-validator'
       : isWin
-        ? 'cd /d "' + extAbs + '" && py -3 -m venv venv && venv\\Scripts\\pip install open3d'
+        ? 'cd /d "' + extAbs + '" && python -m venv venv && venv\\Scripts\\pip install open3d'
         : 'cd "' + extAbs + '" && python3 -m venv venv && venv/bin/pip install open3d'
   return {
     ok: false,
