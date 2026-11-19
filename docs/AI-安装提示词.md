@@ -34,7 +34,7 @@
    装配 asm_scan/manifest/merge/repair/export/gate、白模 blockout base/batch/export/turntable/refsheet、
    同机位 QC visualreport_report、无头轮廓拟合 shapesolve_solve、缺陷评估 eval_run、
    强制门 gate_preflight/checkpoint/deliver + deliver_export(require_gate)。
-   并明确说明「landmark/人脸（无 cv2/MediaPipe）、OCR、DXF、Open3D/manifold3d/glTF-Validator 未安装，不在支持范围」。
+   并明确说明「landmark/人脸（无 cv2/MediaPipe）、OCR、DXF、manifold3d 不在支持范围；glTF-Validator / Open3D 是可选外部通路，用 npm run setup:ext 安装，未装时 ext.* 回 ok:false」。
 ~~~
 
 ## ② DSH 用户（仓库已在本地工作区）
@@ -47,11 +47,11 @@
 验收通过后，请主动告诉我当前版本（v3.2.0-alpha.1）的新能力：
 · GUI 会话：blender_py 在已 attach 的会话里跑 Python（持久内核）、blender_see 取帧；
   后台作业：blender_run 唯一提交面（render / headless，submit 回 jobId，wait/collect 收）；
-· 曲面算法（v2.6.2 新增）：surface_loft/sweep/patch → tessellate → validate → export（M0–M2/M4；M3 fit、M5 blend/offset 未实现）；
+· 曲面算法（v2.6.2 新增）：surface_loft/sweep/patch → tessellate → validate → export；M3 fit / M5 blend+offset 为纯 numpy 近似（quality=approximate，回执带 residual/self_intersections）；
 · 参考图量具 / 装配 / 白模与转台/refsheet / visualreport / shapesolve / eval_run / 强制门（详见 catalog）；
 · Blender 原生选中 → N 面板「发送选中到 DSH」仍可用（v2.3 起；addon 需 v2.0.0+）；
 · addon v2.0.0 起 N 面板有「暂停 AI 操作」（恢复只能人在 Blender 点）；
-· 不覆盖：landmark/人脸、OCR、DXF、Open3D/manifold3d/glTF-Validator（未安装）。
+· 不覆盖：landmark/人脸、OCR、DXF、manifold3d；glTF-Validator / Open3D 需先 npm run setup:ext（未装时 ext.* 明确 ok:false + readiness）。
 并说明升级插件后必须重启 DSH、Blender 侧 addon 要 v2.0.0+（旧 MCP for Blender 自 v2.3 起不再支持）。
 ~~~
 
@@ -82,7 +82,7 @@ blender_run(action="wait", id="<jobId>")                               # 收日�
    没有 GUI 时用后台无头作业；**GUI 不再是必需条件**，但 GUI 可用时仍是最顺手的看图方式。
 3. **曲面算法（v2.6.2 新增）**：`surface_loft / surface_sweep / surface_patch → surface_tessellate →`
    `surface_validate → surface_export`；纯 bpy+numpy，单位 mm、同 spec 可复现；verdict 三态（`fail` 不静默成 pass，
-   `degraded` 不等于通过）。**M3 fit、M5 blend/offset 未实现**（明确 `ok:false`，需 OCCT）。
+   `degraded` 不等于通过）。**M3 fit、M5 blend/offset 已补为纯 numpy 近似**（`quality:"approximate"`：fit 看 `residual_mm`，offset 看 `self_intersections`；稳健 BRep 圆角/偏置仍需 OCCT）。
 4. **新能力面（P0–P2）**：参考图量具 `img_digest/probe/measure/calib`；装配 `asm_scan/manifest/merge/repair/export/gate`；
    白模 `blockout_base/batch/export/turntable/refsheet`；同机位 QC `visualreport_report`（verdict-first）；
    无头轮廓拟合 `shapesolve_solve`；缺陷评估 `eval_run`；强制门 `gate_preflight/checkpoint/deliver` +
@@ -91,9 +91,10 @@ blender_run(action="wait", id="<jobId>")                               # 收日�
    多选 / 集合两种模式；编辑模式点/线/面、姿态骨骼、曲线/晶格点也会随选中一起发送；
    activity 四态可查（`get_activity_state`）；该入口**只支持本仓 addon v2.0.0+**。
 6. **暂停 AI 操作**（addon v2.0.0）：N 面板顶部按钮，暂停后写操作被拒绝、只读仍可用；恢复只能由人在 Blender 里点。
-7. **不覆盖 / 未安装依赖（请如实告诉用户）**：landmark/人脸（无 cv2/MediaPipe）、OCR、DXF、
-   Open3D / manifold3d / glTF-Validator 均未安装，相关能力不在本插件支持范围；catalog 的"不覆盖声明"也写明
-   生物/有机造型、电影级布光/体积/合成、角色动画绑定不覆盖。
+7. **不覆盖 / 可选外部通路（请如实告诉用户）**：landmark/人脸（无 cv2/MediaPipe）、OCR、DXF、
+   manifold3d 不在支持范围；glTF-Validator / Open3D 是**可选**外部通路——`npm run setup:ext` 装到
+   `runtime/ext/`，`npm run check:ext` 或 ext.* 失败回执的 `readiness` 报告两条通路状态（未装时 `ok:false`，
+   不是几何失败）。catalog 的"不覆盖声明"也写明生物/有机造型、电影级布光/体积/合成、角色动画绑定不覆盖。
 8. **addon 兼容性（重要）**：v3.0 起只支持本仓 [`extension/dsh_blender_bridge.zip`](../extension/dsh_blender_bridge.zip)（Blender 扩展包，v2.0.0+ / protocol 12；在 Blender 里用 `Edit ▸ Preferences ▸ Extensions ▸ Install from Disk...` 安装）。
    若装的是旧单文件 `dsh_blender_bridge.py` 或旧 `MCP for Blender` / `blender_mcp`，先停用（旧单文件可移除；桥接类 addon 只需停用，不必卸载），再装 zip；否则「Selection → DSH」与模型工具都可能连不上。
    其他普通 addon 不受影响；不要卸载或停用用户的其他 addon（只需停用桥接类 addon）。

@@ -132,7 +132,17 @@ dsh --profile web --dump-config | grep -A3 "dsh-blender-plugin\|dsh-coc-dice\|ds
 | 层 | 「已装载」的来源 | 谁写、什么时候 |
 |---|---|---|
 | `runtime` | Gateway 进程启动那一刻 `lib/runtime/**` 的逐文件哈希（`RUNTIME_SELF`） | Gateway 自己 |
-| `host` | **宿主插件装载那一刻**写的清单（环境变量 `DSH_BLENDER_HOST_MANIFEST` 指向的 JSON） | 宿主 `spawnChild` 之前（`src/host/backend/host-manifest.ts`） |
+| `host` | **宿主插件装载那一刻**的扫描结果（模块求值时抓的 `LOAD_SCAN`；环境变量 `DSH_BLENDER_HOST_MANIFEST` 指向的 JSON） | 宿主首次 `spawnChild` 之前落盘（`src/host/backend/host-manifest.ts`） |
+
+清单的两条硬约束（2026-11-19 补，都是「假 noop」的成因）：
+
+- **装载时定型，不是 spawn 时现扫**：扫描在 `host-manifest.ts` 模块求值那一刻完成，落盘只是把这份
+  结果写出去。否则「镜像完成 → 首次 spawn 之前被中断」这一小段里，清单会把新磁盘记成「已装载」，
+  下一次 reload 又是 noop（磁盘新代码、宿主旧代码，两边都自证 current）。
+- **清单必须属于本安装**：文件名带宿主层根指纹（`host-manifest-<sha12(root)>.json`），且清单里的
+  `root` 会与 Gateway 自己的 `<包根>/lib` 比对（`layers.sameRoot`）。不一致 → 宿主层
+  `verdict=unknown`、`source` 不是 `manifest`，**不再冒充 current**。共享目录（`<workDir>/logs`
+  或 OS tmpdir）里同时有仓库开发副本、另一个 profile 的安装副本时，这条是唯一的隔离。
 
 `provenance.host` 的字段：
 
@@ -156,8 +166,9 @@ dsh --profile web --dump-config | grep -A3 "dsh-blender-plugin\|dsh-coc-dice\|ds
 - `source=manifest` 才是**可信**的「已装载」。清单由宿主 fiber 写，**fiber 不换清单就不换** ——
   所以「改 `lib/constants.js` → 只重启 Gateway」会**一直**报 `host.verdict=stale`，
   不会像旧实现那样一重启就自证成 current（那是把「Gateway 启动时扫的盘」当成了「宿主装载的那一代」）。
-- `source=self` / `none` = **降级**（清单缺失：直接跑 `lib/runtime/gateway.js`、测试环境、隔隔离副本）。
-  `note` 里会写明「降级」，此时宿主层结论只代表 Gateway 启动那一刻，不能当宿主层的证据。
+- `source=self` / `none` = **降级**（清单缺失：直接跑 `lib/runtime/gateway.js`、测试环境、隔离副本）。
+  `note` 里会写明「降级」，宿主层判 `unknown` —— **不冒充 current**：Gateway 启动时的扫盘不是宿主
+  fiber 的证据（fiber 可能更早装载）。要 current 只能让宿主写清单。
 - `changedFiles` 是相对 `lib/` 的 posix 路径，≤20 条（超出看 `changedCount` / `truncated`）。
 - 判定用**内容哈希**（`sha256:12`），不是 mtime：`touch` 不会造成假 stale，同尺寸改写也不会漏。
 
@@ -252,4 +263,4 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:39877/lease -Headers $h `
 - `lastReload.jobsDropped` = 这次 reload 取消掉的作业 id：换代之后（回执已经翻页）仍能从 `/status` 查到
   "我的作业去哪了"，不必去翻队列台账。
 
-> 原始需求与三轮验收记录：[openspec/changes/hot-reload-no-restart/proposal.md](../openspec/changes/hot-reload-no-restart/proposal.md)。
+> 原始需求与验收记录：见 [CHANGELOG.md](../CHANGELOG.md) 的 v3.1.0-alpha.1 / v3.2.0-alpha.1（H1–H5 热更新）与 [docs/architecture.md](architecture.md)。

@@ -37,6 +37,13 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 - **后台作业**（没有人看画面）：blender_run(action="submit", kind="headless", script=...) 立即拿 job id，再 wait/collect 收产物；渲染用 kind="render" 的声明式参数。**这是异步作业，不是同步交互。**
 - **plan 执行**：blender_op 的 op 需要 ready 的 GUI 会话；catalog、dry-run、help 可离线查，不依赖会话。
 - **默认先开 GUI**；只有没有人看画面/GUI 不可用时才用后台作业。作业也要“小步提交、拿产物核对”，不要退化成长时间无反馈的批处理。
+- **没有 GUI 时的“改一步看一眼”走持久无头内核**：`blender_run(action="worker", op="exec"|"see"|"checkpoint"|"revert")`。
+  同一个常驻 `blender -b` 里连续执行 + 连续取帧（稳态 ~30 ms），比 `kind="headless"` 每次冷启动 ~2 s 便宜一个数量级；
+  `checkpoint label="s1_raw"` 落一档、`revert label="s1_raw"` 一行回到那一档，不用再手工另存 .blend。
+  长任务（>1 min）仍然走 `kind="headless"` 作业 —— worker 是串行的，长代码会把它占住。
+- **consent / 掉线检查**：`start kind="virtual-gui"` 回 `consent_required` 时，把回执里的 `request_id` 和那行 approve 命令**原样转给用户**（不要自己重试到超时）；`attach` 回 `addon_disconnected` / `addon_unresponsive` 时让用户在 Blender N 面板重新 Enable + Connect，不要靠重试。
+- `blender_py` 里**不要**写 `wm.read_factory_settings` / `wm.read_homefile`：会把 addon 一起卸掉，工具默认拦下（`factory_reset_blocked`）；要清场景用逐对象删除，或在 worker / headless 里重置。
+- `script_file` / `file` 给**绝对路径**最稳：相对路径按 `workdir → 工作区 env → Gateway cwd` 解析，缺文件会在起进程前回 `input_missing`。
 
 ### 0.3 单位与尺度（先定，后建模）
 
@@ -153,7 +160,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 | 参数搜索 | blender_op(action="loop") | 收敛后换通路复核 |
 | 判断动画动没动 | blender_see(mode="sequence") | 逐帧 hash + 图 |
 | 项目级验收 | gate_run / eval_run | verdict 三态 |
-| 参数化曲面（放样/扫掠/补片） | surface_loft/sweep/patch → tessellate → validate → export | 纯 bpy+numpy；细节见 references/曲面算法.md；M3 fit、M5 blend/offset 未实现 |
+| 参数化曲面（放样/扫掠/补片） | surface_loft/sweep/patch → tessellate → validate → export | 纯 bpy+numpy；细节见 references/曲面算法.md；M3 fit/M5 blend+offset 为近似（quality=approximate） |
 
 ### 0.7.1 曲面算法（surface_*）—— 有曲率、要可复现的形体
 
@@ -172,7 +179,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 - 开放曲面（patch）厚度 n/a，不是 fail；
 - 先量参考图（img_*）再写 sections，不要凭感觉写 mm；
 - 曲率/厚度是离散近似；交付前仍要过 gate_*（三态）；
-- M3 fit、M5 blend/offset 未实现（明确 ok:false），别假装能用。
+- M3 fit / M5 blend+offset 是纯 numpy 近似（quality=approximate）：fit 看 residual_mm，offset 看 self_intersections/verdict，blend 不保证相切；稳健 BRep 圆角/偏置仍需 OCCT。
 
 细节与限制：references/曲面算法.md。
 

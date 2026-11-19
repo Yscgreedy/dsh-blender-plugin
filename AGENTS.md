@@ -27,6 +27,7 @@ Every other document links here instead of repeating commands.
 | Lint / format gate | `npm run lint` / `npm run format:check` |
 | Python static gate | `npm run check:python-static` (plain ruff + pure-logic pyright; no allowlist) |
 | Package contents check | `npm pack --dry-run` |
+| Optional external paths | `npm run setup:ext` / `npm run check:ext` (install / probe glTF-Validator + Open3D under `runtime/ext/`) |
 | Refresh counts after catalog edits | `node scripts/sync_counts.mjs` then update `tests/fixtures/capability.lock.json` ([tests/MIGRATION.md](tests/MIGRATION.md)) |
 
 Addon typing: install `requirements-typecheck.txt` (fake-bpy stubs + NumPy for legacy imports; type-only; behavior is real-Blender E2E).
@@ -60,8 +61,10 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 - **Only the bundled addon is supported** (`extension/dsh_blender_bridge.zip`, v2.0.0 / protocol 12).
   MCP for Blender is unsupported since v2.3; migration is in [MIGRATIONS.md](MIGRATIONS.md).
 - **Tool and op names come from the catalog**: `blender_op(op="catalog")`; fix from `did_you_mean`.
-- **Not installed / not covered**: landmark and face (no cv2 or MediaPipe), OCR, DXF,
-  Open3D / manifold3d / glTF-Validator. Never document them as supported.
+- **Not covered**: landmark and face (no cv2 or MediaPipe), OCR, DXF, manifold3d.
+  **Opt-in external paths**: glTF-Validator and Open3D install with `npm run setup:ext` under
+  `runtime/ext/`; `npm run check:ext` and the `readiness` block in a failed `ext.*` receipt report
+  each path. Never document them as installed by default.
 - **GUI first, headless jobs.** Work over one minute goes to `blender_run(action="submit", kind=render|headless)`;
   poll by job id — a client timeout is not a failed job.
 - **Verdicts are three-state** (`pass` / `fail` / `degraded`); `degraded` is not a pass; delivery gates
@@ -69,7 +72,6 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 - **Migrate in slices** ([architecture](docs/architecture.md)): one module or boundary per change,
   no behavior change while moving code, and the old file is deleted in the same change.
 - **No new rule files.** A lesson learned goes into this file or the architecture guide.
-
 ## 4. Task routing
 
 | Task | Start here |

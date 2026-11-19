@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+- 复测第四轮（2026-11-19，BlenderProject）：热更「假 noop」——磁盘是新代码、宿主进程是旧代码，两层自检都说 current。
+  现场：`hot_update.ps1 -Build` 在「镜像完成、touch `cordis.patch.yml` 之前」被中断（执行时限 120 s）→ 再跑
+  时增量 diff 为空 → 判 `noop` → 不触发 HMR；`blender_session action=reload dry_run=true` 同样回
+  `mode=noop · verdict=current · changed host=0 runtime=0`，于是 `src/` 层修复永远装不上，只能重启 DSH。
+  - **根因（已用现场数据定位）**：宿主层清单落在**共享目录**（`<workDir>/logs` 或 OS tmpdir）且只有一份
+    `host-manifest.json`；宿主机上另一个从仓库装载的进程（调试脚本/另一个 profile）在同一路径写下了
+    `root=D:\works\dsh-blender-plugin\lib` 的清单，把本安装（profile 副本）的清单**覆盖**了。Gateway 只
+    信 `manifest.root`，拿仓库 lib 跟仓库 lib 对拍自然 current —— 而宿主 fiber 里跑的是安装副本里的旧代码。
+    现场 `/health.provenance.host.root` 就是仓库 lib，`pid=1660` 的 Gateway 却跑安装副本，一眼可证。
+  - **清单归属**：文件名带宿主层根指纹（`host-manifest-<sha12(root)>.json`），且 Gateway 只认 `root` 与
+    自己的 `<包根>/lib` 一致的那份（`layers.sameRoot`，Win 大小写/尾斜杠归一）。不一致 → 宿主层
+    `verdict=unknown`（note 点名「这份清单属于另一处装载」），**不再冒充 current**。
+  - **装载时定型**：宿主侧扫描改在 `host-manifest.ts` **模块求值那一刻**完成（`LOAD_SCAN`），落盘
+    （`writeLayerManifest`）只是把这份结果写出去 —— 旧实现是首次 spawn 时现扫，正好漏掉「镜像完成 →
+    首次 spawn 之前被中断」这一小段（会把新磁盘记成「已装载」）。`hostLayerRoot()` 也改由本模块位置
+    （`HERE`）推导，不再跟 `GATEWAY_PATH`/环境覆盖走。
+  - **判不了 ≠ 已是最新**：`decideReloadMode` 新增 `hostKnown`；宿主层 unknown 时 mode 按 `hmr` 走
+    （只有宿主重组合能重新写清单并自证），并且优先于 `gateway-restart`（重组合会连 Gateway 一起换）。
+    `source=self/none` 的降级路径也不再回 current（Gateway 启动扫的盘不是宿主 fiber 的证据）。
+  - **工具面双保险 + force**：`blender_session action=reload` 现在直接问宿主自己（`hostSelfProvenance`：
+    装载时逐文件指纹 vs 磁盘），装载时指纹不一致就升级成 `hmr`（Gateway 清单缺失/被覆盖也不影响）；
+    新增 `force=true` —— 不看判据强制重组合一次，是「被打断过一次」的唯一恢复手段（不必重启 DSH）。
+    回执多一行 `hostLayer(self) loaded=… disk=… verdict=…`，并在 note 里写明为什么升成 hmr。
+  - 伴生（下游脚本，`BlenderProject/scripts/plugin/hot_update.ps1` v2）：**镜像开始前**落
+    `<install>.pending-reload.json`、镜像后写入分层计数，下次运行即使 diff 为空也**消费**它并触发；验证
+    通过才删标记。新增 `-Force`（强制重组合）与 `-Status`（只看标记/health）。复验多一条：
+    `provenance.host.verdict` 必须是 `current` 且 `source=manifest` —— 只比 runtime 的 loadedHash 会漏掉
+    这类假绿。
+  - 测试：新增 `tests/unit/js/reload-host-self.test.ts`（5 例：Gateway noop + 宿主层 stale → hmr、真 noop、
+    force、dry-run 不动手、gateway-restart 被宿主层 stale 顶成 hmr）；`provenance` 增 3 例（`sameRoot`、
+    `writeLayerManifest` 保存装载时指纹、异安装清单 → unknown）；`src-backend-spawn` 改为钉「装载时扫一次、
+    每次 spawn 复用同一份、清单名带根指纹」。计数不变（6 tools / 35 families / 261 ops / 25 registered +
+    ping / 29 routes / protocol 12）。
+
+- 消费方四条协作层缺陷（GUI 会话 / 路径 / 持久内核 / undo，2026-11-19）：
+  - **attach 不再“假活”**：`prune()` 仍按 3.1 语义在 addon 掉线时释放归属，但 registry 记住了每个调用方最后附着的 instance（30 分钟），于是 `attach`/`claim` 回 `addon_disconnected` 而不是 `ok/ready`；HTTP 路径走新的 `attachChecked`（transport `ping`，3 s），僵死 socket 回 `addon_unresponsive`。`status` 增加 `live:{instanceReady, readyInstances}`。修的是现场事故：`wm.read_factory_settings` 之后 attach 回 ok、真调用才 `session_required`，整条 GUI 通道报废。
+  - **virtual-gui 的同意通道不再是死路**：新增 `runtime/core/sessions/consent-requests.ts` —— `start` 现在**落一条待批准请求**（`<workDir>/consent/<request_id>.json`，15 分钟、同调用方复用），回执带 `request_id` 和两条可直接复制的命令（`/lease?action=consent_approve|deny&requestId=…`，query-string 形式，PowerShell/bash 都不需要 JSON 引号）；人类在任意终端批准后 agent 再 `start` 一次即成功（`consent_source=approved_request`，批准只消费一次）。`/lease` 的 approve/deny 允许**无 DSH 身份头**（就为终端里的真人），其余动作不变。无人值守用 `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow|deny|ask`。新增工具动作 `consent_request` / `consent_status` / `consent_approve` / `consent_deny`。
+  - **伴生修法**：`blender_py` 默认拦截 `wm.read_factory_settings` / `wm.read_homefile`（GUI 里执行会把 addon 一起卸掉），回 `factory_reset_blocked` + 替代做法；确需重置传 `allow_factory_reset=true`，或改走 headless / worker。
+  - **输入路径提交前预检**：新增 `runtime/execution/input-paths.ts`，`script_file` / `file` 按 `workdir → DSH_BLENDER_WORKSPACE/DSH_WORKSPACE/DSH_PROJECT_DIR → Gateway cwd` 解析并校验存在性；缺失回 `input_missing`（`evidence.tried` 列全部候选），**headless 与作业都在起进程之前失败**。工具层另在提交前按**调用方的会话工作区**绝对化一次（根取自 `exec.agent.session`，见下方复测条目），`file`（.blend）不再“先起 Blender 再 Cannot read file”。
+  - **持久无头内核进模型面**：`blender_run(action="worker")` —— 同一个常驻 `blender -b` 里连续 `exec` / `see` / `watch`（稳态取帧 ~30 ms，不再每次冷启动 ~2 s），并用 `checkpoint` / `revert` / `checkpoints` 做**文件级 undo**（`<dir>/NN_label.blend` + `index.json`，回执给 `checkpoint.path`，`revert label="last"` 一行回滚）。后端早就有的 worker 池现在有了第一类入口；`blender_op(action="loop", target="session")` 仍用同一个池。
+  - 测试：新增 `tests/unit/js/session-consent-liveness.test.ts`（8 例：掉线 attach / live 回执 / ping 失败 / 同意请求四态）与 `tests/unit/js/input-paths.test.ts`（6 例：workdir/env/cwd 解析、缺失候选、绝对路径）；`engine-surface` / `route-matrix` / `run-args-env` / `execution-jobs-workers` 跟上新面；函数预算登记 4 个 dispatch 型 80–120 行函数。计数不变（6 tools / 35 families / 261 ops / 25 registered + ping / 29 routes / protocol 12）。
+
+- 复测第二轮回执修复（2026-11-19，BlenderProject 复测：P1a 的对称面 + P2 的第二层）：
+  - **worker `start` / `stop` 不再"反向假回执"**：旧判据读 `result.ok === true`，而 start/stop 的结果是 worker 快照（name/alive/ready/pid/port），永远没有 `ok` 字段 —— 每次**成功**都被写成 `FAIL`，agent 判定"没起来/没停掉"就重试，第二个 start 撞同一个端口。现在判据只看响应信封；`start`/`restart` 等进程到 ready 才回，回执按终态写 `alive/ready/pid/port`（未就绪时写 `pending` + `next_action=status`，不是失败）；`stop` 等进程**真的退出**才回（`shutdown` → 轮询 exitCode/signalCode + `exit`/`close` → 宽限后才 SIGKILL），写 `stopped/alive/signaled`，"本来没在跑"与"还在停"都不再伪装成失败或成功。同一个 name 的并发/重试 start 共享同一次启动（路由与工具层都可见 `joined:true`），并发的第二个不再杀进程抢端口；`/worker` 的 start/restart 结果补显式 `ok:true`，让"信封真、result 真"两层一致。
+  - **相对路径的"会话工作区"档位不再为空**：本机实测 `DSH_BLENDER_WORKSPACE` / `DSH_WORKSPACE` / `DSH_PROJECT_DIR` 全都没设，而工具层用的是宿主进程 cwd（= DSH profile 目录），于是不带 `workdir` 的相对路径静默落到 `C:\Users\…\.dsh\profiles\desktop\…`。新增 `src/host/workspace.ts`：根从**调用现场**取（`exec.agent.session` → `workingDirectory` 服务（跟着 `cd` 变）→ Session header 的 cwd → 工作区 env → 宿主 cwd），工具层用它绝对化并把根作为 `workspace` 传给后端；`runtime/execution/input-paths.ts` 的候选列表改成带来源的 `inputPathBaseList`（`workdir → session-workspace → env:NAME → gateway-cwd`），`input_missing` 的 `evidence` 同时给 `tried` 与 `bases`；提交成功回执多一行 `path_base: …`，**只落到宿主 cwd 时明确写"回落"**并给出 `workdir=<工作区根>` 的下一步。headless / 作业 / 队列三条路都认 `workspace`（`spawn-executor` 统一走 `jobPathBases`）。失败信封也不再丢证据：`/headless` 与 `/job` 的 catch 补 `evidence`，作业准备失败把解析器的 `tried`/`bases` 并进 `error.evidence` —— 实测一条相对路径失败的回执里同时有 `tried`（两个候选绝对路径）与 `bases`（`session-workspace` / `gateway-cwd`）。
+  - 伴生修法：`check:structure` 的 `src/tools` 白名单补上 3.2 新增的 `src/tools/run/worker.ts`；`session-consent-liveness` 的两个 provider/display mock 补齐 `DisplayCapabilities` 字段（`platform/hardware_gl/needs_approval` 与 `capabilities/health`），测试工程 typecheck 转绿；`config/plan-ids.json` 给 5 个新文件的 P1a/P2 缺陷编号登记豁免（仅 P 前缀），基线按 `--write-baseline` 刷新，残留仍为 0。
+  - 测试：新增 `tests/unit/js/worker-receipt.test.ts`（5 例：start 成功不再 FAIL / pending / stop 三态 / 信封失败不吞错 / 心跳只做提示）与 `tests/unit/js/session-workspace.test.ts`（7 例：working-directory 服务、Session header、服务抛错与陈旧路径、env 与 host-cwd 回落、note 文案）；`input-paths` 增 workspace 档位与来源分层例，`execution-jobs-workers` 的 stop 合同重写为"等真退出 / 宽限后 SIGKILL / 杀不掉就如实说 alive"并补并发 start 共享例，`run-args-env` 补"相对 script_file 按 workspace 解析"。计数不变（6 tools / 35 families / 261 ops / 25 registered + ping / 29 routes / protocol 12）。
+
+- 复测第三轮（2026-11-19，BlenderProject）：`viewpoint=custom` 能用 + 两处「读起来像故障」的回执收口：
+  - **`blender_see` 的 `from` / `look_at` 字符串解析（真 bug）**：模型面 schema 写的是 `"x,y,z"`，`runtime/py/render/view.py` 的 `_spec` 却直接 `[float(v) for v in frm]` —— 迭代字符串拿到的是**字符**，第二个字符是逗号，于是 `ValueError: could not convert string to float: ','`，整条 custom 取帧 502（`backend_error`），现场只能绕成「`blender_py` 建相机 → `see(viewpoint=camera)`」。现在两端都改：addon 侧新增 `_vec3`（逗号/空白/分号分隔、`[]`/`()` 外壳、数组都收；失败报**原串**并点名 from/look_at），宿主侧 `src/tools/see/validate.ts` 解析前置成 `[x,y,z]`，坏值直接 `invalid_params` + `fix`（不把一次写法问题升级成 502）。伴生修复：`publishView` 现在发数组，`presence_draw` 的 `isinstance(list)` 判定才画得出视锥。
+  - **worker `stop` 回执带 `cleared`**：`pid` 只在进程活着时有意义 —— `workerSnapshot` 对死进程一律回 `pid:null`，`workerStop` 回 `cleared:{pid,ready}`，工具回执写一行 `cleared: pid=… · ready=…`。复测看到的「stop 之后立刻 status 短暂显示 `alive:false` + 旧 `pid`」不会再被读成没停干净。
+  - **`aspect` / `max_size` 硬配对写进描述**：工具描述、`max_size` 参数说明与 catalog `see` 文案都写死 1:1 / 4:3 / 16:9 / camera 的档位表，并点名「`aspect="16:9"` + `max_size=768` 直接 `invalid_params`（768 只属于 1:1 / camera）」；`from` / `look_at` 的参数说明改成「字符串或数组都收」。
+  - 测试：新增 `tests/unit/python/test_view_spec_vectors.py`（6 例：逗号串 / 数组与括号串 / 缺省 / 报错带原串 / 显式空向量必须报错而不是换机位 / `capture` 在碰 GPU 前失败）；`tool-execution` 增 3 例（字符串归一成数组 + presence 发数组、数组/括号写法、坏值不调 `/view`）；`execution-jobs-workers` 的 stop 合同补 `cleared` 与「死进程快照 pid 必为 null」；`worker-receipt` 增 stop `cleared` 渲染例。计数不变（6 tools / 35 families / 261 ops / 25 registered + ping / 29 routes / protocol 12）。
+
+- 文档：新增 [OCCT 后端接入计划](docs/OCCT后端-接入计划.md)（**DEFERRED，未排期**；含 P0–P6 阶段、接口契约、验收门与启动条件）。
+- 已知缺口补三项（2026-11-17）：
+  - **audit_scene 门档**：新增 `profile="screen"|"gate"`。`profile="gate"` 强制 `self_intersect=true` + `summary_only=true`，回执新增 `gate_ready` / `profile` / `profile_forced` / `next`；`gate` 与显式 `self_intersect=false` 冲突直接回 `GATE_PROFILE_CONFLICT`（不悄悄改参数）。纯逻辑在 `runtime/py/core/audit_impl/scene_profile.py`；catalog 与验收清单改为读 `gate_ready`。
+  - **外部通路可装可查**：新增 `runtime/core/plan/ext-readiness.ts`（gltf-validator 包 + venv 内 open3d import 探测）、`scripts/setup-ext.mjs` 与 `npm run setup:ext` / `npm run check:ext`；`ext.gltf_validate` / `ext.ext_mesh_check` 缺依赖时回执带 `readiness`（两条通路各自状态 + 绝对路径安装命令 + `fix` + `dependency_error`），文件错误不再被伪装成缺依赖。顺带修掉既有 bug：built 布局的 `gltf_validate_runner` 按自身位置 `require('./node_modules/…')`，装到 `runtime/ext` 也永远找不到；改为从 package root 解析 `runtime/ext`（`runtime/ext/ext-dir.ts` + 2 例单测）。实测 glTF-Validator 2.0.0-dev.3.10 校验 cube.glb（0 error）与 Open3D 0.20.0 读 cube.ply（watertight/edge_manifold 回执）。
+  - **surface M3/M5 从"诚实拒绝"变为纯 numpy 近似**：`surface_fit`（切环拟合，回执 `residual_mm` / `verdict`）、`surface_offset`（顶点法线偏置，`verdict` + `self_intersections`）、`surface_blend`（smoothstep 过渡面）全部标 `quality:"approximate"`；稳健 BRep 圆角/偏置仍需 OCCT。`SURFACE_VERSION` 1→2。
+  - **结构门转绿**：`runtime/core/evidence.ts` 699 → 383 行（按职责拆为 `evidence-util.ts` / `evidence-types.ts` / `evidence-host.ts`，纯移动、导出面不变）；`src/tools/session/reload.ts`（H2 工具面热更）纳入 `check-structure` 的目标文件清单；`runtime/core/sessions/registry.ts` 以 `EXC-FILE-BUDGET-SESSION-REGISTRY` 登记 file-budget 例外（owner core-sessions，reviewBy 2027-06-30，类内私有状态簇拆分留待 3.1 GA 后）。`check:structure` 与 `check:build` 现在全绿。
+  - 测试：新增 `tests/unit/python/test_audit_scene_profile.py`（5 例）、`tests/unit/python/test_surface_advmath.py`（6 例）、`tests/unit/js/ext-readiness.test.ts`（4 例）与 ext 缺依赖路由 2 例；surface fit 合同（Python/JS）重写为"已实现"；Blender 5.3 native E2E surface 32 项全过（含 fit/offset/blend）；Python 单测/集成 379 全过。
+
 ## v3.2.0-alpha.1（2026-11-17）
 
 - 消费方交付（geo 单位口径 / revert 拓扑指纹 / headless 内核 / args·env 透传 / join 烘变换 / 能力补齐）：

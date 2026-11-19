@@ -57,7 +57,8 @@ lib/runtime/**/*.js. Published packages contain built JavaScript, not backend Ty
 Layout:
 
 - runtime/core/: dispatch, kernel, scripts, catalog, engine;
-- runtime/execution/: headless, jobs, workers, recovery;
+- runtime/execution/: headless, jobs, workers (the hot headless kernel), recovery, and
+  `input-paths.ts` (the submit-time input preflight shared by headless and jobs);
 - runtime/http/: routes, lease, host views;
 - runtime/gateway/: the Gateway process, addon WebSocket channel, ownership, and lifecycle;
 - runtime/transport/: frames, sockets, protocol helpers;
@@ -81,6 +82,50 @@ script. `args` accepts a string (POSIX-style split) or `string[]` and always app
 `env` is merged into the child environment. Both are echoed in `result.provenance`
 (`{args, env, env_keys, preloads, bootstrap}`), so "the parameter never arrived" is diagnosable from the
 receipt alone.
+
+Input paths are resolved and validated before anything is spawned. `runtime/execution/input-paths.ts`
+tries every base in order (explicit `workdir`, then the caller's session workspace passed down as
+`workspace`, then `DSH_BLENDER_WORKSPACE` / `DSH_WORKSPACE` / `DSH_PROJECT_DIR`, then the Gateway cwd)
+and throws `input_missing` with the full `tried` list plus the labelled `bases` when the file is not
+there. `script_file`, `file` (.blend) and the queue prelude all go through it, so a wrong relative path
+costs no Blender start.
+
+The session root itself comes from the calling execution, not from the environment:
+`src/host/workspace.ts` reads the `workingDirectory` service (it follows a `cd`), then the Session
+header cwd, then the workspace env vars, then `process.cwd()`. The host process cwd is the DSH profile
+directory on a default install, and none of the three env vars is set there, so a relative path that
+reaches only that last tier is reported as a fallback (`path_base: … （回落…）`) instead of silently
+landing in the profile. The same root travels to the backend as `workspace`, so its own resolution
+does not depend on the env tier either.
+
+### The hot headless kernel
+
+`/worker` owns one long-lived `blender -b` process per name (`runtime/execution/workers/`, server in
+`runtime/py/core/worker.py`). `exec` reuses it for Python, `see`/`watch` render offscreen frames in the
+same process, and `checkpoint` / `revert` / `checkpoints` keep a file-level stack (`<dir>/NN_label.blend`
+plus `index.json`) so "change one thing, look once" costs a file write instead of a ~2 s cold start.
+`blender_run(action="worker")` is the model-facing surface; `blender_op(action="loop",
+ target="session")` still uses the same pool for its inner loop.
+
+Start and stop report terminal state, not a guess. A start registers its promise on the worker record,
+so a concurrent or retried start joins that promise (`joined:true`) instead of killing a booting child
+and racing for the same port; the route adds an explicit `ok:true` to the start/restart result because
+a worker snapshot has no `ok` field of its own. Stop sends `shutdown`, waits for the real exit (polling
+`exitCode`/`signalCode`, plus `exit`/`close`), escalates to SIGKILL only after the grace window, and
+reports `stopped`/`alive`/`signaled` — so "still stopping" and "was not running" are distinct from
+"failed". The tool layer's verdict comes from the response envelope, never from the snapshot.
+
+### Session liveness and consent
+
+`runtime/core/sessions/` keeps ownership, grants and presence. Two facts are deliberately separated:
+a session record and a live addon. `attach` checks the live instance list and, on the HTTP path, pings
+the addon (`attachChecked`), so a record whose Blender went away answers `addon_disconnected` /
+`addon_unresponsive` instead of `ok`/`ready`; `status` reports `live:{instanceReady, readyInstances}` and
+the registry remembers the last instance per caller (30 min) so a released record can still explain
+itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-time caller-bound tokens)
+and `consent-requests.ts` (persisted, human-approvable requests); `start` files a request, the human
+approves it over `/lease?action=consent_approve&requestId=…` (any terminal, no DSH identity headers) or
+pre-approves the host with `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow`, and the next `start` consumes it.
 
 ### Public facades and the dual entry
 

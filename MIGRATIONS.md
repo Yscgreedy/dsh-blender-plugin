@@ -82,6 +82,22 @@ v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N
 - 旧「Blender 视口」tab、点击进消息、模型点选工具在 v2.3 全部消失，这是**预期行为**。
 - 选中入口改为：Blender 原生选中 → `N` →「Selection → DSH」→ 发送（多选 / 集合两种模式）。
 - v2.6 升级后同样需要**重启 DSH**；只改后端时重启宿主即可（Gateway 生命周期由宿主管理，没有模型侧 restart 工具）。
+## 2.1 v3.2 行为变化（升级即生效，无需迁移动作）
+
+四条现场缺陷的修法会改变回执语义，调用方需要知道自己会看到什么：
+
+| 场景                                         | 旧行为                                                             | v3.2                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| addon 掉线后 `attach`                        | 回 `ok` + `status=ready`（陈旧回执），真调用才 `session_required`  | 回 `addon_disconnected`（记录被释放；30 分钟内仍记得是哪个 instance）；HTTP 路径先 ping，僵死回 `addon_unresponsive`                                                                                  |
+| `status`                                     | 只有 `status` 字段                                                 | 多 `live:{instanceReady, readyInstances}`；`false` = 记录在、Blender 不在                                                                                                                             |
+| `start kind=virtual-gui`                     | 直接 `consent_required`，没有请求对象、没有界面                    | 落一条待批准请求（`<workDir>/consent/<id>.json`），回执带 `request_id` + 人类可复制的一行 approve/deny 命令；批准后再 `start` 即成功（只消费一次），或 `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow` 预批准 |
+| `blender_py` 里写 `wm.read_factory_settings` | 直接执行 → addon 被卸掉、整条 GUI 通道报废                         | 默认拦下回 `factory_reset_blocked`（附替代做法）；确需重置传 `allow_factory_reset=true`，或改走 headless / worker                                                                                     |
+| headless / job 的相对 `script_file` / `file` | 按 Gateway cwd（DSH profile）解析；`.blend` 不校验，先起进程再报错 | 按 `workdir → 会话工作区 → DSH_BLENDER_WORKSPACE/DSH_WORKSPACE/DSH_PROJECT_DIR → cwd` 解析并在提交前校验；缺文件回 `input_missing`（带 `tried`/`bases`），**不起进程**；回执多一行 `path_base`，只落到宿主 cwd 时点名"回落" |
+| `blender_run`                                | 只有 submit/render/调参                                            | 新增 `action="worker"`：持久无头内核（同进程连续 `exec`/`see`/`watch`）+ `checkpoint`/`revert`/`checkpoints` 文件级 undo                                                                              |
+| worker `start` / `stop` 回执                 | 成功也写 `FAIL`（快照没有 `ok` 字段）；stop 睡 300 ms 就断言"已停" | 判据取信封；`start` 等 ready（未就绪写 `pending` + `next_action=status`），`stop` 等真退出（`stopped/alive/signaled`），并发 start 共享同一次启动（`joined:true`）                                     |
+
+计数不变：6 tools / 35 families / 261 ops / 25 registered addon commands（+ping=26 wire）/ 29 routes / protocol 12。
+没有新增工具、没有新增路由（consent 走 `/lease` 的 query-string 形式，worker ops 走已有 `/worker`）。
 
 ## 3. 配置文件清理（可选）
 
