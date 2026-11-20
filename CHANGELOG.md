@@ -2,14 +2,41 @@
 
 ## Unreleased
 
+### 2026-11-20 收口：无 GUI 本地执行 · render 通道 · anim/toon 两族 · CI 5.3
+
+- **list 文案同源（工单 6e）**：`blender_session action=list` 的会话数与“未认领”措辞改由
+  `local_evidence.sessions`（Gateway `registry.list()`）驱动；本调用者可见 0 条但别人已 attach 时
+  输出 `SESSION list · 1 个会话（本调用者可见 0）` + `session_in_use` 提示，不再写“0 个会话/未认领”。
+- **CI Blender 5.3 矩阵**：`extension` 与 `linux-preview-see` 改为 matrix（4.2.10 / 5.3.0），
+  5.3 用独立缓存 key 与官方 sha256 字面量（`dacb8264…22e05`，对镜像站 tarball 实算核对）；
+  5.3 leg 是硬门（无 `continue-on-error`）。
+- **render channels（`blender_run kind=render channels=[…]`）**：`render | alpha | mask | ink` 每通道给
+  路径 + `foreground_px / coverage / n_components / bbox`；`runtime/py/render/channels_impl/metrics.py`
+  纯 numpy（无 cv2，游程 + 并查集数 4-连通域）；缺 ink 对象 → 该通道 `skipped`、整体 `degraded`（不是 fail）。
+- **无 GUI 本地车道**：`blender_op(action="plan")` 在白名单 op + 显式 `args.file` + 没有 ready 会话时，
+  经 `POST /job` 提交 `kind=headless` 作业（`catalog_op / op_args`）并回 `job_id` + `verdict=degraded`；
+  白名单 = `audit_mesh` / `img_*` / `visualreport_report` / `qc_render_views` / `montage`。其余组合保持
+  `session_required` 且不启 Blender；`file` 不是 `.blend`/不存在 → `invalid_params` 且不提交作业。
+- **anim / toon 两族（5 op）**：`anim_rig_report` / `anim_pose_apply` / `anim_deform_audit`
+  （`runtime/py/core/anim.py`）、`toon_build` / `toon_outline_audit`（`runtime/py/render/toon.py`）
+  各带三态 verdict、evidence 与可粘贴 repro；`help` 只在 Python 内部分派（`pythonExtras`），不占 catalog op。
+  计数 **36/264 → 38/269**。
+- **门禁与清理**：`check-structure` 补 `src/tools/py/{cancel,checkpoint,frame}.ts` 与
+  `runtime/core/local-evidence.ts` 的 file-budget 例外；`sync_counts.mjs` 扩到 llms/安装清单/部署 SOP 等
+  12 个“当前口径”文件（CHANGELOG 与历史分析保留原文）；已收口的角色动画台账移入
+  `docs/archive/2026-11-20-角色动画与卡通渲染需求.md`，plan-ID 基线随后刷新为 0 残留。
+- **验证**：`typecheck` / unit / contract / integration / python 全绿；`check:structure`、`check:routes`、
+  `check:behavior-matrix --release`、`check:python-static`、`lint`、`format:check` 通过。真机 E2E（新 op 与
+  render 通道在真实 Blender 内的行为）留待 CI/真机首跑确认。
+
 ### M1 收口（2026-11-20）
 
 > 判定：BlenderProject 侧子代理 p6a 独立复验；版本仍 `3.2.0-alpha.1`，工作树未提交。
 
 - **P6（环境证据）**：`list` / `doctor` 带 `local_processes / ports / ports_evidence / false_positives`；
   `forceNoAddon`、`probeFixture` 注入点真激活；worker 角色按 **worker 注册表 pid** 识别（P6-d），
-  GUI addon 按可见主窗口识别，隐藏/未知 blender 归 other。**P6-e 遗留**：list 文本的会话数与
-  `evidence.sessions` 尚未同源（下一轮修）。
+  GUI addon 按可见主窗口识别，隐藏/未知 blender 归 other。**P6-e 已同源（2026-11-20）**：list 的会话数与
+  “未认领”措辞改由 `evidence.sessions` 驱动，别人的会话不再被写成“0 个会话/未认领”。
 - **P7（digest）**：`op=digest` 基线 + `exec digest=true` 前后内容哈希；evidence 9 键
   `digest_before / digest_after / changed / digest_scope[] / restore_applied / kit_source / elapsed_ms / auto_restore / worker{session,file}`；
   `auto_restore=false` 恒成立、有 JS/Python 双锁；改名持久、再取 digest 不变（不自动回滚）。
@@ -19,7 +46,7 @@
 - **P10c（layered action / 相机线性化）**：`K.action_fcurves` 在无头与 GUI 同一实现；老 K 缺 helper 时
   bootstrap 重载 kit；GUI 探针 `tests/e2e/blender/p10c_gui_probe.py`（只碰临时对象/相机，二跑 `reload_count=0`）。
 - **契约修订**：`ports_evidence.reader = netstat | fixture`；`ports[]` 用 `pids / pids_raw / mode`。
-- **CI：blocked** —— 矩阵只跑 Blender 4.2.10；本机 5.3 实测（无头 + GUI 探针），不外推为 CI 通过。
+- **CI：矩阵已就位（2026-11-20）** —— `extension` 与 `linux-preview-see` 各跑 Blender 4.2.10 + 5.3.0；5.3 首跑结果以 PR CI 为准。
 
 ### 其它
 
@@ -30,7 +57,7 @@
   `bpy.data.actions`（curves>0、exceptions=[]）；老 GUI 的 K 缺 helper 时 bootstrap 重载 kit；
   blockout 相机关键帧线性化不再静默 `except pass`（失败进 warnings）。新增 GUI 探针
   `tests/e2e/blender/p10c_gui_probe.py`（只碰临时对象/相机，跑完对象集合不变；二跑 reload_count=0）。
-  CI 仍只跑 Blender 4.2.10，**5.3 矩阵 blocked**（本机 5.3 仅实测，不外推为 CI 通过）。
+  CI 矩阵随后扩到 Blender 4.2.10 + 5.3.0（2026-11-20，见本轮收口节）；5.3 首跑结果以 PR CI 为准。
 
 - headless bpy_api_lookup（2026-11-20，M1）：`blender_inspect(command="bpy_api_lookup", args={query:"Object.ray_cast"}, force_headless=true)`
   走无头探针（GUI 在线也强制；没有 addon 时自动回落）。探针复用一个热 worker（session=`bpy-api-probe`），连发只起 1 个进程，

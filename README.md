@@ -18,7 +18,7 @@ DSH × Blender connects DeepSeek Harness to Blender so an agent can build, inspe
 ## Features
 
 - **GUI-first interactive modeling.** The agent works against the Blender session you are looking at. It can inspect the scene, run Python in a persistent kernel, take a viewport or custom-angle frame, and iterate one step at a time.
-- **Headless jobs with visual feedback.** If Blender has no GUI, the agent submits a background headless job (`blender_run(kind="headless")`) and collects scripts, logs, and rendered frames from it. Live step-by-step interaction needs a GUI session; the job path exists so long or fresh-scene work still gets done.
+- **Headless jobs with visual feedback.** If Blender has no GUI, the agent submits a background headless job (`blender_run(kind="headless")`) and collects scripts, logs, and rendered frames from it. Live step-by-step interaction needs a GUI session; the job path exists so long or fresh-scene work still gets done. Read-only inspection ops that accept an explicit `file` (`audit_mesh`, `img_*`, `visualreport_report`, `qc_render_views`, `montage`) also run as jobs through `blender_op` with no session attached — the receipt is a `job_id` plus `verdict=degraded` until you collect it.
 - **Reference-image measurement.** Measure silhouettes, holes, symmetry, readable features, and scale from a reference image before modeling. If no scale is known, the tools return pixel units instead of inventing millimeters.
 - **Parametric surfaces.** Build reproducible surface meshes from sections (loft), a profile swept along a rail, or a four-sided patch; run continuity, curvature, self-intersection, and thickness checks; then export GLB. The same spec yields the same `spec_hash` and vertices instead of hand-sculpted geometry. Point-cloud fitting, normal-offset, and boundary blending are included as pure-numpy approximations (receipts carry `residual_mm` / `self_intersections` / `quality:"approximate"`); BRep-grade fillets still need OCCT.
 - **Assembly audit and repair.** Validate an assembly manifest, classify clashes, hidden overlaps, contacts, gaps, floating parts, and contained parts, apply safe repairs, gate the result, and export GLB, FBX, or OBJ with a manifest and merge ledger.
@@ -149,12 +149,12 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ## Tools
 
-The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (36 families / 264 ops), so the surface stays small.
+The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (38 families / 269 ops), so the surface stays small.
 
 | Tool | What it gives you |
 |---|---|
 | blender_session | GUI session lifecycle and ownership: list/status/doctor, attach, claim/release, grant/revoke write scopes, pause state, presence, and `action=txn` snapshots/marks for rollback. Blender and the Gateway are host-managed. |
-| blender_op | The capability catalog (`op="catalog"`, 36 families / 264 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
+| blender_op | The capability catalog (`op="catalog"`, 38 families / 269 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
 | blender_py | Runs Python in the attached GUI session with a persistent kernel; `see=true` returns a frame. GUI-only: there is no headless fallback. |
 | blender_see | GUI capture only: `viewpoint=viewport|camera|custom`, `mode=frame|sequence`, fixed aspect/size tiers. Camera animation and batch renders go to `blender_run(kind="render")`. |
 | blender_run | The only job entry point: `action=submit` with `kind=render|headless` returns a job id immediately; `status/wait/collect/cancel/list` manage it; `action=tune` covers render performance. |
@@ -176,7 +176,7 @@ On Windows and Linux the Gateway can launch an isolated Blender GUI for the agen
 - Third-party checklist: [docs/给第三方的安装清单.md](docs/给第三方的安装清单.md)
 - DSH upgrade compatibility: [docs/DSH-更新适配.md](docs/DSH-更新适配.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
-- Feature backlog: [docs/待办-角色动画与卡通渲染需求.md](docs/待办-角色动画与卡通渲染需求.md)
+- Closed backlog (animation/toon round): [CHANGELOG.md](CHANGELOG.md) · archive snapshot [docs/archive/2026-11-20-角色动画与卡通渲染需求.md](docs/archive/2026-11-20-角色动画与卡通渲染需求.md)
 - OCCT backend plan (deferred): [docs/OCCT后端-接入计划.md](docs/OCCT后端-接入计划.md)
 - Modeling skill: [skills/blender-modeling/](skills/blender-modeling/)
 - Release notes: [GitHub Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) and [CHANGELOG.md](CHANGELOG.md)
@@ -186,7 +186,7 @@ On Windows and Linux the Gateway can launch an isolated Blender GUI for the agen
 | Symptom | What to do |
 |---|---|
 | doctor does not return kind equal to ok | Check that Blender is running and the addon is connected. For the GUI route this is the only valid acceptance check. |
-| No GUI is available | Live interaction needs a GUI session. Submit background work with `blender_run(kind="headless")` and collect it with `action="wait"`/`collect`; rendered frames come from the job outputs. |
+| No GUI is available | Live interaction needs a GUI session. Submit background work with `blender_run(kind="headless")` and collect it with `action="wait"`/`collect`; rendered frames come from the job outputs. For `audit_mesh` / `img_*` / `visualreport_report` / `qc_render_views` / `montage` you can pass `args.file` to `blender_op` and it queues the same headless job without a session (`job_id` + `degraded` until collected). |
 | Another session is writing to the same scene | Claim a write scope with `blender_session(action="grant", scopes=...)`, or attach a separate GUI session; parallel jobs are fine through `blender_run`. |
 | An old MCP for Blender / blender_mcp addon is still enabled | Disable it (uninstalling is not required) and use the bundled DSH Blender Bridge addon; the 3.1 bridge dials the Gateway, but two Blender-side agent bridges still confuse the host; the legacy MCP bridge listens on 127.0.0.1:9876. |
 | Images are generated but not attached | Update to the latest build; the Windows path fix is included. If it persists, open the returned path directly. |

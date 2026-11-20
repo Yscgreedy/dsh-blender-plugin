@@ -11,6 +11,7 @@
 | [插件与技能优化验收.md](插件与技能优化验收.md) | v0.9.6 独立验收快照（2026-09-26）；计数与路径均已过时 | [AGENTS.md](../../AGENTS.md) §1–§7、[docs/architecture.md](../architecture.md)、`blender_rt_plan(op="catalog")` |
 | [headless优先-路线决定.md](headless优先-路线决定.md) | v0.9.3 历史路线建议（headless 优先），已被 **GUI 优先**取代 | [docs/操作教程.md](../操作教程.md) §7、[README.md](../../README.md) |
 | [v2.6.0-更新说明.md](v2.6.0-更新说明.md) | v2.6.0 发布说明（2026-10-21），已被后续版本取代 | [CHANGELOG.md](../../CHANGELOG.md)、GitHub Releases |
+| [2026-11-20-角色动画与卡通渲染需求.md](2026-11-20-角色动画与卡通渲染需求.md) | 角色动画/卡通渲染缺陷台账 P1–P12 的收口快照（2026-11-20，全部有实现与测试） | [CHANGELOG.md](../../CHANGELOG.md)、`blender_op(op="catalog")` |
 
 ## 归档策略
 

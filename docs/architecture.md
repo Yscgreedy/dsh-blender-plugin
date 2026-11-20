@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 35 planning families, 264 operations, 25 addon commands
+blender_run, blender_inspect), 38 planning families, 269 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -97,6 +97,21 @@ directory on a default install, and none of the three env vars is set there, so 
 reaches only that last tier is reported as a fallback (`path_base: … （回落…）`) instead of silently
 landing in the profile. The same root travels to the backend as `workspace`, so its own resolution
 does not depend on the env tier either.
+
+One host-side exception bypasses the GUI session gate: `blender_op(action="plan")` with an op from
+the local whitelist (`audit_mesh`, `img_*`, `visualreport_report`, `qc_render_views`, `montage`) **and**
+an explicit `args.file` **and** no ready GUI session submits a `kind="headless"` job through `POST /job`
+(`catalog_op` / `op_args`) instead of failing with `session_required`. `src/tools/op/local.ts` resolves
+the file, `runtime/execution/local-op/` turns the op name into a kernel call using the same generated
+routing table, and the receipt is always `verdict=degraded` with a `job_id` until the result is collected.
+Every other combination keeps the old rule: no session and no file is still a decision request, and no
+Blender process is started.
+
+Render jobs accept `channels:["render","alpha","mask","ink"]`. `runtime/execution/render-channels.ts`
+appends one `--python-expr` postlude after `-a`; `runtime/py/render/channels_impl/metrics.py` (numpy, no
+cv2) reports `foreground_px / coverage / n_components / bbox` per channel, and the job folds a single
+`CHANNELS {json}` marker into the three-state verdict. A missing ink object is `skipped` and downgrades the
+job to `degraded`, never `fail`; the command line is byte-identical when `channels` is absent.
 
 ### The hot headless kernel
 
@@ -251,7 +266,7 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 36 families / 264 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 38 families / 269 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by

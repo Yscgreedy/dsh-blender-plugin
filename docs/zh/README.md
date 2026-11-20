@@ -18,7 +18,7 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 ## 功能
 
 - **GUI 优先的交互式建模。** AI 直接操作你面前的 Blender 会话：查看场景、在持久内核里跑 Python、截取视口或自定义角度、一步一步改并确认。
-- **无头作业，但仍有视觉反馈。** 没有 GUI 时，AI 提交后台无头作业（`blender_run(kind="headless")`），从中收集脚本日志并取回渲染图。逐步交互需要 GUI 会话；作业通路用于长活或全新场景，保证没人盯着也能干完。
+- **无头作业，但仍有视觉反馈。** 没有 GUI 时，AI 提交后台无头作业（`blender_run(kind="headless")`），从中收集脚本日志并取回渲染图。逐步交互需要 GUI 会话；作业通路用于长活或全新场景，保证没人盯着也能干完。带显式 `file` 的只读体检 op（`audit_mesh` / `img_*` / `visualreport_report` / `qc_render_views` / `montage`）没有会话时也能走 `blender_op` 排成同一个无头作业，回执是 `job_id` + `verdict=degraded`，取件后才算结果。
 - **参考图量测。** 建模前量轮廓、孔、对称、可读特征和比例；没有标定时返回像素口径，不猜毫米。
 - **参数化曲面。** 用截面放样 / 沿路径扫掠 / 四边补片生成可复现的曲面网格，跑连续性、曲率、自交、厚度体检，再导出 GLB；同一份规格得到同一个 `spec_hash` 与同一批顶点，不靠手工捏。点云拟合（fit）、法线偏置（offset）、边界过渡（blend）为纯 numpy 近似（回执带 `residual_mm` / `self_intersections` / `quality:"approximate"`）；BRep 级圆角仍需 OCCT。
 - **装配审计与修复。** 校验装配清单，分类穿模、允许的隐藏交叠、接触、间隙、浮空和完全包含，做安全修复，过门后导出 GLB / FBX / OBJ，并生成 manifest 与合并账本。
@@ -146,12 +146,12 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
 ## 工具
 
-插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（36 family / 264 op）里，所以工具面保持很小。
+插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（38 family / 269 op）里，所以工具面保持很小。
 
 | 工具 | 它能给你什么 |
 |---|---|
 | blender_session | GUI 会话生命周期与归属：list/status/doctor、attach、claim/release、写作用域 grant/revoke、暂停状态、presence，以及 `action=txn` 快照/标记回滚。Blender 与 Gateway 由宿主管理。 |
-| blender_op | 能力目录（`op="catalog"`，36 family / 264 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
+| blender_op | 能力目录（`op="catalog"`，38 family / 269 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
 | blender_py | 在已 attach 的 GUI 会话里执行 Python，内核跨调用保留；`see=true` 顺带回一帧。仅 GUI，没有无头回退。 |
 | blender_see | 仅用于 GUI 取帧：`viewpoint=viewport|camera|custom`、`mode=frame|sequence`，固定宽高比分档。相机动画与批量渲染走 `blender_run(kind="render")`。 |
 | blender_run | 唯一作业入口：`action=submit` 配 `kind=render|headless` 立即返回 job id；`status/wait/collect/cancel/list` 管理作业；`action=tune` 管渲染性能。 |
@@ -181,7 +181,7 @@ Windows 与 Linux 上 Gateway 可以为 agent 拉起一个隔离的 Blender GUI�
 | 现象 | 处理 |
 |---|---|
 | doctor 没回 kind=ok | 检查 Blender 是否在跑、addon 是否 Connect。GUI 路线只认这一条。 |
-| 没有 GUI | 逐步交互需要 GUI 会话。用 `blender_run(kind="headless")` 提交后台作业，再用 `action="wait"`/`collect` 收取；渲染图从作业产物里取。 |
+| 没有 GUI | 逐步交互需要 GUI 会话。用 `blender_run(kind="headless")` 提交后台作业，再用 `action="wait"`/`collect` 收取；渲染图从作业产物里取。`audit_mesh` / `img_*` / `visualreport_report` / `qc_render_views` / `montage` 可直接给 `blender_op` 传 `args.file`，无会话也会排同一个无头作业（`job_id` + `degraded`，取件才算）。 |
 | 另一个会话正在写同一个场景 | 用 `blender_session(action="grant", scopes=...)` 声明写作用域，或 attach 另一个 GUI 会话；并行作业走 `blender_run` 即可。 |
 | 还在启用旧 MCP for Blender / blender_mcp | 停用它（不必卸载），改用随包的 DSH Blender Bridge addon；3.1 桥主动外连不占端口，但两个 agent 桥会互相干扰；旧 MCP 桥仍监听 127.0.0.1:9876。 |
 | 图生成了但没附上 | 升级到最新构建（已包含 Windows 路径修复）；仍不行就直接打开返回的路径。 |
