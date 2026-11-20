@@ -30,6 +30,17 @@ const checkoutSteps = (text: string): { total: number; protected: number } => {
   return { total, protected: protectedCount }
 }
 
+const jobBlock = (text: string, job: string): string => {
+  const lines = text.split('\n')
+  const start = lines.indexOf('  ' + job + ':')
+  if (start < 0) return ''
+  const rest = lines.slice(start + 1)
+  const next = rest.findIndex((line) => /^ {2}[a-z][\w-]*:$/.test(line))
+  return (next < 0 ? rest : rest.slice(0, next)).join('\n')
+}
+const matrixVersions = (text: string, job: string): string[] =>
+  [...jobBlock(text, job).matchAll(/^\s+- blender: '([^']+)'$/gm)].map((match) => match[1])
+
 describe('CI workflow hygiene', () => {
   it('uses safe triggers and least-privilege tokens', () => {
     expect(pr).toMatch(/^on:\n {2}pull_request:/m)
@@ -70,6 +81,30 @@ describe('CI workflow hygiene', () => {
     expect(pr).toContain('key: blender-4.2.10-linux-x64')
     expect(pr).toContain('--command extension validate extension/dsh_blender_bridge.zip')
     expect(pr).toContain('Reject an invalid extension package')
+  })
+
+  it('puts Blender 4.2.10 LTS and 5.3.0 in one matrix for the Blender jobs', () => {
+    expect(matrixVersions(pr, 'extension')).toEqual(['4.2.10', '5.3.0'])
+    expect(matrixVersions(pr, 'linux-preview-see')).toEqual(['4.2.10', '5.3.0'])
+    for (const job of ['extension', 'linux-preview-see']) {
+      const block = jobBlock(pr, job)
+      expect(block).toContain('fail-fast: false')
+      expect(block).toContain('key: ${{ matrix.cache_key }}')
+      expect(block).toContain('path: .cache/blender-${{ matrix.blender }}')
+      expect(block).toContain('sha256sum -c -')
+      expect(block).toContain('blender-${{ matrix.blender }}/blender')
+    }
+  })
+
+  it('pins the Blender 5.3.0 artifact with its own key and a literal checksum', () => {
+    expect(pr).toContain('blender-5.3.0-linux-x64.tar.xz')
+    expect(pr).toContain('cache_key: blender-5.3.0-linux-x64')
+    expect(pr).toContain('cache_key: blender-4.2.10-linux-x64')
+    const checksums = [...jobBlock(pr, 'extension').matchAll(/^\s+sha256: ([0-9a-f]{64})$/gm)]
+    expect(checksums.map((match) => match[1])).toEqual([
+      '7b888b36cf5bd7e35d495eb9717f7a9b645ea5f2fb4fe9850991800b8f08d531',
+      'dacb8264197a3f7fda6001285a5a506fc97ee943881261c2c3bd63c882f22e05',
+    ])
   })
 
   it('copies exactly one extension artifact into the release assets', () => {

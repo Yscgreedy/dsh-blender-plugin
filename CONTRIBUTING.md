@@ -32,7 +32,10 @@ so the shape can be agreed before you spend time on the implementation.
 Requirements:
 
 - Node.js **24.9** or newer for development and tests; CI runs on Node 24.
-- Blender **4.2 LTS** (tested); Blender 5.x is not yet validated. GUI mode needs the bundled addon; headless mode only needs the executable.
+- Blender **4.2 LTS** and **5.3** both run in CI: the add-on `extension validate` check and the Linux preview
+  `blender_see` chain are a matrix over 4.2.10 and 5.3.0, so a version-specific regression fails on the
+  version that caused it. 5.x stays preview-level support and 4.2 remains the E2E reference. GUI mode needs
+  the bundled addon; headless mode only needs the executable.
 - Python **3.11+**; `npm run setup:dev` creates `.venv` and installs the Python test stack.
   Tests auto-detect `.venv`; point `PYTHON` at another interpreter only when needed
   (`PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1` on Windows).
