@@ -462,7 +462,12 @@ export const CFG = {
     readString(FILE.cfg.blenderUserScripts) ||
     null,
   /** 热无头 worker 的本地端口（与 Gateway 39877 区分开） */
-  workerPort: num(process.env.DSH_BLENDER_WORKER_PORT || readString(FILE.cfg.workerPort), 9879),
+  workerPort: num(
+    process.env.DSH_WORKER_PORT ||
+      process.env.DSH_BLENDER_WORKER_PORT ||
+      readString(FILE.cfg.workerPort),
+    9879,
+  ),
   // 功能开关（3.1：virtual-gui 默认 off；Linux preview 需显式 on）
   features: {
     virtualGui: FEATURE_VIRTUAL_GUI.value,

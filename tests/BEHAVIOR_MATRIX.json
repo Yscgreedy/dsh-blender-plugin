@@ -1,6 +1,6 @@
 {
   "schema": "dsh-behavior-matrix/1",
-  "generatedAt": "2026-11-17T04:55:29.747Z",
+  "generatedAt": "2026-11-19T08:23:23.788Z",
   "node": "v26.13.1",
   "pluginVersion": "3.2.0-alpha.1",
   "generatedBy": "node scripts/check-behavior-matrix.mjs --generate",
@@ -131,13 +131,13 @@
         "tool": "blender_session",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: 后端不可用（127.0.0.1:51877）"
+        "evidence": "resolve: 后端不可用（127.0.0.1:64514）"
       },
       {
         "tool": "blender_op",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:51879）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:64516）"
       },
       {
         "tool": "blender_py",
@@ -155,13 +155,13 @@
         "tool": "blender_run",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:51889）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:64522）"
       },
       {
         "tool": "blender_inspect",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:51891）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:64524）"
       },
       {
         "tool": "blender_session",
@@ -386,7 +386,7 @@
         "route": "/health",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true lease.active=false backend.pid=7772"
+        "evidence": "200 application/json · ok=true lease.active=false backend.pid=41496"
       },
       {
         "route": "/status",
@@ -398,7 +398,7 @@
         "route": "/doctor",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true config.http=127.0.0.1:51900"
+        "evidence": "200 application/json · ok=true config.http=127.0.0.1:64534"
       },
       {
         "route": "/launch",
@@ -1603,8 +1603,8 @@
     ]
   },
   "behaviorMatrix": {
-    "total": 357,
-    "covered": 355,
+    "total": 360,
+    "covered": 358,
     "planned": 0,
     "exempt": 2
   }

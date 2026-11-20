@@ -269,7 +269,7 @@ export async function executeRun(
     )
   if (action === 'tune') return tune(port, args)
   // 痛点7/8：同一个热进程里连续 exec/see + checkpoint 栈（不再每次冷启动、不再手工另存 .blend）
-  if (action === 'worker') return executeWorker(ctx, port, args)
+  if (action === 'worker') return executeWorker(ctx, port, args, exec)
 
   if (action === 'submit') {
     const built = submitPayload(args)

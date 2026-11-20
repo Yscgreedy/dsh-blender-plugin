@@ -83,14 +83,162 @@ export function formatConsentState(action: string, body: Record<string, unknown>
   )
 }
 
-export function formatSessionList(sessions: SessionRow[]): string {
-  if (!sessions.length)
-    return (
-      'SESSION list · 0 个会话' +
-      LF +
-      '没有可见会话：在 Blender N 面板点 Connect 后 blender_session action=attach（多实例必须带 instance_id），' +
-      '或经用户同意 action=start kind=virtual-gui。'
+function processText(procs: Record<string, unknown>[]): string {
+  if (!procs.length) return '(无)'
+  return procs
+    .map(
+      (p) =>
+        text(p.role || '?') +
+        ' pid=' +
+        text(p.pid) +
+        ' "' +
+        text(p.name) +
+        '" port=' +
+        (p.port === null || p.port === undefined ? 'null' : text(p.port)),
     )
+    .join(' · ')
+}
+
+function portText(ports: Record<string, unknown>[]): string {
+  if (!ports.length) return '(无)'
+  return ports
+    .map((p) => {
+      const pids = Array.isArray(p.pids) ? p.pids.map(text).join(',') : ''
+      const raw = Array.isArray(p.pids_raw) ? p.pids_raw.map(text).join(',') : ''
+      return (
+        text(p.port) +
+        ' ' +
+        (p.listening === true ? 'listening' : 'closed') +
+        ' pids=[' +
+        pids +
+        '] pids_raw=[' +
+        raw +
+        ']' +
+        (p.process ? ' "' + text(p.process) + '"' : '') +
+        ' role=' +
+        text(p.role || '-') +
+        ' mode=' +
+        text(p.mode || '-')
+      )
+    })
+    .join(' · ')
+}
+
+function portsEvidenceLine(
+  ev: Record<string, unknown>,
+  evidence: Record<string, unknown>,
+  conflicts: string[],
+): string {
+  const gw = asRecord(ev.gateway)
+  const worker = asRecord(ev.worker)
+  const legacy = asRecord(ev.legacy)
+  return (
+    'source=' +
+    text(ev.source || evidence.source || '-') +
+    ' · scanned_at=' +
+    text(ev.scanned_at || evidence.scanned_at || '-') +
+    ' · gateway=' +
+    text(gw.port) +
+    ' ' +
+    text(gw.state) +
+    ' pid=' +
+    text(gw.pid === null || gw.pid === undefined ? '-' : gw.pid) +
+    ' matched=' +
+    String(gw.matched === true) +
+    ' · worker=' +
+    text(worker.port) +
+    ' ' +
+    text(worker.state) +
+    ' · legacy=' +
+    text(legacy.port) +
+    ' ' +
+    text(legacy.state) +
+    '（不冒充 gateway）' +
+    ' · conflicts=' +
+    String(conflicts.length)
+  )
+}
+
+function falsePositiveText(fps: Record<string, unknown>[]): string {
+  return fps.map((f) => text(f.port) + '/pid=' + text(f.pid) + ' ' + text(f.reason)).join(', ')
+}
+
+/**
+ * 工单 6：本地进程 / 端口证据（list 与 doctor 共用同一段，避免两处口径漂移）。
+ * 字段名保持 snake_case —— 判据要能被机械 grep（local_processes / ports / ports_evidence / false_positives）。
+ */
+export function formatLocalEvidence(
+  evidence: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!evidence || !Object.keys(evidence).length) return []
+  const procs = Array.isArray(evidence.local_processes)
+    ? evidence.local_processes.map(asRecord)
+    : []
+  const ports = Array.isArray(evidence.ports) ? evidence.ports.map(asRecord) : []
+  const ev = asRecord(evidence.ports_evidence)
+  const conflicts = Array.isArray(ev.conflicts) ? ev.conflicts.map(text) : []
+  const fps = Array.isArray(evidence.false_positives) ? evidence.false_positives.map(asRecord) : []
+  const fixture = asRecord(evidence.fixture)
+  const lines = [
+    'local_processes · ' + String(procs.length) + ' 个（' + processText(procs) + '）',
+    'ports · ' + portText(ports),
+    'ports_evidence · ' + portsEvidenceLine(ev, evidence, conflicts),
+    'false_positives · [' +
+      falsePositiveText(fps) +
+      ']' +
+      (fixture.path
+        ? '（fixture=' +
+          text(fixture.name || '-') +
+          ' path=' +
+          text(fixture.path) +
+          ' decoys=' +
+          String(fixture.decoys ?? 0) +
+          '）'
+        : ''),
+  ]
+  // 扫描失败不沉默：degraded 必须出现在回执里（端口状态此时是 unknown，不是 closed）。
+  if (evidence.degraded === true)
+    lines.push('degraded · ' + text(evidence.error || 'local scan degraded'))
+  if (conflicts.length) for (const c of conflicts) lines.push('  conflict: ' + c)
+  return lines
+}
+
+export function formatSessionList(
+  sessions: SessionRow[],
+  evidence?: Record<string, unknown> | null,
+  addon?: Record<string, unknown> | null,
+): string {
+  const blocks = formatLocalEvidence(evidence)
+  if (!sessions.length) {
+    // 2026-11-19 纠正：3.1+ addon 主动拨 39877，**不需要用户点 Connect**。
+    // list=0 只说明"还没认领"，不说明通道离线 —— 文案必须给可粘贴的 attach。
+    const view = asRecord(addon)
+    const known = Object.keys(view).length > 0
+    const ready = Number(view.ready_instances ?? 0)
+    const instanceId = text(view.instanceId || '')
+    const actions = Array.isArray(view.next_actions)
+      ? view.next_actions.map(text).filter(Boolean)
+      : []
+    const attachLine = instanceId
+      ? 'blender_session action=attach instance_id=' + instanceId
+      : actions[0] || ''
+    const addonText = !known
+      ? 'addon 状态未知（evidenceOnly 未取到）'
+      : ready > 0
+        ? 'addon 已连，ready_instances=' + String(ready)
+        : 'addon 未连，ready_instances=0'
+    const head = [
+      'SESSION list · 0 个会话',
+      '未认领（' + addonText + '）' + (attachLine ? ' → 直接 attach：' + attachLine : ''),
+      '说明：list=0 只是未认领，不代表 addon 离线。',
+      attachLine
+        ? 'next_actions · ' + attachLine
+        : known && ready > 0
+          ? 'next_actions · 多实例：先 action=doctor 取 instance_id，再 blender_session action=attach（3.1+ 无需手动连接）'
+          : 'next_actions · addon 未连：启动 Blender 并启用扩展后再 action=list 取 instance_id（3.1+ 无需手动连接）',
+    ]
+    return head.concat(blocks).join(LF)
+  }
   const lines = ['SESSION list · ' + String(sessions.length) + ' 个会话']
   for (const s of sessions) {
     const agents = Array.isArray(s.agents) ? s.agents.length : 0
@@ -111,7 +259,7 @@ export function formatSessionList(sessions: SessionRow[]): string {
         (s.humanModified ? ' · human_modified' : ''),
     )
   }
-  return lines.join(LF)
+  return lines.concat(blocks).join(LF)
 }
 
 export function formatSessionResult(action: string, body: Record<string, unknown>): string {
@@ -242,6 +390,41 @@ export function formatStatus(body: Record<string, unknown>, sessions: SessionRow
       (addon.handshake_error ? ' · handshake_error=' + text(addon.handshake_error) : ''),
   )
   lines.push('bpy      ' + (readiness.bpy ? 'ready' : 'not ready'))
+  const plugin = asRecord(body.plugin)
+  const prov = asRecord(plugin.provenance)
+  if (Object.keys(prov).length)
+    lines.push(
+      'provenance loaded=' +
+        text(prov.loadedHash || '-') +
+        ' · current=' +
+        text(prov.currentHash || '-') +
+        ' · verdict=' +
+        text(prov.verdict || 'unknown') +
+        (prov.staleReason ? ' · ' + text(prov.staleReason).slice(0, 240) : ''),
+    )
+  const region = asRecord(body.region)
+  const addonRegion = asRecord(asRecord(body.addon).region)
+  const topRuntimeModules = asRecord(body.runtimeModules)
+  const runtimeModules = Object.keys(topRuntimeModules).length
+    ? topRuntimeModules
+    : asRecord(region.runtime_modules || addonRegion.runtime_modules)
+  if (Object.keys(runtimeModules).length) {
+    const modules = asRecord(runtimeModules.modules)
+    const stale = Object.entries(modules)
+      .filter(([, v]) => text(asRecord(v).verdict) === 'stale')
+      .map(([k]) => k)
+    lines.push(
+      'runtime modules loaded=' +
+        text(runtimeModules.loaded_hash || '-') +
+        ' · disk=' +
+        text(runtimeModules.disk_hash || '-') +
+        ' · verdict=' +
+        text(runtimeModules.verdict || 'unknown') +
+        ' · count=' +
+        String(runtimeModules.count ?? 0) +
+        (stale.length ? ' · stale=' + stale.join(',') : ''),
+    )
+  }
   if (body.addonError) lines.push('addonError ' + text(body.addonError))
   if (vg.enabled !== undefined)
     lines.push(
@@ -251,7 +434,16 @@ export function formatStatus(body: Record<string, unknown>, sessions: SessionRow
         (vg.preview ? ' · preview-only' : '') +
         (vg.reason ? ' · reason=' + text(vg.reason) : ''),
     )
-  lines.push(formatSessionList(sessions))
+  // status 内嵌的 list 段必须与上面的 addon 行同源（不许自相矛盾）。
+  const addonView = {
+    connected: addon.connected === true,
+    ready_instances: addon.ready_instances ?? 0,
+    instanceId: addon.instanceId || null,
+    next_actions: addon.instanceId
+      ? ['blender_session action=attach instance_id=' + text(addon.instanceId)]
+      : [],
+  }
+  lines.push(formatSessionList(sessions, null, addonView))
   return lines.join(LF)
 }
 
@@ -260,6 +452,7 @@ export function formatDoctor(body: Record<string, unknown>): string {
     'SESSION doctor · ok=' +
       String(body.ok === true) +
       (body.kind ? ' · kind=' + text(body.kind) : '') +
+      (body.verdict ? ' · verdict=' + text(body.verdict) : '') +
       (body.protocol !== undefined ? ' · protocol=' + text(body.protocol) : ''),
   ]
   if (body.root_cause) lines.push('root_cause: ' + text(body.root_cause))
@@ -285,7 +478,16 @@ export function formatDoctor(body: Record<string, unknown>): string {
         (vg.ready ? ' · ready' : '') +
         (vg.reason ? ' · reason=' + text(vg.reason) : ''),
     )
-  if (!checks && !body.root_cause) lines.push(clip(body))
+  // 6b：no-addon / headless 态也必须给端口证据 + 一行可执行的激活方式。
+  const evidence = asRecord(body.local_evidence)
+  const hasEvidence = Object.keys(evidence).length > 0
+  if (hasEvidence) lines.push(...formatLocalEvidence(evidence))
+  const actions = Array.isArray(body.next_actions)
+    ? body.next_actions.map(text).filter(Boolean)
+    : []
+  if (actions.length) lines.push('next_actions · ' + actions.join(' | '))
+  if (body.fixture_activation) lines.push('fixture_activation · ' + text(body.fixture_activation))
+  if (!checks && !body.root_cause && !hasEvidence) lines.push(clip(body))
   return lines.join(LF)
 }
 

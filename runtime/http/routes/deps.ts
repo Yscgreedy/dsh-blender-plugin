@@ -31,6 +31,8 @@ export type LeaseAcquireFn = (
 export interface HttpRouteDeps {
   [k: string]: unknown
   engine: EngineSurface
+  /** Gateway 的 addon client（与 engine.status() 同一个对象）：addon 视图必须与 status 同源。 */
+  addon?: unknown
   selectionStore: SelectionStoreView
   sessionRegistry: SessionRegistry
   jobQueue: JobQueue

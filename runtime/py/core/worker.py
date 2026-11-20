@@ -14,7 +14,9 @@
 串行语义：一次只处理一个请求；长代码会占住 worker（这是"热"的代价，也是安全的来源）。
 """
 
+import array
 import base64
+import hashlib
 import io
 import json
 import os
@@ -560,11 +562,191 @@ def _purge_modules(prefixes):
     return purged
 
 
-def _exec(code, timeout_ms=None):
+
+def _load_action_helper(K):
+    """Make K.action_fcurves available even when the worker booted without preload.
+
+    The worker's minimal K historically skipped KERNEL_BOOTSTRAP when no preload was
+    requested, so the layered-action helper did not exist in a plain exec.  Load the
+    sibling kit.py once, lazily, and mirror its helper onto K.
+    """
+    try:
+        if getattr(K, "action_fcurves", None) is not None:
+            return
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kit.py")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        exec(compile(src, path, "exec"), {"__name__": "dsh_kit_worker", "__file__": path})
+        fn = getattr(getattr(K, "dsh_kit", None), "action_fcurves", None)
+        if fn is not None:
+            K.action_fcurves = fn
+    except Exception:
+        pass
+
+
+DIGEST_ALGO = "sha256:12"
+DIGEST_MAX_FLOATS = 600000  # 顶点坐标最多哈希 20 万个顶点；超过只哈希拓扑+尺寸并标 truncated
+
+
+def _kit_source():
+    """本进程的 K 从哪来：boot（engine 拼的前导）| boot-degraded | bootstrap（最小内核）。"""
+    info = _boot_info or {}
+    if info.get("skipped"):
+        return "bootstrap"
+    if info.get("ok") is False:
+        return "boot-degraded"
+    return "boot"
+
+
+def _hash_mesh(ob, h, info, domains, budget):
+    """网格域：拓扑 +（预算内的）顶点坐标；超预算只哈希尺寸并标 truncated。"""
+    data = getattr(ob, "data", None)
+    if ob.type != "MESH" or data is None:
+        return budget
+    info["meshes"] += 1
+    if "mesh" not in domains:
+        domains.append("mesh")
+    try:
+        nv, npoly, ne = len(data.vertices), len(data.polygons), len(data.edges)
+        info["verts"] += nv
+        h.update(("T|%d|%d|%d" % (nv, npoly, ne)).encode("utf-8"))
+        if budget > 0 and nv * 3 <= budget:
+            co = array.array("f", [0.0]) * (nv * 3)
+            data.vertices.foreach_get("co", co)
+            h.update(co.tobytes())
+            return budget - nv * 3
+        info["truncated"] = True
+        dims = [round(float(v), 6) for v in getattr(ob, "dimensions", [])]
+        h.update(("B|" + ",".join(str(v) for v in dims)).encode("utf-8"))
+    except Exception as e:
+        h.update(("E|" + str(e)[:120]).encode("utf-8"))
+    return budget
+
+
+def _hash_object(ob, h, info, domains, budget):
+    """对象域：名字/类型/变换/材质槽/修改器，然后交给网格域。"""
+    info["objects"] += 1
+    h.update(("O|%s|%s|%s" % (ob.name, ob.type, getattr(getattr(ob, "data", None), "name", ""))).encode("utf-8"))
+    try:
+        mw = [round(float(v), 6) for row in ob.matrix_world for v in row]
+        h.update(("M|" + ",".join(str(v) for v in mw)).encode("utf-8"))
+    except Exception:
+        pass
+    try:
+        mats = [s.material.name if s.material else "" for s in ob.material_slots]
+        if mats and "materials" not in domains:
+            domains.append("materials")
+        h.update(("A|" + ",".join(mats)).encode("utf-8"))
+    except Exception:
+        pass
+    try:
+        h.update(("D|" + ",".join(m.type for m in ob.modifiers)).encode("utf-8"))
+    except Exception:
+        pass
+    return _hash_mesh(ob, h, info, domains, budget)
+
+
+def _hash_actions(actions, h, domains):
+    """动作域：action 名 + fcurve 路径/索引/关键帧数。"""
+    if not actions:
+        return
+    domains.append("actions")
+    for act in actions:
+        try:
+            h.update(("X|%s|%d" % (act.name, len(act.fcurves))).encode("utf-8"))
+            for fc in act.fcurves:
+                h.update(("Y|%s|%d|%d" % (fc.data_path, fc.array_index, len(fc.keyframe_points))).encode("utf-8"))
+        except Exception:
+            pass
+
+
+def _scene_digest():
+    """场景**内容哈希**（不看 mtime）：对象/变换/材质/修改器 + 网格拓扑与（有上限的）顶点坐标。
+
+    判据只用于"改没改"，不用于交付指纹：超过顶点预算时 truncated=True，仍按拓扑与尺寸哈希。
+    """
+    import bpy
+
+    t0 = time.time()
+    h = hashlib.sha256()
+    info = {"objects": 0, "meshes": 0, "verts": 0, "truncated": False}
+    domains = ["objects"]
+    budget = DIGEST_MAX_FLOATS
+    try:
+        h.update(("F|" + str(bpy.data.filepath or "")).encode("utf-8"))
+        h.update(("S|" + str(getattr(bpy.context.scene, "name", ""))).encode("utf-8"))
+        h.update(("R|" + str(getattr(bpy.context.scene, "frame_current", ""))).encode("utf-8"))
+    except Exception:
+        pass
+    for ob in sorted(bpy.data.objects, key=lambda o: o.name):
+        budget = _hash_object(ob, h, info, domains, budget)
+    try:
+        acts = sorted(bpy.data.actions, key=lambda a: a.name)
+    except Exception:
+        acts = []
+    _hash_actions(acts, h, domains)
+    return {
+        "algo": DIGEST_ALGO,
+        "digest": h.hexdigest()[:12],
+        "scope": "scene",
+        "domains": domains,
+        "file": (getattr(bpy.data, "filepath", None) or None),
+        "objects": info["objects"],
+        "meshes": info["meshes"],
+        "verts": info["verts"],
+        "truncated": info["truncated"],
+        "ms": int((time.time() - t0) * 1000),
+    }
+
+
+def _digest_fields(before, after, elapsed_ms, kit_source):
+    """exec digest=true 的结构化字段（纯函数，单测不依赖 bpy）。
+
+    auto_restore / restore_applied 恒 False：本插件**从不**自动回滚 —— 改了就是改了。
+    """
+    b = (before or {}).get("digest")
+    a = (after or {}).get("digest")
+    return {
+        "digest_before": b,
+        "digest_after": a,
+        "changed": bool(b is not None and a is not None and b != a),
+        "digest_scope": list((after or before or {}).get("domains") or ["objects"]),
+        "digest_algo": (after or before or {}).get("algo") or DIGEST_ALGO,
+        "restore_applied": False,
+        "auto_restore": False,
+        "kit_source": kit_source,
+        "elapsed_ms": int(elapsed_ms),
+        "digest_truncated": bool((after or before or {}).get("truncated")),
+    }
+
+
+def _digest():
+    d = _scene_digest()
+    return {
+        "ok": True,
+        "digest": d["digest"],
+        "digest_scope": list(d.get("domains") or ["objects"]),
+        "scope": d["scope"],
+        "digest_algo": d["algo"],
+        "file": d["file"],
+        "objects": d["objects"],
+        "meshes": d["meshes"],
+        "verts": d["verts"],
+        "truncated": d["truncated"],
+        "kit_source": _kit_source(),
+        "auto_restore": False,
+        "restore_applied": False,
+        "elapsed_ms": d["ms"],
+    }
+
+
+def _exec(code, timeout_ms=None, with_digest=False):
     global _calls, _errors
     _calls += 1
     K = _kernel_bootstrap()
+    _load_action_helper(K)
     t0 = time.time()
+    d0 = _scene_digest() if with_digest else None
     out, err = io.StringIO(), io.StringIO()
     ok, tb, errmsg = True, None, None
     ns = {"K": K, "bpy": K.bpy, "math": K.math, "mathutils": K.mathutils, "Vector": K.mathutils.Vector}
@@ -583,8 +765,19 @@ def _exec(code, timeout_ms=None):
             result = json.loads(lines[-1][len("HEADLESS "):].strip())
         except Exception as e:
             result = {"_parse_error": str(e), "raw": lines[-1][:300]}
-    return {"ok": ok, "ms": int((time.time() - t0) * 1000), "stdout": stdout[-8000:], "stderr": err.getvalue()[-4000:],
-            "result": result, "error": errmsg, "traceback": tb}
+    try:
+        _bpy = ns.get("bpy") or __import__("bpy")
+        _file = getattr(_bpy.data, "filepath", None) or None
+        _objects = len(_bpy.data.objects)
+    except Exception:
+        _file, _objects = None, None
+    payload = {"ok": ok, "ms": int((time.time() - t0) * 1000), "stdout": stdout[-8000:], "stderr": err.getvalue()[-4000:],
+               "result": result, "error": errmsg, "traceback": tb,
+               "file": _file, "objects": _objects}
+    if with_digest:
+        elapsed = int((time.time() - t0) * 1000)
+        payload.update(_digest_fields(d0, _scene_digest(), elapsed, _kit_source()))
+    return payload
 
 
 def _status(gpu_info):
@@ -609,9 +802,12 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen(4)
+    _bpy = __import__("bpy")
     print("DSH_WORKER " + _j({"ready": True, "port": port, "pid": os.getpid(), "version": WORKER_VERSION,
                               "gpu": gpu_info, "boot": boot_info,
-                              "blender": __import__("bpy").app.version_string}), flush=True)
+                              "file": getattr(_bpy.data, "filepath", None) or None,
+                              "objects": len(_bpy.data.objects),
+                              "blender": _bpy.app.version_string}), flush=True)
     stop = False
     while not stop:
         try:
@@ -634,9 +830,16 @@ def main():
                     resp = {"id": rid, "ok": True, "pong": True, "uptime_s": int(time.time() - _started)}
                 elif op == "status":
                     resp = {"id": rid, "status": _status(gpu_info)}
+                elif op == "digest":
+                    resp = {"id": rid}
+                    resp.update(_digest())
                 elif op == "exec":
                     _purged = _purge_modules(req.get("purgePrefixes") or [])
-                    r = _exec(str(req.get("code") or ""), req.get("timeoutMs"))
+                    r = _exec(
+                        str(req.get("code") or ""),
+                        req.get("timeoutMs"),
+                        bool(req.get("digest")),
+                    )
                     if _purged:
                         r["purged"] = _purged
                     resp = {"id": rid}; resp.update(r)

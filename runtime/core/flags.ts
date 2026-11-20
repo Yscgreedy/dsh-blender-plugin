@@ -10,14 +10,20 @@ export const GATE_FLAGS = [
 ]
 
 const REGION_CODE = [
-  'import bpy, json',
+  'import bpy, json, sys',
   'w = bpy.context.window',
   'res = []',
   'for a in bpy.context.screen.areas:',
   '    if a.type == "VIEW_3D":',
   '        r = next(x for x in a.regions if x.type == "WINDOW")',
   '        res.append({"region": [r.x, r.y, r.width, r.height], "area": [a.x, a.y, a.width, a.height], "shading": a.spaces.active.shading.type})',
-  'print(json.dumps({"window": [w.width, w.height], "views": res}))',
+  '_K = sys.modules.get("dsh_rt_kernel")',
+  '_rm = None',
+  'try:',
+  '    _rm = _K.runtime_modules_status() if _K is not None and hasattr(_K, "runtime_modules_status") else None',
+  'except Exception as _e:',
+  '    _rm = {"error": str(_e)[:160]}',
+  'print(json.dumps({"window": [w.width, w.height], "views": res, "runtime_modules": _rm}, ensure_ascii=False))',
 ].join('\n')
 
 /**

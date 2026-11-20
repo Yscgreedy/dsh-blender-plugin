@@ -235,7 +235,17 @@ async function bootWorker(
   const promise: Promise<any> =
     name === undefined ? api.workerStart(opts) : api.workerStart(opts, name)
   const child = lastSpawn()
-  child.stdout.write('DSH_WORKER ' + JSON.stringify({ ok: true, pid: 777, gpu: 'fake-gpu' }) + NL)
+  child.stdout.write(
+    'DSH_WORKER ' +
+      JSON.stringify({
+        ok: true,
+        pid: 777,
+        gpu: 'fake-gpu',
+        file: typeof opts.file === 'string' ? opts.file : null,
+        objects: typeof opts.file === 'string' ? 14 : 3,
+      }) +
+      NL,
+  )
   await flush()
   if (opts.warmup !== false) await answerSocket({ ok: true, ms: 5 })
   return await promise
@@ -658,6 +668,55 @@ describe('workers', () => {
     const again: any = await api.workerStart({}, 'default')
     expect(again.ready).toBe(true)
     expect(h.spawnCalls).toHaveLength(1)
+  })
+
+  it('start with file passes the positional .blend and reports loaded_file/objects', async () => {
+    const api = makeWorkers()
+    const snap: any = await bootWorker(api, { file: 'C:/scene/a.blend', warmup: false }, 'file')
+    const child = lastSpawn()
+    expect(child.args).toContain('C:/scene/a.blend')
+    expect(snap.file).toBe('C:/scene/a.blend')
+    expect(snap.objects).toBe(14)
+  })
+
+  it('exec with a different file fails loud instead of running on the old scene', async () => {
+    const api = makeWorkers()
+    await bootWorker(api, { file: 'C:/scene/a.blend', warmup: false }, 'mismatch')
+    const running: Promise<any> = api.workerExec(
+      'print(1)',
+      5000,
+      null,
+      'mismatch',
+      'C:/scene/b.blend',
+    )
+    await expect(running).rejects.toMatchObject({ code: 'worker_file_mismatch' })
+    expect(h.metrics.workerExecs).toBe(0)
+  })
+
+  it('exec with the same file proceeds and updates the receipt fields', async () => {
+    const api = makeWorkers()
+    await bootWorker(api, { file: 'C:/scene/a.blend', warmup: false }, 'same')
+    const running: Promise<any> = api.workerExec(
+      'print(1)',
+      5000,
+      null,
+      'same',
+      'C:/scene/a.blend',
+    )
+    await flush()
+    const req = await answerSocket({ ok: true, file: 'C:/scene/a.blend', objects: 14 })
+    const r: any = await running
+    expect(req.op).toBe('exec')
+    expect(r.file).toBe('C:/scene/a.blend')
+    expect(r.objects).toBe(14)
+  })
+
+  it('start on an alive worker with another file is a mismatch, not a silent reuse', async () => {
+    const api = makeWorkers()
+    await bootWorker(api, { file: 'C:/scene/a.blend', warmup: false }, 'alive')
+    await expect(
+      api.workerStart({ file: 'C:/scene/b.blend', warmup: false }, 'alive'),
+    ).rejects.toMatchObject({ code: 'worker_file_mismatch' })
   })
 
   it('exec sends one exec frame, counts metrics and keeps null purgePrefixes out of the payload', async () => {

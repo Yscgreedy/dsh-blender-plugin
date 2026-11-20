@@ -32,6 +32,12 @@
       "function": "sweep_dispatch",
       "var": "ops"
     },
+    "asset": {
+      "kind": "local-dict",
+      "file": "runtime/py/core/asset.py",
+      "function": "asset_dispatch",
+      "var": "ops"
+    },
     "audit": {
       "kind": "local-dict",
       "file": "runtime/py/core/audit_impl/api.py",
@@ -324,6 +330,10 @@
     "material": {
       "api": "dsh_material_api",
       "table": "material"
+    },
+    "asset": {
+      "api": "dsh_asset_api",
+      "table": "asset"
     },
     "render_guard": {
       "host": "runtime/core/plan-dispatch.ts",

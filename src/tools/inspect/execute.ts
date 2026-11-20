@@ -23,32 +23,35 @@ const WRONG_TOOL: Record<string, WrongToolTarget> = {
   set_texture: { tool: 'blender_op', hint: '材质/贴图用 blender_op 的 material_* 算子' },
   download_polyhaven_asset: {
     tool: 'blender_py',
-    hint: '外部资产下载/导入不再走 addon 命令；用 blender_py 写脚本，或用 op 的资产算子',
+    hint: '暂时没有资产 op：搜索用 command=search_polyhaven_assets（需先在 N 面板开集成开关），下载/导入用 blender_py，模板见 skills/blender-modeling/references/资产与生成.md',
   },
   get_polyhaven_asset_preview: {
     tool: 'blender_py',
-    hint: '预览图下载不再走 addon 命令；需要图用 blender_see 看视口',
+    hint: '预览图不下载到工程目录；要看画面用 blender_see（视口/相机），要看资产缩略图直接用搜索结果里的 thumb 链接',
   },
-  create_rodin_job: { tool: 'blender_py', hint: 'Hyper3D 生成不再走 addon 命令；只保留只读轮询' },
+  create_rodin_job: {
+    tool: 'blender_py',
+    hint: '生成提交没有 op：用 blender_py 调集成 API（或 blender_run 跑脚本），提交后用 command=poll_rodin_job_status 轮询；模板见 skills/blender-modeling/references/资产与生成.md',
+  },
   import_generated_asset: {
     tool: 'blender_py',
-    hint: '生成结果导入用 blender_py 脚本（bpy.ops / bpy.data）',
+    hint: '生成结果导入用 blender_py 脚本（下载 → import_scene.gltf → 命名 → audit_mesh），模板见 skills/blender-modeling/references/资产与生成.md',
   },
   download_sketchfab_model: {
     tool: 'blender_py',
-    hint: 'Sketchfab 下载不再走 addon 命令；搜索仍可用 search_sketchfab_models',
+    hint: '搜索用 command=search_sketchfab_models（需算好 downloadable 与 key）；下载/导入用 blender_py，模板见 skills/blender-modeling/references/资产与生成.md',
   },
   download_polypizza_model: {
     tool: 'blender_py',
-    hint: 'Poly Pizza 下载不再走 addon 命令；搜索仍可用 search_polypizza_models',
+    hint: '搜索用 command=search_polypizza_models；下载直链在结果里，下载/导入用 blender_py，模板见 skills/blender-modeling/references/资产与生成.md',
   },
   create_hunyuan_job: {
     tool: 'blender_py',
-    hint: 'Hunyuan3D 生成不再走 addon 命令；只保留只读轮询',
+    hint: '生成提交没有 op：用 blender_py 调集成 API（或 blender_run 跑脚本），提交后用 command=poll_hunyuan_job_status 轮询；模板见 skills/blender-modeling/references/资产与生成.md',
   },
   import_generated_asset_hunyuan: {
     tool: 'blender_py',
-    hint: '生成结果导入用 blender_py 脚本（bpy.ops / bpy.data）',
+    hint: '生成结果导入用 blender_py 脚本（下载 → import_scene.gltf → 命名 → audit_mesh），模板见 skills/blender-modeling/references/资产与生成.md',
   },
   get_telemetry_consent: {
     tool: 'none',
@@ -113,6 +116,88 @@ function didYouMean(name: string, rows: CommandRow[]): string[] {
     .map((x) => x.name)
 }
 
+const LF = String.fromCharCode(10)
+
+/** 工单 11：bpy_api_lookup 的无头探针回执（source=headless + 结构化 evidence）。 */
+function formatHeadlessLookup(ev: Record<string, unknown>): string {
+  const probe = asRecord(ev.probe)
+  const drift = asRecord(ev.drift)
+  const hits = Array.isArray(ev.hits) ? ev.hits : []
+  const lines = [
+    'INSPECT bpy_api_lookup · source=headless · blender=' +
+      (text(ev.blender_version) || '-') +
+      ' · cache_age=' +
+      String(ev.cache_age ?? 0) +
+      's · hits=' +
+      String(hits.length) +
+      (ev.degraded === true ? ' · DEGRADED' : ''),
+    'probe: exe=' +
+      text(probe.blender_exe || '-') +
+      ' · elapsed_ms=' +
+      String(probe.elapsed_ms ?? 0) +
+      ' · reused=' +
+      String(probe.reused === true) +
+      (probe.worker_pid ? ' · worker_pid=' + text(probe.worker_pid) : ''),
+  ]
+  if (drift.message) lines.push('drift: ' + text(drift.message))
+  for (const hit of hits.slice(0, 3)) lines.push('hit: ' + JSON.stringify(hit).slice(0, 1500))
+  if (ev.error) lines.push('error: ' + text(ev.error))
+  return lines.join(LF)
+}
+
+function wantsHeadless(args: Record<string, unknown>): boolean {
+  return args.force_headless === true || String(args.force_headless ?? '').toLowerCase() === 'true'
+}
+
+async function headlessLookup(port: number, args: Record<string, unknown>): Promise<unknown> {
+  const params = asRecord(args.args)
+  const query = text(params.query || args.query)
+  if (!query)
+    return toolError(
+      'invalid_params',
+      'bpy_api_lookup 需要 args={query}',
+      '例：blender_inspect(command="bpy_api_lookup", args={query:"Object.ray_cast"}, force_headless=true)',
+    )
+  let body: Record<string, unknown>
+  try {
+    body = await backendPost(
+      port,
+      '/cmd',
+      {
+        name: 'bpy_api_lookup',
+        params: { query },
+        headless: true,
+        expect_version: args.expect_version ?? null,
+        version_fixture: args.version_fixture ?? null,
+      },
+      180000,
+    )
+  } catch (e: unknown) {
+    return toolError(
+      'backend_error',
+      'INSPECT bpy_api_lookup(headless) 失败 · ' + text(e instanceof Error ? e.message : e),
+      BACKEND_HINT,
+    )
+  }
+  const ev = asRecord(body.result)
+  if (body.ok !== true || ev.ok !== true)
+    return toolError(
+      'probe_degraded',
+      'INSPECT bpy_api_lookup(headless) 失败 · ' + text(ev.error || body.error || 'unknown'),
+      '确认 blender.exe 可用（DSH_BLENDER_EXE）；或去掉 force_headless 走 GUI addon',
+    )
+  return { text: formatHeadlessLookup(ev), evidence: ev }
+}
+
+async function fetchProvenance(port: number): Promise<Record<string, unknown> | null> {
+  try {
+    const status = await backendJson(port, '/status', 20000)
+    return asRecord(asRecord(status.plugin).provenance)
+  } catch (e) {
+    return null
+  }
+}
+
 async function fetchRows(
   port: number,
 ): Promise<{ ok: true; body: Record<string, unknown> } | ToolFailure> {
@@ -146,16 +231,23 @@ export async function executeInspect(
       BACKEND_HINT,
     )
   const command = text(args.command).trim() || 'help'
+  // 工单 11：显式无头探针（GUI 在线也能走，不依赖关掉 Blender）。
+  if (command === 'bpy_api_lookup' && wantsHeadless(args)) return headlessLookup(port, args)
   if (command === 'help') {
     const got = await fetchRows(port)
     if (!('ok' in got)) return got
     const rows = rowsOf(got.body)
-    return { text: formatHelp(rows, got.body.scene, got.body.file) }
+    const provenance = await fetchProvenance(port)
+    return { text: formatHelp(rows, got.body.scene, got.body.file, provenance) }
   }
   const target = WRONG_TOOL[command]
   if (target) return wrongTool(command, target)
   const got = await fetchRows(port)
-  if (!('ok' in got)) return got
+  if (!('ok' in got)) {
+    // 没有 GUI 时 bpy_api_lookup 自动落到无头探针（其它命令仍报 addon_unreachable）。
+    if (command === 'bpy_api_lookup') return headlessLookup(port, args)
+    return got
+  }
   const rows = rowsOf(got.body)
   const row = rows.find((r) => r.name === command)
   if (!row) {

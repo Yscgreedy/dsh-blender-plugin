@@ -13,6 +13,7 @@ function buildInspectTool(ctx: HostContext, port: number) {
       '【只读检查】help 列出 addon 的可执行只读命令（name(args) / enabled / pause_safe / description）；command=<name> args={...} 执行其中一条。' +
       '内部传输命令（execute_code / get_viewport_screenshot / send_*）不列出也不可执行：执行 Python 用 blender_py，截图/看视口用 blender_see，作业用 blender_run。' +
       '已知写命令返回 wrong_tool 并指向正确工具；未知命令返回 unknown_command + did_you_mean。' +
+      'bpy_api_lookup 支持 force_headless=true：GUI 在线也走无头探针（source=headless + 结构化 evidence：blender_version/cache_age/hits/drift/probe）。' +
       '旧工具迁移：blender_rt_commands → action=help；blender_rt_cmd 的只读面 → command=<name>（写命令改走 blender_py / blender_op / blender_run / blender_session）。',
     parameters: {
       command: {
@@ -20,6 +21,18 @@ function buildInspectTool(ctx: HostContext, port: number) {
         description: '只读命令名；省略=help（列目录）。参数见 help 的 name(args)',
       },
       args: { type: 'json', description: '命令参数对象，例如 {"name":"Cube"}（可选）' },
+      force_headless: {
+        type: 'boolean',
+        description: 'bpy_api_lookup：GUI 在线也强制走无头探针（复用同一个 worker 进程）',
+      },
+      expect_version: {
+        type: 'string',
+        description: 'bpy_api_lookup：期望的 Blender 版本（如 "4.2"）；不一致回 drift 告警',
+      },
+      version_fixture: {
+        type: 'string',
+        description: '测试注入：覆盖用于漂移比较的实测版本（不进产品默认路径）',
+      },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
     isConcurrencySafe: () => true,

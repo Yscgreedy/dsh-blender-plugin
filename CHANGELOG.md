@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+### M1 收口（2026-11-20）
+
+> 判定：BlenderProject 侧子代理 p6a 独立复验；版本仍 `3.2.0-alpha.1`，工作树未提交。
+
+- **P6（环境证据）**：`list` / `doctor` 带 `local_processes / ports / ports_evidence / false_positives`；
+  `forceNoAddon`、`probeFixture` 注入点真激活；worker 角色按 **worker 注册表 pid** 识别（P6-d），
+  GUI addon 按可见主窗口识别，隐藏/未知 blender 归 other。**P6-e 遗留**：list 文本的会话数与
+  `evidence.sessions` 尚未同源（下一轮修）。
+- **P7（digest）**：`op=digest` 基线 + `exec digest=true` 前后内容哈希；evidence 9 键
+  `digest_before / digest_after / changed / digest_scope[] / restore_applied / kit_source / elapsed_ms / auto_restore / worker{session,file}`；
+  `auto_restore=false` 恒成立、有 JS/Python 双锁；改名持久、再取 digest 不变（不自动回滚）。
+- **P11（headless bpy_api_lookup）**：`force_headless` 在 addon 查询前短路；复用 `bpy-api-probe` 热 worker，
+  `probe.start_count` 证"连发只起 1 进程"；`drift{expected,actual,level,source,message}` 双版本，
+  `version_fixture` 仅测试注入。
+- **P10c（layered action / 相机线性化）**：`K.action_fcurves` 在无头与 GUI 同一实现；老 K 缺 helper 时
+  bootstrap 重载 kit；GUI 探针 `tests/e2e/blender/p10c_gui_probe.py`（只碰临时对象/相机，二跑 `reload_count=0`）。
+- **契约修订**：`ports_evidence.reader = netstat | fixture`；`ports[]` 用 `pids / pids_raw / mode`。
+- **CI：blocked** —— 矩阵只跑 Blender 4.2.10；本机 5.3 实测（无头 + GUI 探针），不外推为 CI 通过。
+
+### 其它
+
+- worker 角色识别（2026-11-20，M1 · 工单 6d）：`local_processes[].role` 改为以 **worker 注册表 pid** 为准
+  （此前按映像名把活跃 worker 的 blender.exe 标成 addon）；唯一未被认领的 blender 且 addon 在线才算 addon，
+  识别不了的 blender 一律 other。单测锁住"worker 活跃时不得标 addon"。
+- layered action / 相机线性化（2026-11-20，M1 · 工单 10）：无头 `K.action_fcurves` 遍历
+  `bpy.data.actions`（curves>0、exceptions=[]）；老 GUI 的 K 缺 helper 时 bootstrap 重载 kit；
+  blockout 相机关键帧线性化不再静默 `except pass`（失败进 warnings）。新增 GUI 探针
+  `tests/e2e/blender/p10c_gui_probe.py`（只碰临时对象/相机，跑完对象集合不变；二跑 reload_count=0）。
+  CI 仍只跑 Blender 4.2.10，**5.3 矩阵 blocked**（本机 5.3 仅实测，不外推为 CI 通过）。
+
+- headless bpy_api_lookup（2026-11-20，M1）：`blender_inspect(command="bpy_api_lookup", args={query:"Object.ray_cast"}, force_headless=true)`
+  走无头探针（GUI 在线也强制；没有 addon 时自动回落）。探针复用一个热 worker（session=`bpy-api-probe`），连发只起 1 个进程，
+  结果按 query 缓存 5 分钟。evidence：`source=headless / blender_version / cache_age / hits[] / degraded`、
+  `probe{blender_exe,elapsed_ms,reused,worker_pid}`、`drift{expected,actual,level,message}`；`expect_version` 不一致 →
+  `drift.level=warn`（message 同时含两个版本号）；`version_fixture` 仅测试注入（`version_source=fixture`）。
+- worker 文档补两条现场结论：验证改名用「名字存在性 + digest」双证（`bpy.data.objects[0]` 按名排序，改名后索引会换人）；
+  worker 端口**按 session 记账**（probe-p7=9879、default=9880），不是全局固定端口。
+
+- worker digest（2026-11-20，M1）：`blender_run(action="worker", op="digest")` 取场景内容哈希基线；
+  `exec digest=true` 在执行前后各算一次，信封 `evidence` 固定给
+  `digest_before / digest_after / changed / digest_scope[] / restore_applied / kit_source / elapsed_ms / auto_restore / worker:{session,file}`
+  （`digest_scope` 是实际参与哈希的域数组；`worker.file=null` = factory startup），并显式 `auto_restore=false`（**永不自动回滚**；要回退用 checkpoint/revert）。`changed` 只看内容哈希，不看 mtime；
+  哈希覆盖对象/变换/材质/修改器 + 网格拓扑与顶点坐标（20 万顶点预算，超了 `digest_truncated=true`）；
+  `DSH_WORKER_PORT` 仍可把自测 worker 放到私有端口。工具 schema/help 同步（op 列表 + `digest` 参数）。
+
+- P6 本地环境证据（2026-11-19，M1）：`blender_session action=list` 与 `action=doctor` 现在带
+  `local_processes` / `ports` / `ports_evidence`（39877 gateway、9879 worker、9877 旧后端）与
+  `false_positives`；39877 的 `pid` 必须等于 Gateway 自己才 `matched=true`，9877 永不冒充 Gateway。
+  新增注入点：`probeFixture`（回放 `tests/fixtures/session/p6_decoy_ports.json`，`false_positives` 必须为空）
+  与 `forceNoAddon`（`/doctor` 不看 addon 仍出同源证据；env `DSH_BLENDER_FORCE_NO_ADDON=1`）；
+  `DSH_WORKER_PORT` 成为 worker 端口的正式覆盖键（`DSH_BLENDER_WORKER_PORT` 仍兼容）。
+  扫描失败一律 `degraded=true` + `error`（子进程 3 s 超时、512 KB 输出上限），不拿空数组冒充"端口都关着"。
+  0 会话文案改成「未认领 + 可粘贴 attach」：3.1+ addon 主动拨 39877，不需要用户点 Connect。
+
+- Mixar 差距吸收（2026-11-19）：三条工程做法落地，**计数从 35 family / 261 op 变为 36 family / 264 op**；
+  工具面 6、addon 命令（25 registered / 26 wire）、路由 29、protocol 12 均不变。
+  - **asset 族（新）**：`asset_search` / `asset_fetch` / `asset_help` —— PolyHaven 搜索 → 下载 → 导入 →
+    命名/归集合 → 要求 `audit_mesh` 复检。实现落 `runtime/py/core/asset.py`（modules.json / contracts /
+    routing / catalog / lock 五处登记）。**没有**把它做成 addon 命令：3.1 有意删掉了全部写命令，这里沿用
+    「Python 域 + op」路径，不复活 addon 写面，也不引入 MCP。
+  - **asm_export(use_case=…)**：unity/unreal → fbx 且 `bake_anim=True`（修掉此前硬编码 `bake_anim=False`
+    导致带绑定资产交付到引擎后**动画静默丢失**的问题）、godot/web → glb + `export_animations`；默认 `none`
+    保持旧 kwargs 逐字节不变；print/ar 回 `ok:false` 指路 `deliver_export(fmt="stl")` / USD；manifest、
+    ledger 与回执都记录 `use_case` 与解析后的 `export_options`。verify 仍只校验魔数/大小/md5，
+    **不证明动画真的写进文件**（honest_limits 已写明）。
+  - **blender_py 结果未知口径**：`/act` 180 s 超时或断线 → `code=outcome_unknown` + `request_id` +
+    `checkpoint`，回执给两条路：`blender_inspect command=get_scene_info` 复核，或
+    `blender_session(action="txn", op="restore", label=<checkpoint>)` 退回执行前。不再让模型把「不知道」
+    当「失败」直接重跑（重复材质/节点不是 mesh 缺陷，`audit_mesh` 不会报）。新增
+    `checkpoint="auto"|"off"`（默认 auto：执行前一次文件级快照；建不成降级 `checkpoint=none` + 警告）。
+  - **可发现性与门**：新增 SKILL.md 头部计数与 catalog/lock 的一致性契约测试
+    （`tests/unit/js/contract/skill-counts.test.ts`）；`blender_inspect` 的 8 条资产文案改为唯一真实路径
+    （此前指向不存在的「资产算子」）；新增 `skills/blender-modeling/references/资产与生成.md` 脚本模板。
+  - 测试：contract 407、unit 914（2 skip 为平台既有）、python 423、typecheck / lint / format:check /
+    check:python-static 全绿。
+
 - 复测第四轮（2026-11-19，BlenderProject）：热更「假 noop」——磁盘是新代码、宿主进程是旧代码，两层自检都说 current。
   现场：`hot_update.ps1 -Build` 在「镜像完成、touch `cordis.patch.yml` 之前」被中断（执行时限 120 s）→ 再跑
   时增量 diff 为空 → 判 `noop` → 不触发 HMR；`blender_session action=reload dry_run=true` 同样回

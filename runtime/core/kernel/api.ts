@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   pyModuleFile,
   ASSEMBLY_PATH,
@@ -17,6 +18,7 @@ import {
   GEO_PATH,
   HUMAN_PATH,
   IMG_PATH,
+  ASSET_PATH,
   MATERIAL_PATH,
   MONTAGE_PATH,
   MOTION_PATH,
@@ -137,6 +139,77 @@ export function preloadChunk(name: unknown): string {
     'globals().update({k: v for k, v in ' + ns + '.items() if not k.startswith("_")})',
   ].join(String.fromCharCode(10))
 }
+export interface RuntimeModuleFile {
+  /** Path relative to the module root, using forward slashes. */
+  path: string
+  size: number
+  /** Whole milliseconds; Python and Node must compute the same value. */
+  mtime: number
+  /** sha256:12 of the file bytes; content-based so a copied mtime cannot hide a hot update. */
+  hash: string
+}
+
+function walkRuntimePy(dir: string, base: string, out: RuntimeModuleFile[]): void {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '__pycache__') continue
+    const abs = path.join(dir, entry.name)
+    const rel = base ? base + '/' + entry.name : entry.name
+    if (entry.isDirectory()) {
+      walkRuntimePy(abs, rel, out)
+    } else if (entry.isFile() && entry.name.endsWith('.py')) {
+      const st = fs.statSync(abs)
+      out.push({
+        path: rel,
+        size: st.size,
+        mtime: Math.floor(st.mtimeMs),
+        hash: createHash('sha256').update(fs.readFileSync(abs)).digest('hex').slice(0, 12),
+      })
+    }
+  }
+}
+
+/**
+ * All files that make up one injected runtime module: the facade plus its
+ * name_impl package. A hot update usually touches an impl file while the
+ * facade mtime stays unchanged; both must participate in the fingerprint.
+ */
+export function runtimeModuleFiles(file: string): { root: string; files: RuntimeModuleFile[] } {
+  const root = path.dirname(file)
+  const stem = path.basename(file).replace(/\.py$/, '')
+  const files: RuntimeModuleFile[] = []
+  const st = fs.statSync(file)
+  files.push({
+    path: path.basename(file),
+    size: st.size,
+    mtime: Math.floor(st.mtimeMs),
+    hash: createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 12),
+  })
+  const impl = path.join(root, stem + '_impl')
+  if (fs.existsSync(impl)) walkRuntimePy(impl, stem + '_impl', files)
+  files.sort((a, b) => a.path.localeCompare(b.path))
+  return { root, files }
+}
+
+export function runtimeModuleFingerprint(files: RuntimeModuleFile[]): string {
+  return files
+    .map((f) => f.path + ':' + String(f.size) + ':' + f.hash)
+    .sort()
+    .join('|')
+}
+
+/** Python package prefixes a facade's implementation can live under. */
+export function runtimeModulePrefixes(file: string): string[] {
+  const m = /(?:^|[\\/])runtime[\\/]py[\\/]([^\\/]+)[\\/]([^\\/]+)\.py$/.exec(file)
+  if (!m) return []
+  const domain = m[1]
+  const stem = m[2]
+  const out = ['runtime.py.' + domain + '.' + stem]
+  if (fs.existsSync(path.join(path.dirname(file), stem + '_impl'))) {
+    out.push('runtime.py.' + domain + '.' + stem + '_impl')
+  }
+  return out
+}
+
 export async function injectModule(
   deps: KernelIoDeps,
   file: string,
@@ -147,14 +220,17 @@ export async function injectModule(
   const attr = MODULE_ATTR[marker] || 'dsh_' + String(marker).toLowerCase() + '_api'
   const hashAttr = attr + '_fp'
   // 内容指纹（size + mtime）：模块文件一改，下次调用自动重新注入 —— 开发闭环必需。
-  // 注意：K 跨后端重启保留，所以"只查 hasattr"会让改了文件却不生效（v0.7.0 修）。
-  let fp: string
+  // 必须覆盖 facade + <stem>_impl 整棵树：热更通常只改 impl，facade 的 mtime 不变。
+  let tree: { root: string; files: RuntimeModuleFile[] }
+  let treeFp: string
   try {
-    const st = fs.statSync(file)
-    fp = String(st.size) + '-' + String(Math.round(st.mtimeMs)) + '-k' + KIT_HASH
+    tree = runtimeModuleFiles(file)
+    treeFp = runtimeModuleFingerprint(tree.files)
   } catch (e) {
-    fp = 'missing-k' + KIT_HASH
+    tree = { root: path.dirname(file), files: [] }
+    treeFp = 'missing'
   }
+  const fp = treeFp + '-k' + KIT_HASH
   // K 才是真相：Blender 重启后 K 会清空，仅靠本地 Set 会误判"已注入"
   try {
     // noMark：加载 python 模块是纯 plumbing，不可能改场景 —— 不该参与 stale 判定
@@ -183,7 +259,22 @@ export async function injectModule(
     /* 探测失败 → 走重新注入 */
   }
   const src = fs.readFileSync(file, 'utf8')
+  const prefixes = runtimeModulePrefixes(file)
+  const key = prefixes[0] || path.basename(file)
+  const rec = { root: tree.root, files: tree.files, fp: treeFp }
   const tail =
+    '\n_rfp = getattr(K, "runtime_module_fps", None) or {}' +
+    '\n_rfp[' +
+    JSON.stringify(key) +
+    '] = ' +
+    JSON.stringify(rec) +
+    '\n_rfp[' +
+    JSON.stringify(key) +
+    ']["loaded_at"] = __import__("time").time()' +
+    '\nK.runtime_module_fps = _rfp' +
+    '\nK.runtime_modules_loaded_at = _rfp[' +
+    JSON.stringify(key) +
+    ']["loaded_at"]' +
     '\nK.' +
     hashAttr +
     ' = ' +
@@ -198,7 +289,9 @@ export async function injectModule(
     {
       code:
         KERNEL_BOOTSTRAP +
-        '\n__file__ = ' +
+        '\n' +
+        (prefixes.length ? 'K.reload_modules(' + JSON.stringify(prefixes) + ')\n' : '') +
+        '__file__ = ' +
         JSON.stringify(file) +
         '\n' +
         (prelude ? prelude + '\n' : '') +
@@ -260,6 +353,8 @@ const ensureSweep = (d: KernelIoDeps) =>
   injectModule(d, needFile(SWEEP_PATH, 'sweep'), 'SWEEP_READY', 'SWEEP_VERSION')
 const ensureMaterial = (d: KernelIoDeps) =>
   injectModule(d, needFile(MATERIAL_PATH, 'material'), 'MATERIAL_READY', 'MAT_VERSION')
+const ensureAsset = (d: KernelIoDeps) =>
+  injectModule(d, needFile(ASSET_PATH, 'asset'), 'ASSET_READY', 'ASSET_VERSION')
 // 门包会按 spec 调其它模块：先把常用的几个备好（各自注入一次，之后走缓存）
 const ensureImg = (d: KernelIoDeps) =>
   injectModule(d, needFile(IMG_PATH, 'imgtools'), 'IMG_READY', 'IMG_VERSION')
@@ -379,6 +474,7 @@ const createEnsures = (
   ensurePrint: () => ensurePrint(d),
   ensureSweep: () => ensureSweep(d),
   ensureMaterial: () => ensureMaterial(d),
+  ensureAsset: () => ensureAsset(d),
   ensureImg: () => ensureImg(d),
   ensurePipeline: () => ensurePipeline(d),
   ensureAssembly: () => ensureAssembly(d),

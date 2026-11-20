@@ -16,7 +16,7 @@ import {
 import { KERNEL_BOOTSTRAP } from '../../core/kernel/index.js'
 import { errorMessage } from '../../core/json.js'
 import type { WorkerRecord, WorkersCtx } from './api.js'
-import { workerAlive, workerCall, workerSnapshot, workerState, workerKey } from './api.js'
+import { sameWorkerFile, workerAlive, workerCall, workerSnapshot, workerState, workerKey } from './api.js'
 
 // assertBlenderExe 提到 runtime/execution/exe-guard.ts（job 通道共用），这里保持旧导出名兼容。
 export { assertBlenderExe } from '../exe-guard.js'
@@ -63,11 +63,16 @@ function buildWorkerArgs(
   gpuMode: string,
   engineMode: string,
   bootWin: string | null,
+  fileWin?: string | null,
 ): string[] {
   const args: string[] = [
     '-b',
     '--factory-startup',
-    '--python',
+  ]
+  // A .blend opened here is the worker's whole scene; --factory-startup only skips
+  // the user startup file, it does not bypass the positional file argument.
+  if (fileWin) args.push(fileWin)
+  args.push('--python',
     wslToWin(WORKER_PATH),
     '--',
     '--port',
@@ -78,7 +83,7 @@ function buildWorkerArgs(
     engineMode,
     '--frame-dir',
     String(WIN_TMP),
-  ]
+  )
   if (bootWin) args.push('--boot', bootWin)
   return args
 }
@@ -229,7 +234,19 @@ export async function workerStart(
   nameArg?: unknown,
 ): Promise<Record<string, unknown>> {
   const w = workerState(ctx, nameArg !== undefined ? nameArg : opts.name)
-  if (workerAlive(w) && w.ready) return workerSnapshot(w)
+  if (workerAlive(w) && w.ready) {
+    const wanted = opts.file === undefined || opts.file === null ? '' : String(opts.file).trim()
+    if (wanted && w.file && !sameWorkerFile(wanted, w.file)) {
+      const e: Error & { code?: string; fix?: string; evidence?: Record<string, unknown> } = new Error(
+        'worker 已打开另一个文件：' + w.file + '（请求 ' + wanted + '）',
+      )
+      e.code = 'worker_file_mismatch'
+      e.fix = 'op=restart 带 file=<目标 .blend> 换干净进程，或换一个 session 名'
+      e.evidence = { current_file: w.file, requested_file: wanted, worker: w.name }
+      throw e
+    }
+    return workerSnapshot(w)
+  }
   // 同一个 name 的并发/重试 start 共享一次启动：否则第二个会 SIGKILL 掉正在 boot 的进程，
   // 紧接着再 spawn 一个抢同一个端口（复测现场：反向 FAIL 回执诱导重试 → 端口撞车）。
   const inflight: Promise<Record<string, unknown>> | null | undefined = w.starting
@@ -264,7 +281,8 @@ async function launchWorker(
     opts.engine === undefined || opts.engine === null ? 'eevee' : opts.engine,
   )
   const bootWin = prepareBootFile(ctx, w, opts)
-  const args = buildWorkerArgs(port, gpuMode, engineMode, bootWin)
+  const fileWin = opts.file === undefined || opts.file === null ? null : String(opts.file).trim() || null
+  const args = buildWorkerArgs(port, gpuMode, engineMode, bootWin, fileWin)
   const spawnOpts: SpawnOptions = {
     env: buildWorkerEnv(opts),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -287,6 +305,8 @@ async function launchWorker(
   w.gpu = okRec.gpu || null
   w.pid = okPid || child.pid || null
   w.boot = (info.ok && info.ok.boot) || null
+  w.file = okRec.file === undefined || okRec.file === null ? fileWin : String(okRec.file)
+  w.objects = typeof okRec.objects === 'number' ? okRec.objects : null
   w.lastUsed = Date.now()
   ctx.metrics.workerStarts++
   // 交互式 headless：首帧 Workbench 渲染有 ~1 s 的渲染器初始化（本机实测 first 1003ms / second 13ms）。

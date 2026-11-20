@@ -5,7 +5,7 @@
 bpy/numpy 与共享内核 K.dsh_kit，只在 Blender 注入路径或显式访问时才加载）。
 访问子模块：import runtime.py.core.kit  或  runtime.py.core.kit（惰性属性）。
 """
-__all__ = ['kit', 'contract', 'gate', 'txn', 'runner', 'worker', 'planner', 'presets', 'pipeline', 'perf', 'evalharness', 'motion', 'sweep', 'audit', 'offline_bootstrap']
+__all__ = ['kit', 'contract', 'gate', 'txn', 'runner', 'worker', 'planner', 'presets', 'pipeline', 'perf', 'evalharness', 'motion', 'sweep', 'audit', 'asset', 'offline_bootstrap']
 
 
 def __getattr__(name):

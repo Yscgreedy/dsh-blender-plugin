@@ -13,6 +13,8 @@ def _asm_planned_body(ctx):
             "stage": "planned", "dir": ctx["od"], "name": ctx["nm"], "formats": ctx["fmts"],
             "files": ctx["planned"], "objects": list(names)[:200],
             "counts": {"objects": len(names), "formats": len(ctx["fmts"])},
+            "use_case": _asm_export_use_case_slim(ctx.get("use_case")),
+            "export_options": dict(ctx.get("export_opts") or {}),
             "gate": ctx["gate_slim"], "merge": ctx["merge_slim"], "md5": {}, "manifest_md5": None,
             "warnings": warnings, "verify": bool(ctx["flags"]["verify"]),
             "verdict_line": "asm_export（dry_run，只读）：计划 %d 件 → %s；不建目录/不导出/不写账本"
@@ -42,6 +44,8 @@ def _asm_final_body(ctx):
     return {"ok": ok, "verdict": verdict, "dry_run": False, "stage": "exported",
             "dir": ctx["od"], "name": ctx["nm"], "formats": ctx["fmts"],
             "formats_ok": ctx["ok_formats"], "formats_failed": ctx["failed"],
+            "use_case": _asm_export_use_case_slim(ctx.get("use_case")),
+            "export_options": dict(ctx.get("export_opts") or {}),
             "files": ctx["files"], "counts": dict(ctx["summary"]["counts"], files=len(ctx["ok_formats"])),
             "objects": list(names)[:200], "gate": ctx["gate_slim"], "merge": ctx["merge_slim"],
             "md5": ctx["md5map"], "manifest_md5": ctx["mid"],

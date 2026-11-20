@@ -14,6 +14,8 @@ function buildPyTool(ctx: HostContext, port: number) {
       '【执行 Python】在 ready 的 GUI 会话里跑 agent 写的 Python（/act 通道，固定 exclusive，不卡队列）。' +
       '没有会话直接拒绝，不会启动 headless、不会自动降级。脚本可以重跑；超过 ~1s 的重活请改用 blender_run(kind=headless)。' +
       '可选 see=true（默认）跑完顺手抓当前视口一帧；同画面默认不重复附图。' +
+      '执行前默认留一个 txn 回退点（checkpoint=auto）：客户端超时或 addon 掉线时脚本可能还在 Blender 里跑，' +
+      '回执给 outcome_unknown + request_id + checkpoint，先确认现场再重跑，别把重复材质/节点叠进场景。' +
       '旧工具迁移：blender_rt_do → blender_py；旧 blender_rt_watch 的 code 执行 → blender_py。',
     parameters: {
       code: { type: 'string', description: '要执行的 Python 源码（与 file 二选一）' },
@@ -21,6 +23,11 @@ function buildPyTool(ctx: HostContext, port: number) {
       see: { type: 'boolean', description: '跑完是否抓当前视口一帧（默认 true）' },
       max_size: { type: 'integer', description: 'see 的最长边像素，默认 560' },
       force: { type: 'boolean', description: 'see：同画面默认不重复附图，true 强制重发' },
+      checkpoint: {
+        type: 'string',
+        description:
+          '执行前是否留 txn 回退点：auto（默认，先 snapshot；快照失败也照常执行并在回执告警）| off',
+      },
       wait_ms: {
         type: 'integer',
         description: '等待其它 py 释放的毫秒数（0–5000，默认 0；占用中返回 py_busy）',

@@ -177,8 +177,7 @@ describe('workerStart exe guard', () => {
     // 源码顺序是防御性断言（行为断言在上面用了 mock spawn）；用正则容忍格式/参数变化，
     // 不要绑死某一行原文——否则重命名局部变量就会误报。
     const src = fs.readFileSync(pkgPath('runtime/execution/workers/worker-start.ts'), 'utf8')
-    const earlyReturn =
-      /if\s*\(\s*workerAlive\(w\)\s*&&\s*w\.ready\s*\)\s*return\s+workerSnapshot\(w\)/.exec(src)
+    const earlyReturn = /if\s*\(\s*workerAlive\(w\)\s*&&\s*w\.ready\s*\)/.exec(src)
     const guard = /assertBlenderExe\(\s*exe\s*,\s*blenderExeSource\(\)\s*\)/.exec(src)
     const bootFile = /const\s+bootWin\s*=\s*prepareBootFile\(/.exec(src)
     const spawn = /spawn\(\s*exe\s+as\s+string/.exec(src)

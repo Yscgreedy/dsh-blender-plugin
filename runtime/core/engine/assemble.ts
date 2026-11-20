@@ -95,6 +95,7 @@ export function assembleEngine(ctx: EngineContext): {
     worker: {
       start: workersApi.workerStart,
       exec: workersApi.workerExec,
+      digest: workersApi.workerDigest,
       see: workersApi.workerSee,
       watch: workersApi.workerWatch,
       reset: workersApi.workerReset,

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
 import { errorMessage, errorField } from '../../core/json.js'
+import { lookupHeadless } from '../../core/bpy-api-probe.js'
 // HTTP 路由 /commands：命令清单 / 透传
 export function createCommandsRoutes(E: HttpRouteDeps) {
   const { engine, json, leaseGate, readBody, stats } = E
@@ -31,6 +32,18 @@ export function createCommandsRoutes(E: HttpRouteDeps) {
         payload = JSON.parse(raw)
       } catch (e) {
         payload = {}
+      }
+      const headlessLookup =
+        payload.headless === true && String(payload.name || '') === 'bpy_api_lookup'
+      if (headlessLookup) {
+        // 工单 11：read-only 探针，不占写租约；GUI 在线也允许 force_headless。
+        const evidence = await lookupHeadless(E.engine.worker, {
+          query: String(objArg(payload.params).query || ''),
+          expectVersion: payload.expect_version == null ? null : String(payload.expect_version),
+          versionFixture: payload.version_fixture == null ? null : String(payload.version_fixture),
+        })
+        json(res, 200, { ok: evidence.ok, source: 'headless', result: evidence })
+        return
       }
       const gate = leaseGate(payload)
       if (gate) {

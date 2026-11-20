@@ -35,7 +35,12 @@ export function rowsOf(body: Record<string, unknown>): CommandRow[] {
   return rows
 }
 
-export function formatHelp(rows: CommandRow[], scene: unknown, file: unknown): string {
+export function formatHelp(
+  rows: CommandRow[],
+  scene: unknown,
+  file: unknown,
+  provenance?: Record<string, unknown> | null,
+): string {
   const readable = rows.filter((r) => r.access === 'read')
   const internal = rows.length - readable.length
   const lines = [
@@ -46,6 +51,17 @@ export function formatHelp(rows: CommandRow[], scene: unknown, file: unknown): s
       (scene ? ' · 场景 ' + text(scene) : '') +
       (file ? ' · 文件 ' + text(file) : ''),
   ]
+  const prov = asRecord(provenance || {})
+  if (Object.keys(prov).length)
+    lines.push(
+      'provenance loaded=' +
+        text(prov.loadedHash || '-') +
+        ' · current=' +
+        text(prov.currentHash || '-') +
+        ' · verdict=' +
+        text(prov.verdict || 'unknown') +
+        (prov.staleReason ? ' · ' + text(prov.staleReason).slice(0, 240) : ''),
+    )
   for (const r of readable.sort((a, b) => a.name.localeCompare(b.name))) {
     const flags = []
     if (!r.enabled) flags.push('DISABLED(' + String(r.gate || 'gate') + ')')

@@ -475,6 +475,20 @@
       "preload": "material"
     },
     {
+      "id": "ext-asset",
+      "side": "gui",
+      "family": "asset",
+      "group": "ext",
+      "kind": "dispatch",
+      "match": "prefix",
+      "prefix": "asset_",
+      "strip": 6,
+      "api": "dsh_asset_api",
+      "ensure": "ensureAsset",
+      "timeoutMs": 900000,
+      "preload": "asset"
+    },
+    {
       "id": "ext-sculpt",
       "side": "gui",
       "family": "sculpt",

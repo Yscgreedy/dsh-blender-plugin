@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "name": "p6_decoy_ports",
+  "note": "诱饵：39877/9879/9877 上各放会骗过“只看端口在听”的记录；分类器必须全部拒绝（false_positives 必须为空）。gatewayPid 是回放期望值（本文件内），不是现网 Gateway pid。",
+  "gatewayPid": 7504,
+  "processes": [
+    {
+      "pid": 7504,
+      "name": "DeepSeek Harness.exe"
+    },
+    {
+      "pid": 11176,
+      "name": "blender.exe"
+    },
+    {
+      "pid": 31337,
+      "name": "python.exe"
+    },
+    {
+      "pid": 5150,
+      "name": "chrome.exe"
+    }
+  ],
+  "listeners": [
+    {
+      "port": 39877,
+      "pid": 7504,
+      "process": "DeepSeek Harness.exe"
+    },
+    {
+      "port": 39877,
+      "pid": 11176,
+      "process": "blender.exe",
+      "decoy": true
+    },
+    {
+      "port": 39877,
+      "pid": 4242,
+      "process": null,
+      "decoy": true
+    },
+    {
+      "port": 9879,
+      "pid": 11176,
+      "process": "blender.exe"
+    },
+    {
+      "port": 9879,
+      "pid": 5150,
+      "process": "chrome.exe",
+      "decoy": true
+    },
+    {
+      "port": 9877,
+      "pid": 31337,
+      "process": "python.exe",
+      "decoy": true
+    }
+  ]
+}

@@ -94,7 +94,7 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
 1. **先安装随包 addon。**
 
-   从本仓库的 extension/ 目录下载 **extension/dsh_blender_bridge.zip**。打开 Blender，进入 Edit > Preferences > Extensions > Install from Disk...，选择该 zip，启用 DSH Blender Bridge；在 3D 视图按 N 打开面板，点 Connect。addon 会在 Connect 后主动连接 DSH Gateway（默认 127.0.0.1:39877），不监听端口；升级/替换 addon 后必须重启 Blender（无热重载，旧 3.0.x addon 的 9876 listener 不会自动释放）。如果之前装过单文件 `dsh_blender_bridge.py`，请先停用并移除：3.1 只通过 Blender Extensions 安装这个扩展包。
+   从本仓库的 extension/ 目录下载 **extension/dsh_blender_bridge.zip**。打开 Blender，进入 Edit > Preferences > Extensions > Install from Disk...，选择该 zip，启用 DSH Blender Bridge。启用后 addon 会主动连接 DSH Gateway（默认 127.0.0.1:39877，不需要点 Connect），不监听端口；升级/替换 addon 后必须重启 Blender（无热重载，旧 3.0.x addon 的 9876 listener 不会自动释放）。如果之前装过单文件 `dsh_blender_bridge.py`，请先停用并移除：3.1 只通过 Blender Extensions 安装这个扩展包。
 
    只能用这个 addon 作为 agent 桥。若已启用 `MCP for Blender` / `blender_mcp`（或其他 Blender 侧 agent 桥），停用它即可，不必卸载；其他 addon 可以留着。如果后面的安装用不了，先回来检查这一步。
 
@@ -135,7 +135,7 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
     GUI 路线唯一验收判据：doctor 返回 kind=ok。没到就是没装好。
 
-    Blender 与 Gateway 由宿主启动：请自行打开 Blender、启用 addon 并点 Connect；3.1 没有模型侧的启动工具。
+    Blender 与 Gateway 由宿主启动：请自行打开 Blender 并启用 addon（扩展会主动拨入 Gateway，不需要点 Connect）；3.1 没有模型侧的启动工具。
 
     纯无头路线（不装 addon）：
 
@@ -146,12 +146,12 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
 ## 工具
 
-插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（35 family / 261 op）里，所以工具面保持很小。
+插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（36 family / 264 op）里，所以工具面保持很小。
 
 | 工具 | 它能给你什么 |
 |---|---|
 | blender_session | GUI 会话生命周期与归属：list/status/doctor、attach、claim/release、写作用域 grant/revoke、暂停状态、presence，以及 `action=txn` 快照/标记回滚。Blender 与 Gateway 由宿主管理。 |
-| blender_op | 能力目录（`op="catalog"`，35 family / 261 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
+| blender_op | 能力目录（`op="catalog"`，36 family / 264 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
 | blender_py | 在已 attach 的 GUI 会话里执行 Python，内核跨调用保留；`see=true` 顺带回一帧。仅 GUI，没有无头回退。 |
 | blender_see | 仅用于 GUI 取帧：`viewpoint=viewport|camera|custom`、`mode=frame|sequence`，固定宽高比分档。相机动画与批量渲染走 `blender_run(kind="render")`。 |
 | blender_run | 唯一作业入口：`action=submit` 配 `kind=render|headless` 立即返回 job id；`status/wait/collect/cancel/list` 管理作业；`action=tune` 管渲染性能。 |

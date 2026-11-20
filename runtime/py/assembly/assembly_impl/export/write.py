@@ -4,10 +4,10 @@ from ..common import *  # noqa: F401,F403
 from .helpers import *  # noqa: F401,F403
 
 
-def _asm_export_one_format(fmt, objs, path, verify, warnings):
+def _asm_export_one_format(fmt, objs, path, verify, warnings, opts=None):
     """导出单个格式并按需校验；返回回执 dict（失败时追加 warning）。"""
     try:
-        rec = _asm_export_one(fmt, objs, path)
+        rec = _asm_export_one(fmt, objs, path, opts)
         if verify:
             v = _asm_verify_file(fmt, path)
             rec["verify"] = v
@@ -23,7 +23,8 @@ def _asm_export_one_format(fmt, objs, path, verify, warnings):
             if not rec["ok"]:
                 rec["error"] = "文件不存在或为空"
     except Exception as e:
-        rec = {"ok": False, "path": path,
+        # 请求过的关键字照样留在回执里：失败原因与"本来要下发什么"一起可查
+        rec = {"ok": False, "path": path, "options": dict(opts or {}),
                "error": "%s: %s" % (type(e).__name__, str(e)[:240]),
                "verify": {"skipped": True, "reason": "导出异常"}}
     if not rec.get("ok"):
@@ -37,9 +38,11 @@ def _asm_export_loop(ctx):
     ok_formats, failed = [], []
     verify = ctx["flags"]["verify"]
     warnings = ctx["warnings"]
+    export_opts = ctx.get("export_opts") or {}
     for fmt in ctx["fmts"]:
         path = ctx["planned"][fmt]
-        rec = _asm_export_one_format(fmt, ctx["objs"], path, verify, warnings)
+        rec = _asm_export_one_format(fmt, ctx["objs"], path, verify, warnings,
+                                     export_opts.get(fmt))
         exports[fmt] = rec
         files[fmt] = path
         if rec.get("ok"):

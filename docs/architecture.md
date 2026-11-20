@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 35 planning families, 261 operations, 25 addon commands
+blender_run, blender_inspect), 35 planning families, 264 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -251,7 +251,7 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 35 families / 261 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 36 families / 264 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by

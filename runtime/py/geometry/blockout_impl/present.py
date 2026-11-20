@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Split from blockout.py; behavior preserved by the facade."""
+import subprocess
 from .common import *  # noqa: F401,F403
 from .templates import _parse_res
 from .geometry import _bbox_bu, _configure_workbench, _tan_half
@@ -194,10 +195,7 @@ def _present_setup(sc, res, background, neutral=0.62):
             pass
     except Exception:
         pass
-    try:
-        sc.render.image_settings.media_type = "IMAGE"
-    except Exception:
-        pass
+    _set_media_type(sc.render.image_settings, "IMAGE")
     try:
         ims = sc.render.image_settings
         ims.file_format = "PNG"
@@ -251,12 +249,189 @@ def _clean_prefix_files(root, stem, exts):
                 pass
 
 
-def _render_turntable_video(sc, cam, center, cam_dist, elev, az_start, orbit, frames, root, stem, fps_v, res):
+
+def _ffmpeg_probe(ims=None):
+    """Probe FFMPEG availability by trying the assignment the render path uses.
+
+    The static RNA enum is not authoritative: this machine's Blender 5.3 exposes
+    16 file_format entries including FFMPEG, while assigning 'FFMPEG' still raises
+    TypeError with a 14-entry dynamic list.  The only reliable test is the write
+    itself, with the original value restored in finally.
+
+    Returns {enum_static, assign_ok, available, error}.  available follows
+    assign_ok, not the static list.
+    """
+    out = {"enum_static": False, "assign_ok": False, "available": False, "error": None}
+    target = ims
+    if target is None:
+        try:
+            target = bpy.context.scene.render.image_settings
+        except Exception as e:
+            out["error"] = "拿不到 image_settings：%s: %s" % (type(e).__name__, str(e)[:160])
+            return out
+    try:
+        prop = target.bl_rna.properties.get("file_format")
+        if prop is not None:
+            out["enum_static"] = "FFMPEG" in {item.identifier for item in prop.enum_items}
+    except Exception as e:
+        out["error"] = "静态 enum 读取失败：%s: %s" % (type(e).__name__, str(e)[:160])
+    saved_fmt = None
+    saved_media = None
+    try:
+        saved_fmt = target.file_format
+        try:
+            saved_media = getattr(target, "media_type", None)
+        except Exception:
+            saved_media = None
+        # Mirror the real builtin path: 5.x needs media_type=VIDEO before FFMPEG.
+        if saved_media is not None:
+            try:
+                target.media_type = "VIDEO"
+            except Exception:
+                pass
+        target.file_format = "FFMPEG"
+        out["assign_ok"] = True
+    except Exception as e:
+        out["error"] = "file_format='FFMPEG' 赋值失败：%s: %s" % (type(e).__name__, str(e)[:240])
+    finally:
+        # Restore media_type first, then file_format: 5.x couples the two, and
+        # setting PNG while media_type=VIDEO can be rejected on some builds.
+        if saved_media is not None:
+            try:
+                target.media_type = saved_media
+            except Exception as e:
+                out["restore_error"] = "还原 media_type 失败：%s: %s" % (type(e).__name__, str(e)[:100])
+        if saved_fmt is not None:
+            try:
+                target.file_format = saved_fmt
+            except Exception as e:
+                out["restore_error"] = (out.get("restore_error") or "") + "；还原 file_format 失败：%s" % str(e)[:100]
+    out["available"] = bool(out["assign_ok"])
+    return out
+
+
+def _set_media_type(ims, value):
+    """media_type is 5.x-era; 4.2 may not have it.  Never let a missing attr abort the render."""
+    try:
+        if hasattr(ims, "media_type"):
+            ims.media_type = value
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _encode_with_ffmpeg(exe, seq_dir, stem, root, fps_v, frames, res):
+    """Encode a rendered PNG sequence with an external ffmpeg executable."""
+    pattern = os.path.join(seq_dir, "frame_%04d.png")
+    out = _norm_path(os.path.join(root, stem + "_turntable.mp4"))
+    cmd = [str(exe), "-y", "-hide_banner", "-loglevel", "error",
+           "-framerate", str(int(round(float(fps_v)))), "-start_number", "1",
+           "-i", pattern, "-frames:v", str(int(frames)),
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]
+    t0 = time.perf_counter()
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    except Exception as e:
+        raise RuntimeError("ffmpeg 启动失败：%s: %s" % (type(e).__name__, str(e)[:160]))
+    log = (p.stderr or b"").decode("utf-8", "replace")[-800:]
+    if p.returncode != 0:
+        raise RuntimeError("ffmpeg 退出码 %s：%s" % (p.returncode, log[-400:]))
+    if not os.path.isfile(out):
+        raise RuntimeError("ffmpeg 退出 0 但没找到视频：%s" % out)
+    rec = _file_receipt(out)
+    with open(out, "rb") as fh:
+        head = fh.read(12)
+    rec.update({"ok": True, "magic_ok": head[4:8] == b"ftyp", "container": "MPEG4",
+                "codec": "H264", "frames": int(frames), "fps": int(round(float(fps_v))),
+                "duration_s": round(float(frames) / float(fps_v), 3), "res": list(res),
+                "encoder": "external", "exe": str(exe), "cmd": cmd,
+                "log": log, "ms": int(round((time.perf_counter() - t0) * 1000.0))})
+    if not rec["magic_ok"]:
+        raise RuntimeError("外部 ffmpeg 产物魔数不对（第 4-8 字节不是 ftyp）：%s" % out)
+    return rec
+
+
+
+def _fallback_action_fcurves(action, slot=None):
+    """Local layered-action walk used when the GUI K predates the kit helper.
+
+    Hot-updated runtime files do not rebuild an already-loaded K.dsh_kit in a live
+    GUI session.  This fallback keeps the turntable camera linearization working
+    without waiting for a Blender restart.
+    """
+    if action is None:
+        return []
+    layers = getattr(action, "layers", None)
+    if layers is not None:
+        slots = [slot] if slot is not None else list(getattr(action, "slots", None) or ())
+        curves = []
+        seen = set()
+        for candidate in slots:
+            channelbag = None
+            for layer in layers:
+                for strip in getattr(layer, "strips", None) or ():
+                    try:
+                        channelbag = strip.channelbag(candidate)
+                    except Exception:
+                        channelbag = None
+                    if channelbag is not None:
+                        break
+                if channelbag is not None:
+                    break
+            if channelbag is None:
+                continue
+            for fcurve in getattr(channelbag, "fcurves", None) or ():
+                as_pointer = getattr(fcurve, "as_pointer", None)
+                try:
+                    identity = ("pointer", as_pointer()) if callable(as_pointer) else ("object", id(fcurve))
+                except Exception:
+                    identity = ("object", id(fcurve))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                curves.append(fcurve)
+        return curves
+    try:
+        return list(getattr(action, "fcurves", None) or ())
+    except AttributeError:
+        return []
+
+
+def _action_fcurves(action):
+    """K.action_fcurves → K.dsh_kit.action_fcurves → local fallback, in that order."""
+    for holder in (_K, getattr(_K, "dsh_kit", None), _KIT):
+        fn = getattr(holder, "action_fcurves", None)
+        if callable(fn):
+            try:
+                return fn(action)
+            except Exception:
+                continue
+    return _fallback_action_fcurves(action)
+
+
+def _linearize_camera_action(cam, warnings=None):
+    """Make camera keyframes linear; returns the curve count. Raises on zero curves."""
+    ad = cam.animation_data
+    act = ad.action if ad is not None else None
+    if act is None:
+        return 0
+    curves = _action_fcurves(act)
+    if not curves:
+        raise RuntimeError("action_fcurves 返回 0 条曲线（layered action 的 slot 可能未绑定）")
+    for fc in curves:
+        for kp in fc.keyframe_points:
+            kp.interpolation = "LINEAR"
+    return len(curves)
+
+
+def _render_turntable_video(sc, cam, center, cam_dist, elev, az_start, orbit, frames, root, stem,
+                            fps_v, res, warnings=None):
     """Blender 内置 FFMPEG：media_type=VIDEO + file_format=FFMPEG（Blender 5.x 的口径）。"""
     _clean_prefix_files(root, stem + "_turntable", (".mp4", ".mov", ".mkv", ".avi", ".webm"))
     prefix = _norm_path(os.path.join(root, stem + "_turntable"))
     ims = sc.render.image_settings
-    ims.media_type = "VIDEO"
+    _set_media_type(ims, "VIDEO")
     ims.file_format = "FFMPEG"
     ff = sc.render.ffmpeg
     ff.format = "MPEG4"
@@ -278,14 +453,13 @@ def _render_turntable_video(sc, cam, center, cam_dist, elev, az_start, orbit, fr
         cam.keyframe_insert(data_path="location", frame=f)
         cam.keyframe_insert(data_path="rotation_euler", frame=f)
     try:
-        ad = cam.animation_data
-        act = ad.action if ad is not None else None
-        if act is not None:
-            for fc in act.fcurves:
-                for kp in fc.keyframe_points:
-                    kp.interpolation = "LINEAR"
-    except Exception:
-        pass
+        _linearize_camera_action(cam)
+    except Exception as e:
+        # Only a real failure (no curves at all) warns; a K without the helper uses
+        # _fallback_action_fcurves and stays silent.
+        if warnings is not None:
+            warnings.append("相机关键帧线性化失败：%s: %s"
+                            % (type(e).__name__, str(e)[:180]))
     t0 = time.perf_counter()
     bpy.ops.render.render(animation=True)
     render_ms = int(round((time.perf_counter() - t0) * 1000.0))
@@ -350,7 +524,7 @@ def _render_turntable_sequence(sc, cam, center, cam_dist, elev, az_start, orbit,
 
 
 def _tt_params(objects, collection, name, frames, fps, res, elev_deg, distance, background, fmt,
-               orbit_deg, out_dir=None):
+               orbit_deg, out_dir=None, ffmpeg_exe=None):
     """转台参数解析 + 相机 meta；坏值 raise ValueError（调用方转 _err）。"""
     objs = _find_model_objects(objects=objects, name=name, collection=collection)
     nm = _safe_token(name or collection or "turntable", "name")
@@ -364,6 +538,11 @@ def _tt_params(objects, collection, name, frames, fps, res, elev_deg, distance, 
     if fmt_s not in ("mp4", "png", "sequence"):
         raise ValueError("fmt 只支持 mp4 / png(sequence)（收到 %r）" % (fmt,))
     bg_val, bg_name, transparent = _bg_rgb(background)
+    exe = str(ffmpeg_exe).strip() if ffmpeg_exe not in (None, False, "") else ""
+    if exe and not os.path.isfile(exe):
+        raise ValueError("ffmpeg_exe 不存在：%s" % exe)
+    ffmpeg_probe = _ffmpeg_probe()
+    ffmpeg_ok = bool(ffmpeg_probe.get("available"))
     root = _root_outdir(out_dir)
     mn, mx = _bbox_bu(objs)
     center = (mn + mx) * 0.5
@@ -379,7 +558,12 @@ def _tt_params(objects, collection, name, frames, fps, res, elev_deg, distance, 
     return {"objs": objs, "nm": nm, "nframes": nframes, "fps_v": fps_v, "res_v": res_v,
             "elev": elev, "dmult": dmult, "orbit": orbit, "fmt_s": fmt_s,
             "background": background, "transparent": transparent, "root": root,
-            "center": center, "cam_dist": cam_dist, "cam_meta": cam_meta}
+            "center": center, "cam_dist": cam_dist, "cam_meta": cam_meta,
+            "ffmpeg_available": ffmpeg_ok,
+            "ffmpeg_enum_static": bool(ffmpeg_probe.get("enum_static")),
+            "ffmpeg_assign_ok": bool(ffmpeg_probe.get("assign_ok")),
+            "ffmpeg_probe_error": ffmpeg_probe.get("error"),
+            "ffmpeg_exe": exe or None}
 
 
 def _tt_render(sc, cam, pr, warnings):
@@ -389,35 +573,69 @@ def _tt_render(sc, cam, pr, warnings):
     sequence = None
     degraded = False
     error = None
+    seq_dir = os.path.join(pr["root"], pr["nm"] + "_turntable_frames")
+
+    def _sequence():
+        return _render_turntable_sequence(
+            sc, cam, pr["center"], pr["cam_dist"], pr["elev"], -90.0, pr["orbit"], pr["nframes"],
+            seq_dir, pr["res_v"])
+
     if fmt_s == "mp4":
         if pr["transparent"]:
             warnings.append("background=transparent 不支持视频（MP4 无 alpha）→ 已按 white 渲染；"
                             "要带 alpha 的帧请用 fmt=png")
         pres = _present_setup(sc, pr["res_v"], "white" if pr["transparent"] else pr["background"])
-        try:
-            video = _render_turntable_video(sc, cam, pr["center"], pr["cam_dist"], pr["elev"], -90.0, pr["orbit"],
-                                            pr["nframes"], pr["root"], pr["nm"], pr["fps_v"], pr["res_v"])
-        except Exception as e:
-            degraded = True
-            error = "MP4 输出失败：%s: %s" % (type(e).__name__, str(e)[:220])
-            warnings.append(error + " → 回退 PNG 序列")
+        ff_ok = bool(pr.get("ffmpeg_available"))
+        exe = pr.get("ffmpeg_exe")
+        if exe or not ff_ok:
+            # Feature-detected absence: do not call the enum and let the exception
+            # be the only evidence; say it in the receipt and go straight to PNG.
+            if exe:
+                try:
+                    sequence = _sequence()
+                except Exception as e2:
+                    return None, None, True, "PNG 序列失败：%s" % str(e2)[:180], None, _err(
+                        "ffmpeg_exe 已给，但 PNG 序列失败：%s" % str(e2)[:160], op="turntable")
+                try:
+                    video = _encode_with_ffmpeg(exe, seq_dir, pr["nm"], pr["root"],
+                                                pr["fps_v"], pr["nframes"], pr["res_v"])
+                except Exception as e:
+                    degraded = True
+                    error = "外部 ffmpeg 编码失败：%s: %s" % (type(e).__name__, str(e)[:220])
+                    warnings.append(error + " → 保留 PNG 序列")
+            else:
+                degraded = True
+                error = ("ffmpeg_available=false：file_format='FFMPEG' 赋值不可用"
+                         "（enum_static=%s, assign_ok=%s）" % (pr.get("ffmpeg_enum_static"),
+                                                            pr.get("ffmpeg_assign_ok")))
+                warnings.append(error + " → 回退 PNG 序列")
+                try:
+                    sequence = _sequence()
+                except Exception as e2:
+                    return None, None, True, error, None, _err(
+                        "无 FFMPEG 且 PNG 序列失败：%s" % str(e2)[:160], op="turntable")
+        else:
             try:
-                _clean_prefix_files(pr["root"], pr["nm"] + "_turntable",
-                                    (".mp4", ".mov", ".mkv", ".avi", ".webm"))
-            except Exception:
-                pass
-            try:
-                sequence = _render_turntable_sequence(
-                    sc, cam, pr["center"], pr["cam_dist"], pr["elev"], -90.0, pr["orbit"], pr["nframes"],
-                    os.path.join(pr["root"], pr["nm"] + "_turntable_frames"), pr["res_v"])
-            except Exception as e2:
-                return None, None, True, error, None, _err(
-                    "MP4 与 PNG 序列都失败：%s / %s" % (str(e)[:140], str(e2)[:140]), op="turntable")
+                video = _render_turntable_video(sc, cam, pr["center"], pr["cam_dist"], pr["elev"], -90.0,
+                                                pr["orbit"], pr["nframes"], pr["root"], pr["nm"],
+                                                pr["fps_v"], pr["res_v"], warnings)
+            except Exception as e:
+                degraded = True
+                error = "MP4 输出失败：%s: %s" % (type(e).__name__, str(e)[:220])
+                warnings.append(error + " → 回退 PNG 序列")
+                try:
+                    _clean_prefix_files(pr["root"], pr["nm"] + "_turntable",
+                                        (".mp4", ".mov", ".mkv", ".avi", ".webm"))
+                except Exception:
+                    pass
+                try:
+                    sequence = _sequence()
+                except Exception as e2:
+                    return None, None, True, error, None, _err(
+                        "MP4 与 PNG 序列都失败：%s / %s" % (str(e)[:140], str(e2)[:140]), op="turntable")
     else:
         pres = _present_setup(sc, pr["res_v"], pr["background"])
-        sequence = _render_turntable_sequence(
-            sc, cam, pr["center"], pr["cam_dist"], pr["elev"], -90.0, pr["orbit"], pr["nframes"],
-            os.path.join(pr["root"], pr["nm"] + "_turntable_frames"), pr["res_v"])
+        sequence = _sequence()
     return video, sequence, degraded, error, pres, None
 
 
@@ -433,6 +651,18 @@ def _tt_payload(pr, pres, video, sequence, degraded, error, warnings, t_start):
            "objects": [ob.name for ob in pr["objs"]], "object_count": len(pr["objs"]),
            "video": video, "sequence": sequence, "warnings": warnings,
            "degraded": bool(degraded),
+           "ffmpeg_available": bool(pr.get("ffmpeg_available")),
+           "ffmpeg_enum_static": bool(pr.get("ffmpeg_enum_static")),
+           "ffmpeg_assign_ok": bool(pr.get("ffmpeg_assign_ok")),
+           "ffmpeg_probe_error": pr.get("ffmpeg_probe_error"),
+           "ffmpeg_exe": pr.get("ffmpeg_exe") or None,
+           "ffmpeg": {"available": bool(pr.get("ffmpeg_available")),
+                      "enum_static": bool(pr.get("ffmpeg_enum_static")),
+                      "assign_ok": bool(pr.get("ffmpeg_assign_ok")),
+                      "error": pr.get("ffmpeg_probe_error")},
+           "fallback": ("png_sequence" if degraded and sequence is not None and video is None else None),
+           "encoder": ("external" if video is not None and video.get("encoder") == "external"
+                       else "builtin" if video is not None else "png_sequence" if sequence is not None else None),
            "ms": {"render": ((video or {}).get("render_ms") or (video or {}).get("ms")
                              or (sequence or {}).get("ms"))}}
     if video is not None:
@@ -477,12 +707,13 @@ def _tt_cleanup(sc, cam, cam_data, hidden, st):
 
 
 def blockout_turntable(objects=None, collection=None, name=None, out_dir=None, frames=96, fps=24,
-                       res=None, elev_deg=15, distance=1.6, background="white", fmt="mp4", orbit_deg=360):
+                       res=None, elev_deg=15, distance=1.6, background="white", fmt="mp4", orbit_deg=360,
+                       ffmpeg_exe=None):
     """绕 Z 轴转台：内置 FFMPEG 出 MP4（失败回退 PNG 序列，ok:false/degraded + warnings）。"""
     t_start = time.perf_counter()
     try:
         pr = _tt_params(objects, collection, name, frames, fps, res, elev_deg, distance,
-                        background, fmt, orbit_deg, out_dir)
+                        background, fmt, orbit_deg, out_dir, ffmpeg_exe)
     except ValueError as e:
         return _err(e, hint="turntable 用 objects=/name=/collection= 指定已建白模；参数见 help().ops.turntable",
                     op="turntable")

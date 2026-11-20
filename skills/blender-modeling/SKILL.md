@@ -6,7 +6,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 
 # Blender 建模流程
 
-> **v3.2.0-alpha.1 · 2026-11-17**：配套插件 dsh-blender-plugin v3.2.0-alpha.1，6 个模型工具，plan 通道 35 个 family / 261 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
+> **v3.2.0-alpha.1 · 2026-11-17**：配套插件 dsh-blender-plugin v3.2.0-alpha.1，6 个模型工具，plan 通道 36 个 family / 264 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
 > 旧版按 v2/v3/v7 记录的“哪段是哪次实测加的”不再写在正文；需要追溯看 CHANGELOG。下面只写**当前有效口径**。
 
 先定形状，再走流程，改一步看一眼。**不要一口气写完整个模型再回来看**——每一步都要有画面或数字证据。
@@ -18,7 +18,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 | 工具 | 什么时候用 | 关键点 |
 |---|---|---|
 | blender_session | 会话与通道运维 | list/status/doctor/attach/claim/release/grant/revoke/pause/mark_read/presence；action=txn 回滚；Blender/Gateway 生命周期由宿主管理 |
-| blender_op | 契约层 + 判定/验收/导出/造型 | op=catalog 先查 35 个 family / 261 个 op；执行 op 需要 ready 的 GUI 会话（catalog/dry-run 本地只读、无需会话）；action=loop/opt/preset |
+| blender_op | 契约层 + 判定/验收/导出/造型 | op=catalog 先查 36 个 family / 264 个 op；执行 op 需要 ready 的 GUI 会话（catalog/dry-run 本地只读、无需会话）；action=loop/opt/preset |
 | blender_py | 改一步看一眼 | 在已 attach 的 GUI 会话里跑 Python，持久内核 K；see=true 回一帧；仅 GUI，重活转 blender_run |
 | blender_see | 看一眼画面 | 仅 GUI 取帧：viewpoint=viewport/camera/custom、mode=frame/sequence，固定分档；不动用户视口 |
 | blender_run | 批处理/长活 | 唯一作业入口：submit kind=render|headless 立即回 job id；status/wait/collect/cancel/list；action=tune 管渲染性能；超时不等于失败 |
@@ -30,6 +30,8 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 3. **回执先读 verdict，不读 ok**：gate/audit/asm/visualreport/eval 都是 pass|fail|degraded 三态；degraded ≠ 通过；ok 只表示“跑完了”。
 4. **数字必须可复算**：尺寸、px_per_mm、bbox、md5、IoU 要带来源；没有标定就不许把像素当毫米。
 5. **headless 里优先 bpy.data/bmesh，慎用 bpy.ops**：依赖 screen/context 的 GUI 型 ops 在无头会话可能失败；必须用时先小步验证。
+6. **交付先选 use_case**：`asm_export(use_case="unity"|"unreal"|"godot"|"web")` 一次定好轴向/缩放/叶骨/动画烘焙；默认 `none` 保持旧 kwargs（fbx 不烘焙动画，带绑定资产会静默丢动作）。`print` 用 `deliver_export(fmt="stl")`，`ar` 走 USD——asm_export 对这两个回 `ok:false`，不会静默降级。
+7. **外部资产走 asset 族**：`asset_search(query=…)` → `asset_fetch(id=…, resolution="1k")` → **必须** `audit_mesh` 复检。只接 PolyHaven（免 key）；Sketchfab / Poly Pizza 用 `blender_py`，模板见 `references/资产与生成.md`。
 
 ### 0.2 GUI 优先（默认）：交互回路 + 后台作业
 
@@ -43,6 +45,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
   长任务（>1 min）仍然走 `kind="headless"` 作业 —— worker 是串行的，长代码会把它占住。
 - **consent / 掉线检查**：`start kind="virtual-gui"` 回 `consent_required` 时，把回执里的 `request_id` 和那行 approve 命令**原样转给用户**（不要自己重试到超时）；`attach` 回 `addon_disconnected` / `addon_unresponsive` 时让用户在 Blender N 面板重新 Enable + Connect，不要靠重试。
 - `blender_py` 里**不要**写 `wm.read_factory_settings` / `wm.read_homefile`：会把 addon 一起卸掉，工具默认拦下（`factory_reset_blocked`）；要清场景用逐对象删除，或在 worker / headless 里重置。
+- **`blender_py` 有回退点，也有「结果未知」口径**：默认 `checkpoint="auto"` 在执行前打一次文件级快照（lease 写通道或大场景可能降级为 `checkpoint=none` + 警告）；成功回执带 `outcome=complete · request_id · checkpoint=py-xxxxxxxx`。**180 s 超时/断线回 `outcome_unknown`——这不等于是失败**，脚本可能还在 Blender 里跑：先 `blender_inspect command=get_scene_info` 看有没有重复材质/节点，或 `blender_session(action="txn", op="restore", label=<checkpoint>)` 退回执行前；确认场景没变再重跑。要跳过快照传 `checkpoint="off"`。
 - `script_file` / `file` 给**绝对路径**最稳：相对路径按 `workdir → 工作区 env → Gateway cwd` 解析，缺文件会在起进程前回 `input_missing`。
 
 ### 0.3 单位与尺度（先定，后建模）
@@ -139,7 +142,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 
 | 我要做什么 | 首选 | 备注 |
 |---|---|---|
-| 不知道该用什么 | blender_op(op="catalog") | 35 个 family / 261 个 op；单族 family=... |
+| 不知道该用什么 | blender_op(op="catalog") | 36 个 family / 264 个 op；单族 family=... |
 | 基本体/分面硬表面 | bmesh / geo primitives + bevel | 分面件不要 SubSurf |
 | 毫米口径建模 | `blender_op(op="geo_box", args={size_mm:[…], unit:"mm"})` | 坐标按 mm 收；回执带 `units{mm_per_bu,scale_length,unit_mode}`；`geo_join` 会先烘 `matrix_world`（阵列后 join 不再塌） |
 | 光滑硬表面 | Bevel + Subdivision + shade smooth | Bevel 必须在 SubSurf 前 |
@@ -338,7 +341,7 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
 
 **判据**：能用第一选择就不用第二选择；第二选择必须在回执里写明“为什么不用插件 op”。
 
-## 4. 当前 plan 通道速查（v3.2.0-alpha.1 · 35 个 family / 261 个 op）
+## 4. 当前 plan 通道速查（v3.2.0-alpha.1 · 36 个 family / 264 个 op）
 
 先 blender_op(op="catalog") 看“什么时候用 / 别用 / 最小骨架”，再单族展开。常用家族：
 
@@ -419,8 +422,11 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
     blender_op(op="asm_export", args={
       manifest:"assembly.json", merge:true, dry_run:false,
       out_dir:"D:/out", name:"assembly",
-      formats:["glb","fbx","obj"], ledger:true
+      formats:["glb","fbx","obj"], ledger:true,
+      use_case:"unity"           # 无预设=旧 kwargs；unity/unreal 出 fbx 且 bake_anim=true
     })
+    # 回执与 manifest 都会带 use_case + 解析后的 export_options；verify 仍只看魔数/大小/md5，
+    # 想证明动画真的进了文件要另外在引擎侧导入一次（honest_limits 已写）。
 
 边界：hidden_ok 是 manifest 里声明允许的隐藏交叠，不是穿模；不要为了让 clash=0 随意扩大 allow。非合并导出 gate 非 pass 时文件会写出但 verdict=fail + warnings，不可当出厂件。
 

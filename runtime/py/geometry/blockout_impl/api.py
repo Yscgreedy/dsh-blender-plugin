@@ -102,10 +102,10 @@ def _rs_params(objects, collection, out_dir, name, views, res, ortho, background
             raise ValueError("turntable 必须是 false / true / dict（收到 %r）" % (turntable,))
         unknown = sorted(set(str(k) for k in tt.keys()) -
                          set(["frames", "fps", "elev_deg", "distance", "fmt", "res",
-                              "background", "orbit_deg"]))
+                              "background", "orbit_deg", "ffmpeg_exe"]))
         if unknown:
             raise ValueError("refsheet.turntable 不认识的键 %s（可用：frames,fps,elev_deg,distance,"
-                             "fmt,res,background,orbit_deg）" % unknown)
+                             "fmt,res,background,orbit_deg,ffmpeg_exe）" % unknown)
     mn, mx = _bbox_bu(objs)
     mmu = _mm_per_bu()
     bbox_mm = _bbox_mm(mn, mx)
@@ -383,11 +383,12 @@ def blockout_help():
                       "args": ["models", "outdir", "export", "collection", "cleanup", "render"]},
             "export": {"doc": "对已建场景补视图/补 GLB/OBJ（不重建）",
                        "args": ["objects", "name", "collection", "glb", "obj", "export", "render", "outdir"]},
-            "turntable": {"doc": "绕 Z 轴转台视频：Blender 内置 FFMPEG 出 MP4（distance=自动取景距离倍数；"
-                                 "背景透明会按 white 渲并 warning；失败回退 PNG 序列 + ok:false/degraded）",
+            "turntable": {"doc": "绕 Z 轴转台视频：优先 Blender 内置 FFMPEG；构建无 FFMPEG 时先做 file_format='FFMPEG' 赋值探测，"
+                                 "回退 PNG 序列并写 ffmpeg_available:false / fallback:\"png_sequence\"；"
+                                 "也可传 ffmpeg_exe 走外挂编码（distance=自动取景距离倍数）",
                           "args": ["objects", "collection", "name", "out_dir", "frames", "fps", "res",
                                    "elev_deg", "distance", "background(white|gray|black|transparent)",
-                                   "fmt(mp4|png)", "orbit_deg"]},
+                                   "fmt(mp4|png)", "orbit_deg", "ffmpeg_exe"]},
             "refsheet": {"doc": "同机位参考图包：正交前/侧/顶 + 透视 iso PNG + 拼图 + refsheet.json"
                                 "（views 默认 front/side/top/iso；turntable={frames,fps,elev_deg,...} 可选）",
                          "args": ["objects", "collection", "out_dir", "name", "views", "res", "ortho",
@@ -416,7 +417,7 @@ def blockout_help():
         ],
         "limits": [
             "渲染只支持 Workbench（EEVEE/Cycles 未接）；render op 的视角是透视；refsheet 的 front/side/top 是正交；",
-            "turntable MP4 走 Blender 内置 FFMPEG（media_type=VIDEO；不依赖系统 ffmpeg）；本机 Blender 缺 FFmpeg 时回退 PNG 序列并 ok:false/degraded；",
+            "turntable MP4 优先 Blender 内置 FFMPEG（media_type=VIDEO）；构建缺 FFMPEG 时先做 file_format='FFMPEG' 赋值探测，失败即回退 PNG 序列，回执 ffmpeg_available:false / fallback:\"png_sequence\"；ffmpeg_exe= 可走外挂编码；",
             "turntable 视频无 alpha（background=transparent 会按 white 渲并 warning；要 alpha 用 fmt=png）；",
             "template 只是比例占位（humanoid_prim/vehicle 的 primitive 骨架），不是解剖/车辆细节模型；",
             "landmarks 只记录不建空物体；audit 是内建轻量体检，不是 audit.py 全套；",

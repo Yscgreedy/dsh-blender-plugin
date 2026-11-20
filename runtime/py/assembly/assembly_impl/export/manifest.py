@@ -19,6 +19,7 @@ def _asm_manifest_payload(ctx):
         "counts": dict(summary["counts"], files=len(ctx["ok_formats"])),
         "bbox_units": summary.get("bbox_units"), "bbox_mm": summary.get("bbox_mm"),
         "gate": gate_slim, "merge": merge_slim,
+        "use_case": _asm_export_use_case_slim(ctx.get("use_case")),
         "files": {k: {"path": v, "name": os.path.basename(str(v)),
                       "bytes": (exports.get(k) or {}).get("bytes"),
                       "md5": (exports.get(k) or {}).get("md5"),

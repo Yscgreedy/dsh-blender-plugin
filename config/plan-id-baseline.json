@@ -1,19 +1,19 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-19T05:44:53.614Z",
+  "generatedAt": "2026-11-20T02:05:55.117Z",
   "mode": "warn",
   "totals": {
-    "all": 1449,
-    "exempt": 1449,
+    "all": 1515,
+    "exempt": 1515,
     "residual": 0
   },
   "byPrefix": {},
   "byKind": {},
   "files": {
     "CHANGELOG.md": {
-      "count": 226,
-      "exempt": 226,
+      "count": 232,
+      "exempt": 232,
       "residual": 0
     },
     "MIGRATIONS.md": {
@@ -66,9 +66,9 @@
       "exempt": 52,
       "residual": 0
     },
-    "docs/操作教程.md": {
-      "count": 17,
-      "exempt": 17,
+    "docs/待办-角色动画与卡通渲染需求.md": {
+      "count": 70,
+      "exempt": 70,
       "residual": 0
     },
     "docs/证据分级与读图纪律.md": {
@@ -112,8 +112,8 @@
       "residual": 0
     },
     "runtime/core/kernel/bootstrap.ts": {
-      "count": 1,
-      "exempt": 1,
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/core/queue/spawn-executor.ts": {
@@ -137,8 +137,8 @@
       "residual": 0
     },
     "runtime/http/routes/health.ts": {
-      "count": 1,
-      "exempt": 1,
+      "count": 3,
+      "exempt": 3,
       "residual": 0
     },
     "runtime/py/assembly/assembly_features.json": {
@@ -297,8 +297,8 @@
       "residual": 0
     },
     "tests/BEHAVIOR_MATRIX.md": {
-      "count": 306,
-      "exempt": 306,
+      "count": 309,
+      "exempt": 309,
       "residual": 0
     },
     "tests/MIGRATION.md": {
@@ -507,6 +507,11 @@
       "residual": 0
     },
     "tests/e2e/blender/native_support.py": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "tests/e2e/blender/p10c_gui_probe.py": {
       "count": 1,
       "exempt": 1,
       "residual": 0

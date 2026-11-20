@@ -57,7 +57,14 @@ export function createTrajectoryWrapper(deps: TrajWriteDeps) {
           rec(true, null, r)
           return r
         }
-      } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      } else if (
+        v &&
+        typeof v === 'object' &&
+        !Array.isArray(v) &&
+        Object.getPrototypeOf(v) === Object.prototype
+      ) {
+        // 只深包**普通对象**：class 实例（如 GatewayAddonClient）必须按引用保留，
+        // 否则 getter（addon.instances）在展开复制时丢掉 → /status 看得到 addon、list 看不到。
         out[k] = withTrajectory(v as Record<string, unknown>)
       } else {
         out[k] = v

@@ -43,6 +43,80 @@ def _asm_target_dir(out_dir, warnings):
     return None, od
 
 
+def _asm_export_use_case(use_case, bake_anim=None, add_leaf_bones=None,
+                         apply_scale_options=None, export_yup=None):
+    """use_case 预设 + 逐轮显式覆盖 → (err, info)。
+
+    info 里的 options 按导出器格式分组（{"fbx": {...}} / {"glb": {...}}），只装"预设 + 覆盖"
+    产生的关键字；use_case=none 且没给覆盖时是空 dict ⇒ 导出器收到与拆分前完全一样的关键字。
+    显式值永远盖过预设；坏值/落不了地的按键一律 ok:false（不静默退回预设或默认）。
+    """
+    allowed = list(_ASM_EXPORT_USE_CASES)
+    raw = "none" if use_case is None else use_case
+    if not isinstance(raw, str):
+        return _err("use_case 必须是字符串，收到 %r（允许 %s）" % (use_case, allowed),
+                    allowed=allowed), None
+    name = raw.strip().lower() or "none"
+    if name in _ASM_EXPORT_USE_CASES_REJECTED:
+        return _err("use_case=%r 不在 asm_export 的支持范围：本路径只写 glb/fbx/obj" % name,
+                    allowed=allowed,
+                    hint="print 走 deliver_export(fmt='stl')；ar 走 USD 导出（deliver_export 的 USD 路径）"), None
+    if name not in _ASM_EXPORT_USE_CASES:
+        return _err("use_case 只支持 none|unity|unreal|godot|web，收到 %r" % (raw,),
+                    allowed=allowed,
+                    hint="不认识的 use_case 不会静默退回 none"), None
+    preset = _ASM_EXPORT_USE_CASE_PRESETS.get(name) or {}
+    options = {}
+    if preset:
+        options[str(preset["format"])] = dict(preset["options"])
+    overrides = {}
+    for key, value in (("bake_anim", bake_anim), ("add_leaf_bones", add_leaf_bones),
+                       ("export_yup", export_yup)):
+        if value is None:
+            continue
+        fixed, ferr = _repair_flag(value, key)
+        if ferr:
+            return _err(ferr, allowed=allowed), None
+        overrides[key] = fixed
+    if apply_scale_options is not None:
+        scale = str(apply_scale_options).strip().upper()
+        if scale not in _ASM_FBX_SCALE_OPTIONS:
+            return _err("apply_scale_options 只支持 %s，收到 %r"
+                        % ("/".join(_ASM_FBX_SCALE_OPTIONS), apply_scale_options),
+                        allowed=allowed), None
+        overrides["apply_scale_options"] = scale
+    for key, value in overrides.items():
+        fmt = _ASM_EXPORT_OVERRIDE_FORMATS[key]
+        if preset and preset.get("format") != fmt:
+            return _err("%s 只对 %s 导出器有效，但 use_case=%s 导出的是 %s"
+                        % (key, fmt, name, preset.get("format")),
+                        allowed=allowed,
+                        hint="换匹配的 use_case，或 use_case=none 再显式给 formats"), None
+        options.setdefault(fmt, {})[key] = value
+    return None, {"name": name, "format": preset.get("format"), "preset": bool(preset),
+                  "options": options,
+                  "overrides": {k: overrides.get(k) for k in _ASM_EXPORT_OVERRIDE_KEYS},
+                  "allowed": allowed}
+
+
+def _asm_export_options(uc, fmts):
+    """use_case 需要的格式必须在本次 formats 里；返回 (err, 按格式过滤后的 opts)。
+
+    关键字没法落地的导出器不接收它们，静默丢弃就等于"设了没用"——所以要求 formats 含目标格式，
+    由调用方显式补上（默认 formats 已含 glb/fbx，正常调用不会踩到）。
+    """
+    opts_all = dict((uc or {}).get("options") or {})
+    missing = [fmt for fmt in opts_all if fmt not in fmts]
+    if missing:
+        knobs = sorted({k for fmt in missing for k in (opts_all.get(fmt) or {})})
+        return _err("use_case=%s 需要 formats 含 %s（本次只有 %s）：%s 无处落地，不静默退回默认值"
+                    % ((uc or {}).get("name"), "/".join(missing), "/".join(fmts) or "空",
+                       "/".join(knobs)),
+                    allowed=list(_ASM_EXPORT_USE_CASES), formats=list(fmts),
+                    hint="把 %s 加进 formats，或换 use_case=none" % "/".join(missing)), None
+    return None, {fmt: dict(v) for fmt, v in opts_all.items() if fmt in fmts}
+
+
 def _asm_manifest_stage(manifest, merge):
     """载入并按需校验 manifest；返回 (err, m)。"""
     m = None
@@ -75,6 +149,8 @@ def _asm_merge_stage(ctx):
         gv = ((merge_rec or {}).get("gate") or {}).get("verdict") if isinstance(merge_rec, dict) else None
         body = {"ok": False, "verdict": gv or "fail", "dry_run": bool(dry_run),
                 "stage": "merge", "dir": od, "name": nm, "formats": fmts,
+                "use_case": _asm_export_use_case_slim(ctx.get("use_case")),
+                "export_options": dict(ctx.get("export_opts") or {}),
                 "files": {}, "counts": {"objects": 0, "files": 0},
                 "gate": _asm_gate_slim((merge_rec or {}).get("gate")),
                 "merge": _asm_merge_slim(merge_rec),

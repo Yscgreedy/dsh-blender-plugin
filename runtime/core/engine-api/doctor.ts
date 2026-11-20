@@ -368,6 +368,52 @@ async function integrationStatus(E: EngineApiDeps): Promise<Record<string, unkno
   return integrations
 }
 
+/**
+ * 6b：no-addon 的**强制态**（注入点 forceNoAddon）。
+ *
+ * 为什么必须存在：真没有 addon 的机器上，doctor 要能回答"39877 到底是谁在听、bpy 还能怎么用"，
+ * 而不是只说"连不上 Blender"。路由层会把 local_evidence 并进来；这里只负责诊断与那**一行**
+ * 可执行的激活方式（模型/人类照抄就能跑）。
+ */
+function forcedDoctor(E: EngineApiDeps, _opts: Record<string, unknown>): Record<string, unknown> {
+  // 6b：模拟"没有 addon"，但**不跳过**本地证据 —— 路由层会把同一个 reader 的
+  // local_processes / ports / ports_evidence 并进来（与 6a 同源）。
+  return {
+    ok: false,
+    kind: 'no-addon',
+    forced: true,
+    addon: {
+      kind: 'no-addon-forced',
+      stage: 'config',
+      tcp: false,
+      connected: false,
+      ready_instances: 0,
+      summary:
+        '已按 forceNoAddon 模拟无 addon：不看 addon，端口证据照旧（39877 的 pid 仍是本 Gateway）。',
+      fix: '这是注入态（fixture），不是故障；真实拉活 GUI 时启动 Blender 让扩展拨入 Gateway 即可（3.1+ 不需要点 Connect）。',
+      hint: '工单 6 注入点：blender_session action=doctor forceNoAddon=true，或环境变量 DSH_BLENDER_FORCE_NO_ADDON=1。',
+      error: 'no addon (forced)',
+    },
+    fixture_activation:
+      'blender_session action=doctor forceNoAddon=true（或 DSH_BLENDER_FORCE_NO_ADDON=1 后直接 action=doctor）',
+    readiness: {
+      gateway: { live: true },
+      addon: {
+        connected: false,
+        ready_instances: 0,
+        instanceId: null,
+        handshake_error: null,
+        kind: 'no-addon-forced',
+      },
+      bpy: { ok: false, error: 'no addon (forced)' },
+      instanceId: null,
+      ready: false,
+    },
+    virtualGui: displayCapabilities(),
+    metrics: metricsView(E),
+  }
+}
+
 /** Capabilities plus the guided-install plans shared by doctor --fix and the add-on button. */
 function virtualGuiView(): Record<string, unknown> {
   const capabilities = displayCapabilities()
@@ -384,7 +430,9 @@ export function createDoctorApi(E: EngineApiDeps) {
       }
     },
     /** 现场体检：真跑一次 Gateway → addon → bpy 往返（status），通了才算 ok。 */
-    async doctor() {
+    async doctor(opts: Record<string, unknown> = {}) {
+      // 6b：注入态优先于一切真实探测 —— 它要证明"没有 addon 也能给出环境证据"。
+      if (opts.forceNoAddon === true) return forcedDoctor(E, opts)
       const gateway = gatewayInstances(E.addon)
       if (!gateway) {
         return {

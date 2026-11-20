@@ -50,7 +50,11 @@ function buildRunTool(ctx: HostContext, port: number) {
         description: 'list：按状态过滤 queued/assigned/running/completed/failed/canceled',
       },
       owner: { type: 'string', description: 'list：按 DSH session id 过滤' },
-      file: { type: 'string', description: 'render：.blend 路径；headless：可选 .blend' },
+      file: {
+        type: 'string',
+        description:
+          'render/headless：.blend 路径；worker：start/restart/exec 的启动文件（只在 worker 启动时打开；已启动且文件不同会回 worker_file_mismatch）',
+      },
       output: { type: 'string', description: 'render：输出文件模板（如 //render/frame_####）' },
       outdir: { type: 'string', description: 'render/headless：输出目录' },
       frames: {
@@ -68,7 +72,16 @@ function buildRunTool(ctx: HostContext, port: number) {
       },
       format: { type: 'string', description: 'render：图片格式（PNG/JPEG/OPEN_EXR…）' },
       camera: { type: 'string', description: 'render：camera=true 用场景相机，或相机对象名' },
-      script: { type: 'string', description: 'headless：Python 脚本内容（--python 临时文件）' },
+      script: {
+        type: 'string',
+        description:
+          'headless：Python 脚本内容（--python 临时文件）；worker exec 用 code，script 会被拒绝',
+      },
+      code: {
+        type: 'string',
+        description:
+          'worker exec：Python 源码（必填；与 headless 的 script 不是同一个参数。长任务在 code 里 print("HEADLESS {json}")）',
+      },
       script_file: { type: 'string', description: 'headless：磁盘上的 .py 脚本路径' },
       preload: { type: 'string', description: 'headless：预载模块（逗号分隔）' },
       factory_startup: { type: 'boolean', description: 'headless：--factory-startup（默认 true）' },
@@ -89,7 +102,12 @@ function buildRunTool(ctx: HostContext, port: number) {
       op: {
         type: 'string',
         description:
-          'tune：status | analyze | apply | revert | help；worker：exec | see | watch | checkpoint | revert | checkpoints | reset | status | start | stop | restart | list（默认 status）',
+          'tune：status | analyze | apply | revert | help；worker：exec | digest | see | watch | checkpoint | revert | checkpoints | reset | status | start | stop | restart | list | help（默认 status）',
+      },
+      digest: {
+        type: 'boolean',
+        description:
+          'worker exec：执行前后各算一次场景内容哈希（changed 不看 mtime；auto_restore=false 不回滚）',
       },
       session: {
         type: 'string',

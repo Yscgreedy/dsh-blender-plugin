@@ -46,6 +46,7 @@ describe('engine assembly', () => {
     }
     expect(Object.keys(engine.worker).sort()).toEqual([
       'aux',
+      'digest',
       'exec',
       'list',
       'reset',
@@ -68,11 +69,11 @@ describe('engine assembly', () => {
     ])
   })
 
-  it('serves catalog locally without an addon (35 families / 261 ops)', async () => {
+  it('serves catalog locally without an addon (36 families / 264 ops)', async () => {
     const c = await engine.plan('catalog', {})
     expect(c.ok).toBe(true)
-    expect(c.families).toHaveLength(35)
-    expect(c.ops_count).toBe(261)
+    expect(c.families).toHaveLength(36)
+    expect(c.ops_count).toBe(264)
     expect(c.provenance).toBeTruthy()
   })
 

@@ -73,7 +73,16 @@ const DECLARED_CATALOG_REMOVALS = [
 // catalog uses. Every downstream comparison therefore stays strict, and the
 // injection itself is asserted: exactly one family, exactly the declared op
 // count, and the base must end up at +1 family / +19 ops.
-const DECLARED_CATALOG_ADDITION_3_1 = { family: 'geo', ops: 33 }
+const DECLARED_CATALOG_ADDITIONS = [
+  // 3.1: hard-surface base verbs
+  { family: 'geo', ops: 33 },
+  // 3.2: external asset search/import (PolyHaven), see runtime/py/core/asset.py
+  { family: 'asset', ops: 3 },
+]
+
+// 3.2: read-only ops added on top of the base whitelist (network reads that do not
+// touch the scene, so they stay exempt from the write lease).
+const DECLARED_READ_ONLY_ADDITIONS = ['asset_help', 'asset_search']
 
 // Declared user-visible catalog text patches: exact base -> current replacements
 // for reviewed help-text fixes. The parity gate compares user-visible text
@@ -291,38 +300,46 @@ try {
   const curCatalog = await import(
     pathToFileURL(path.join(ROOT, 'lib', 'runtime', 'catalog', 'data.js')).href
   )
-  const addedFamily = curCatalog.PLAN_CATALOG.find(
-    (e) => e.f === DECLARED_CATALOG_ADDITION_3_1.family,
-  )
-  if (!addedFamily)
-    throw new Error(
-      'declared catalog addition missing from current catalog: ' +
-        DECLARED_CATALOG_ADDITION_3_1.family,
-    )
-  if (addedFamily.ops.length !== DECLARED_CATALOG_ADDITION_3_1.ops)
-    throw new Error(
-      'declared catalog addition ' +
-        DECLARED_CATALOG_ADDITION_3_1.family +
-        ' must have ' +
-        DECLARED_CATALOG_ADDITION_3_1.ops +
-        ' ops, got ' +
-        addedFamily.ops.length,
-    )
-  const addedIndex = curCatalog.PLAN_CATALOG.indexOf(addedFamily)
-  fs.appendFileSync(
-    baseCatalogPath,
-    '\n// declared 3.1 catalog addition, injected by scripts/check-parity.mjs\n' +
-      'PLAN_CATALOG.splice(' +
-      addedIndex +
-      ', 0, ' +
-      JSON.stringify(addedFamily) +
-      ');\n',
-  )
-  ok('declared-additions', 'declared catalog addition injected into base', {
-    family: DECLARED_CATALOG_ADDITION_3_1.family,
-    ops: DECLARED_CATALOG_ADDITION_3_1.ops,
-    index: addedIndex,
+  const injections = DECLARED_CATALOG_ADDITIONS.map((decl) => {
+    const family = curCatalog.PLAN_CATALOG.find((e) => e.f === decl.family)
+    if (!family)
+      throw new Error('declared catalog addition missing from current catalog: ' + decl.family)
+    if (family.ops.length !== decl.ops)
+      throw new Error(
+        'declared catalog addition ' +
+          decl.family +
+          ' must have ' +
+          decl.ops +
+          ' ops, got ' +
+          family.ops.length,
+      )
+    return { decl, family, index: curCatalog.PLAN_CATALOG.indexOf(family) }
   })
+  // Insertion points must be computed against the base order as it evolves: each
+  // appended splice runs in order, so a position has to account for the additions
+  // already inserted before it. Simulate first, then emit the same positions.
+  const currentNames = curCatalog.PLAN_CATALOG.map((e) => e.f)
+  const declaredNames = new Set(DECLARED_CATALOG_ADDITIONS.map((d) => d.family))
+  const simulated = currentNames.filter((name) => !declaredNames.has(name))
+  const at = (inj) => simulated.filter((name) => currentNames.indexOf(name) < inj.index).length
+  for (const inj of injections.sort((a, b) => a.index - b.index)) {
+    const position = at(inj)
+    simulated.splice(position, 0, inj.family.f)
+    fs.appendFileSync(
+      baseCatalogPath,
+      '\n// declared catalog addition, injected by scripts/check-parity.mjs\n' +
+        'PLAN_CATALOG.splice(' +
+        position +
+        ', 0, ' +
+        JSON.stringify(inj.family) +
+        ');\n',
+    )
+    ok('declared-addition-' + inj.decl.family, 'declared catalog addition injected into base', {
+      family: inj.decl.family,
+      ops: inj.decl.ops,
+      index: position,
+    })
+  }
 
   const baseEngine = await import(pathToFileURL(path.join(tmp, 'runtime', 'engine.mjs')).href)
   const baseRoutes = await import(
@@ -347,7 +364,7 @@ try {
   ok('declared-engine-removals', 'declared engine exports removed', DECLARED_ENGINE_REMOVALS.length)
   ok('exports-count', 'engine exports', bKeys.length)
 
-  // 2. Catalog fingerprint (35 families / 261 ops / 25 commands / 6 tool details).
+  // 2. Catalog fingerprint (36 families / 264 ops / 25 commands / 6 tool details).
   // The 3.1 tool-surface change is declared: toolDetailKeys shrinks 7 -> 6 and
   // the family metadata grows target fields, so the hash itself is not compared;
   // the structural contract counts are.
@@ -510,13 +527,28 @@ try {
       throw new Error('renderClassText() advertises a legacy 3.0 tool name')
     ok('render-class-text-declared', 'renderClassText() declared 3.1 surface', text.length)
   }
-  eq('plan-read-only', 'PLAN_READ_ONLY', baseEngine.PLAN_READ_ONLY, curEngine.PLAN_READ_ONLY)
+  // 3.2: declared read-only additions (see DECLARED_READ_ONLY_ADDITIONS). Each name must be
+  // absent from the base whitelist and present in the current one; the comparison then stays
+  // strict on the union instead of allowing a silent delta.
+  for (const name of DECLARED_READ_ONLY_ADDITIONS) {
+    if (baseEngine.PLAN_READ_ONLY_OPS.includes(name))
+      throw new Error('declared read-only addition already exists in the base: ' + name)
+    if (!curEngine.PLAN_READ_ONLY_OPS.includes(name))
+      throw new Error('declared read-only addition missing from current: ' + name)
+  }
   eq(
     'plan-read-only-ops',
     'PLAN_READ_ONLY_OPS',
-    baseEngine.PLAN_READ_ONLY_OPS,
-    curEngine.PLAN_READ_ONLY_OPS,
+    [...baseEngine.PLAN_READ_ONLY_OPS, ...DECLARED_READ_ONLY_ADDITIONS].sort(),
+    [...curEngine.PLAN_READ_ONLY_OPS].sort(),
   )
+  eq(
+    'plan-read-only',
+    'PLAN_READ_ONLY',
+    [...baseEngine.PLAN_READ_ONLY, ...DECLARED_READ_ONLY_ADDITIONS].sort(),
+    [...curEngine.PLAN_READ_ONLY].sort(),
+  )
+  ok('declared-read-only-3-2', 'declared read-only additions', DECLARED_READ_ONLY_ADDITIONS)
 
   report = {
     ok: true,

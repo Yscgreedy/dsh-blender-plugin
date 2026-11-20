@@ -81,8 +81,10 @@ export const KERNEL_BOOTSTRAP = [
   '# ---- 共享内核 kit（唯一实现）：**按需执行** ----',
   '# 实测：kit 10.7KB，每次 execute_code 都 exec 一遍要 8.4ms（= 往返 163ms 的 5%）。',
   '# 改成条件执行：K 上已有 dsh_kit 就跳过（持久内核下只在第一次真跑）。',
+  '# 例外：老 GUI 会话的 K.dsh_kit 可能是热更前的 SimpleNamespace，没有新 helper；',
+  '# 缺 action_fcurves 时重跑一次 kit，把 GUI 侧也补齐（worker 是新进程，本来就有）。',
   '# 传输量不变（本地 socket 可忽略），换来零风险：任何路径都保证 kit 在。',
-  'if getattr(K, "dsh_kit", None) is None:',
+  'if getattr(K, "dsh_kit", None) is None or getattr(K.dsh_kit, "action_fcurves", None) is None:',
   ...KIT_SRC.split('\n').map((l) => (l ? '    ' + l : l)),
   // ---- 几何底座（geo · 机制层：布尔/开孔/开槽/镜像/阵列/拉伸/放样/倒角/自动平滑）----
   // 与 kit 同等：**任何注入路径都保证在**。不做成"可选 preload"的理由是实测 ——
@@ -133,4 +135,9 @@ export const KERNEL_BOOTSTRAP = [
   'K.dsh_default_modules = ["kit", "geo", "audit"]',
   'if getattr(K, "dsh_audit_api", None) is None:',
   '    _dsh_load_module("audit", ' + JSON.stringify(AUDIT_PATH) + ', "dsh_audit_api")',
+  // P10：Action.fcurves 在 5.2+ 已移除；把兼容 helper 挂到 K，blockout/worker/GUI 三路同一份实现。
+  'if getattr(K, "dsh_kit", None) is not None:',
+  '    _dsh_action_fcurves = getattr(K.dsh_kit, "action_fcurves", None)',
+  '    if _dsh_action_fcurves is not None:',
+  '        K.action_fcurves = _dsh_action_fcurves',
 ].join('\n')

@@ -3,8 +3,30 @@
 from ..common import *  # noqa: F401,F403
 
 _ASM_EXPORT_FORMATS = ("glb", "fbx", "obj")
+
+# 交付去向预设：目标引擎吃哪套导出器关键字。none（默认）不产生任何额外关键字，行为与拆分前一致。
+_ASM_EXPORT_USE_CASES = ("none", "unity", "unreal", "godot", "web")
+# 认识但本路径写不出来的去向：必须 ok:false + 指路，绝不静默落到 glb/fbx/obj。
+_ASM_EXPORT_USE_CASES_REJECTED = ("print", "ar")
+_ASM_EXPORT_USE_CASE_PRESETS = {
+    "unity": {"format": "fbx", "options": {"bake_anim": True, "add_leaf_bones": False,
+                                           "apply_scale_options": "FBX_SCALE_ALL",
+                                           "axis_forward": "-Z", "axis_up": "Y"}},
+    "unreal": {"format": "fbx", "options": {"bake_anim": True, "add_leaf_bones": False,
+                                            "apply_scale_options": "FBX_SCALE_UNITS",
+                                            "axis_forward": "-Z", "axis_up": "Y"}},
+    "godot": {"format": "glb", "options": {"export_yup": True, "export_animations": True}},
+    "web": {"format": "glb", "options": {"export_yup": True, "export_animations": True}},
+}
+# 每轮可显式覆盖的 knob → 它落在哪个导出器上（axis_forward/axis_up/export_animations 只由预设给）
+_ASM_EXPORT_OVERRIDE_KEYS = ("bake_anim", "add_leaf_bones", "apply_scale_options", "export_yup")
+_ASM_EXPORT_OVERRIDE_FORMATS = {"bake_anim": "fbx", "add_leaf_bones": "fbx",
+                                "apply_scale_options": "fbx", "export_yup": "glb"}
+_ASM_FBX_SCALE_OPTIONS = ("FBX_SCALE_NONE", "FBX_SCALE_ALL", "FBX_SCALE_UNITS")
+
 _ASM_EXPORT_LIMITS = [
     "GLB/FBX/OBJ 由 Blender 官方导出器写出（export_apply=True 会落地修改器）；材质/贴图随导出器规则，不保证与 .blend 逐字节一致",
+    "use_case 只决定导出器关键字（bake_anim / apply_scale_options / axis_* / export_animations）；写入文件后动画是否真的在，由导出器与引擎决定 —— verify 只验魔数/大小/md5，不解析动画轨",
     "manifest 的 bbox/counts 来自求值网格快照（导出瞬间），与导出器内部再求值可能有微小差异",
     "ledger 是 append-only 的本地审计流水（不含跨进程锁）；并发追加可能交错，只保证单次调用内事件顺序",
     "gate verdict 只反映导出前 asm_gate 的三态结论；degraded ≠ 通过",
@@ -176,33 +198,56 @@ def _asm_ensure_addon(module):
         pass
 
 
-def _asm_export_one(fmt, objs, path):
-    """跑一次官方导出器（不改场景，只改选中状态，结束后恢复）。返回文件回执。"""
+def _asm_export_one(fmt, objs, path, opts=None):
+    """跑一次官方导出器（不改场景，只改选中状态，结束后恢复）。返回文件回执。
+
+    opts：本次解析出的导出器关键字（use_case 预设 + 显式覆盖；键名就是 bpy.ops 的参数名）。
+    空 opts 时下发的关键字与拆分前逐字相同；**非空时不再"丢掉关键字再试一次"** —— 那种回退会让
+    bake_anim / apply_scale_options / axis_* 悄悄消失，而 verify 只查魔数/大小/md5，照样报成功。
+    真正下发的关键字写在回执 options 里，调用方可以自证。
+    """
     t0 = time.perf_counter()
+    extra = dict(opts or {})
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
     sel = _asm_select_only(objs)
+    used = {}
     try:
         if fmt == "glb":
             _asm_ensure_addon("io_scene_gltf2")
             if not hasattr(bpy.ops.export_scene, "gltf"):
                 raise RuntimeError("glTF 导出器不可用（io_scene_gltf2 未启用且 bpy.ops.export_scene.gltf 不存在）")
+            kw = {"filepath": path, "export_format": "GLB", "use_selection": True,
+                  "export_apply": True, "export_yup": True}
+            kw.update(extra)
             try:
-                bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True,
-                                          export_apply=True, export_yup=True)
+                bpy.ops.export_scene.gltf(**kw)
             except TypeError:
-                bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True)
+                if extra:
+                    raise RuntimeError("glTF 导出器不接受这些关键字 %s（旧版 Blender？）：不静默丢弃"
+                                       % sorted(extra))
+                kw = {"filepath": path, "export_format": "GLB", "use_selection": True}
+                bpy.ops.export_scene.gltf(**kw)
         elif fmt == "fbx":
             _asm_ensure_addon("io_scene_fbx")
             if not hasattr(bpy.ops.export_scene, "fbx"):
                 raise RuntimeError("FBX 导出器不可用（io_scene_fbx 未启用且 bpy.ops.export_scene.fbx 不存在）")
+            kw = {"filepath": path, "use_selection": True, "add_leaf_bones": False,
+                  "bake_anim": False, "apply_scale_options": "FBX_SCALE_ALL"}
+            kw.update(extra)
             try:
-                bpy.ops.export_scene.fbx(filepath=path, use_selection=True, add_leaf_bones=False,
-                                         bake_anim=False, apply_scale_options="FBX_SCALE_ALL")
+                bpy.ops.export_scene.fbx(**kw)
             except TypeError:
-                bpy.ops.export_scene.fbx(filepath=path, use_selection=True)
+                if extra:
+                    raise RuntimeError("FBX 导出器不接受这些关键字 %s（旧版 Blender？）：不静默丢弃"
+                                       % sorted(extra))
+                kw = {"filepath": path, "use_selection": True}
+                bpy.ops.export_scene.fbx(**kw)
         elif fmt == "obj":
+            if extra:
+                raise RuntimeError("OBJ 导出器没有 use_case 关键字 %s（use_case 只作用于 glb/fbx）"
+                                   % sorted(extra))
             if hasattr(bpy.ops.wm, "obj_export"):
                 try:
                     bpy.ops.wm.obj_export(filepath=path, export_selected_objects=True,
@@ -215,9 +260,12 @@ def _asm_export_one(fmt, objs, path):
                 raise RuntimeError("OBJ 导出器不可用（bpy.ops.wm.obj_export / export_scene.obj 都不存在）")
         else:
             raise RuntimeError("不支持的格式: %s" % fmt)
+        if fmt in ("glb", "fbx"):
+            used = {k: v for k, v in kw.items() if k != "filepath"}
     finally:
         _asm_restore_selection(sel)
     rec = _asm_file_receipt(path)
+    rec["options"] = used
     rec["ms"] = int((time.perf_counter() - t0) * 1000)
     return rec
 
@@ -231,10 +279,21 @@ def _asm_export_paths(out_dir, name, formats, include_receipt, ledger):
     return p
 
 
+def _asm_export_use_case_slim(uc):
+    """use_case 解析结果 → manifest/回执共用的那份（name/format/options/overrides/allowed）。"""
+    if not isinstance(uc, dict):
+        return None
+    return {"name": uc.get("name"), "format": uc.get("format"),
+            "options": {str(k): dict(v) for k, v in (uc.get("options") or {}).items()},
+            "overrides": dict(uc.get("overrides") or {}),
+            "allowed": list(uc.get("allowed") or _ASM_EXPORT_USE_CASES)}
+
+
 def _asm_export_slim(rec):
     if not isinstance(rec, dict):
         return None
-    out = {k: rec.get(k) for k in ("ok", "path", "bytes", "md5", "magic_ok", "error", "ms")}
+    out = {k: rec.get(k) for k in ("ok", "path", "bytes", "md5", "magic_ok", "error", "ms",
+                                   "options")}
     v = rec.get("verify")
     if isinstance(v, dict):
         out["verify"] = {k: v.get(k) for k in ("ok", "fmt", "magic_ok", "error", "skipped", "reason")}

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Function-level budget registry (two-level exception model): every 80-120 line function is registered with a real classification, reason, class owner and future reviewBy; unregistered, unclassified, expired and stale entries fail. Functions over 120 lines always fail. Path-level file-budget exceptions live in config/exceptions.json.",
-  "generatedAt": "2026-11-19T05:40:21.112Z",
+  "generatedAt": "2026-11-20T01:29:26.599Z",
   "functions": [
     {
       "file": "extension/dsh_blender_bridge/commands/core/bpy_lookup.py",
@@ -78,7 +78,7 @@
     {
       "file": "runtime/core/engine-api/doctor.ts",
       "name": "createDoctorApi",
-      "lines": 91,
+      "lines": 93,
       "classification": "dispatch-table",
       "reason": "Gateway doctor/status API factory: one branch per reported surface (readiness, addon, bpy, virtualGui, sessions, diagnostics).",
       "owner": "runtime",
@@ -90,6 +90,15 @@
       "lines": 83,
       "classification": "dispatch-table",
       "reason": "Engine API factory: one handler per loop start/status/board/export op.",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/core/kernel/api.ts",
+      "name": "injectModule",
+      "lines": 98,
+      "classification": "linear-pipeline",
+      "reason": "Runtime module injection: tree fingerprint, K probe, optional cache purge, source exec and module-map receipt; ordered stages.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
@@ -123,7 +132,7 @@
     {
       "file": "runtime/core/queue/spawn-executor.ts",
       "name": "buildJobArgs",
-      "lines": 104,
+      "lines": 100,
       "classification": "parsing",
       "reason": "Headless job prelude + argv assembly: POSIX-style args splitting, env merge, KERNEL_BOOTSTRAP inline and the -- separator; the length is the string surgery, not nested branching.",
       "owner": "host",
@@ -193,18 +202,9 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "file": "runtime/execution/workers/index.ts",
-      "name": "createWorkersApi",
-      "lines": 118,
-      "classification": "dispatch-table",
-      "reason": "Worker API factory: one handler per worker start/exec/status/stop/restart op.",
-      "owner": "runtime",
-      "reviewBy": "2027-06-30"
-    },
-    {
       "file": "runtime/gateway/app.ts",
       "name": "createGatewayApp",
-      "lines": 99,
+      "lines": 100,
       "classification": "dispatch-table",
       "reason": "Gateway app factory: the route-dependency table (29 routes worth of deps) plus transport/engine assembly and the close exit.",
       "owner": "runtime",
@@ -231,37 +231,10 @@
     {
       "file": "runtime/http/routes/session/control.ts",
       "name": "buildReloadReport",
-      "lines": 83,
+      "lines": 81,
       "classification": "formatting",
       "reason": "Reload receipt assembly: merges provenance layers, drain result, pid transition and needsRestart into the one ReloadReport shape shared by the tool and HTTP faces.",
       "owner": "host",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/http/routes/worker.ts",
-      "name": "<anonymous>",
-      "lines": 91,
-      "classification": "dispatch-table",
-      "owner": "runtime",
-      "reason": "Hot-worker route op switch (start/exec/see/watch/reset/checkpoint/revert/checkpoints/stop/restart/list); one case per wire op.",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/http/routes/worker.ts",
-      "name": "createWorkerRoutes",
-      "lines": 116,
-      "classification": "dispatch-table",
-      "reason": "HTTP route table for the worker endpoint.",
-      "owner": "runtime",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/http/routes/worker.ts",
-      "name": "worker",
-      "lines": 111,
-      "classification": "dispatch-table",
-      "reason": "Worker route handler: payload parse, lease gate and op dispatch; length tracks the wire protocol surface.",
-      "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
     {
@@ -681,7 +654,7 @@
     {
       "file": "runtime/py/core/worker.py",
       "name": "main",
-      "lines": 83,
+      "lines": 93,
       "classification": "dispatch-table",
       "owner": "runtime",
       "reason": "Worker accept loop and op dispatch (ping/status/exec/see/watch/reset/checkpoint/revert/checkpoints/shutdown) inside one blocking main thread.",
@@ -1005,7 +978,7 @@
     {
       "file": "src/tools/run/execute.ts",
       "name": "executeRun",
-      "lines": 94,
+      "lines": 95,
       "classification": "dispatch-table",
       "owner": "runtime",
       "reason": "blender_run action dispatcher: one branch per action (submit/status/wait/collect/cancel/list/perf/tune/worker) whose length tracks the tool surface.",
@@ -1014,7 +987,7 @@
     {
       "file": "src/tools/run/index.ts",
       "name": "buildRunTool",
-      "lines": 97,
+      "lines": 115,
       "classification": "dispatch-table",
       "owner": "runtime",
       "reason": "Tool schema declaration for blender_run: the length is the documented parameter surface the model reads, not branching logic.",

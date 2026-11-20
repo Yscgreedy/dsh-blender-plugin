@@ -40,6 +40,44 @@ function present(v: unknown): boolean {
   return v !== undefined && v !== null && String(v).trim() !== ''
 }
 
+/** 工单 6 注入参数：snake_case 与 camelCase 都认（工单里的键名是 camelCase）。 */
+function boolArg(args: Record<string, unknown>, ...names: string[]): boolean {
+  for (const name of names) {
+    const v = args[name]
+    if (v === true) return true
+    const s = String(v ?? '')
+      .trim()
+      .toLowerCase()
+    if (s === 'true' || s === '1' || s === 'yes') return true
+  }
+  return false
+}
+
+function strArg(args: Record<string, unknown>, ...names: string[]): string | null {
+  for (const name of names) {
+    if (present(args[name])) return String(args[name]).trim()
+  }
+  return null
+}
+
+interface ListContext {
+  evidence: Record<string, unknown> | null
+  addon: Record<string, unknown> | null
+}
+
+/** 工单 6：list 的本地证据 + addon 实例表来自 Gateway 的 /status?evidenceOnly=1（不付 addon 往返）。 */
+async function listContextOf(port: number, args: Record<string, unknown>): Promise<ListContext> {
+  const q = new URLSearchParams({ evidence: '1', evidenceOnly: '1' })
+  const fixture = strArg(args, 'probeFixture', 'probe_fixture')
+  if (fixture) q.set('probeFixture', fixture)
+  try {
+    const body = await backendJson(port, '/status?' + q.toString(), 20000)
+    return { evidence: asRecord(body.local_evidence), addon: asRecord(body.addon) }
+  } catch {
+    return { evidence: null, addon: null }
+  }
+}
+
 /** scopes 接受数组、JSON 数组字符串，或逗号分隔字符串。 */
 function parseScopes(raw: unknown): string[] | undefined {
   if (raw === undefined || raw === null) return undefined
@@ -132,10 +170,16 @@ async function statusOf(port: number): Promise<unknown> {
   return { text: formatStatus(body, listed.sessions) }
 }
 
-async function doctorOf(port: number): Promise<unknown> {
+async function doctorOf(port: number, args: Record<string, unknown>): Promise<unknown> {
+  // 6b：no-addon 态也要能出 39877 证据 —— 这些键必须真能激活（参数 / env 两条路）。
+  const q = new URLSearchParams()
+  if (boolArg(args, 'forceNoAddon', 'force_no_addon')) q.set('forceNoAddon', '1')
+  const probeFixture = strArg(args, 'probeFixture', 'probe_fixture')
+  if (probeFixture) q.set('probeFixture', probeFixture)
+  const suffix = q.toString() ? '?' + q.toString() : ''
   let body: Record<string, unknown>
   try {
-    body = await backendJson(port, '/doctor', 60000)
+    body = await backendJson(port, '/doctor' + suffix, 60000)
   } catch (e: unknown) {
     return toolError(
       'gateway_unreachable',
@@ -151,7 +195,11 @@ async function doctorOf(port: number): Promise<unknown> {
       'doctor 失败 · ' + text(body.error),
       'Gateway 由宿主管理：重启 DSH 插件后重试；addon 需在 Blender N 面板点 Connect',
     )
-  return { text: formatDoctor(body) }
+  return {
+    text: formatDoctor(body),
+    evidence: asRecord(body.local_evidence),
+    verdict: body.verdict ?? null,
+  }
 }
 
 export async function executeSession(
@@ -171,11 +219,18 @@ export async function executeSession(
   // 的会话动作通道 —— 那条通道只会 409，并把 ReloadReport 包成一句 request failed。
   if (action === 'reload') return executeReload(port, args)
   if (action === 'status') return statusOf(port)
-  if (action === 'doctor') return doctorOf(port)
+  if (action === 'doctor') return doctorOf(port, args)
   if (action === 'list') {
     const listed = await listSessions(port)
     if (!listed.ok) return listed.failure
-    return { text: formatSessionList(listed.sessions) }
+    // 6a：0 会话也要能看见 local_processes / ports / ports_evidence + 可粘贴的 attach。
+    const ctx = await listContextOf(port, args)
+    // 结构化面：文本给人看，evidence/addon 给判据（别让验收只能靠正则扒文本）。
+    return {
+      text: formatSessionList(listed.sessions, ctx.evidence, ctx.addon),
+      evidence: ctx.evidence,
+      addon: ctx.addon,
+    }
   }
   const bad = validate(action, args)
   if (bad) return toolError('invalid_params', bad, 'action=help 查看可用动作与参数')

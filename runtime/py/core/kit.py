@@ -272,6 +272,71 @@ def comp_tree(scene=None):
             return tree
     raise RuntimeError("拿不到合成器节点树：Blender 5.2 起改用 scene.compositing_node_group（旧的 scene.node_tree 已移除）；取到后注意 Glare 的 mix 与 Mix 的 blend_type/mix 都改名了，用 getattr 兜底")
 
+
+# ────────────────────────────── 动画 Action 兼容 ──────────────────────────────
+def _dsh_fcurve_identity(fcurve):
+    """Datablock identity for de-duplication across slots.
+
+    (data_path, array_index) is not an identity: two objects can share one action
+    and repeat the same path in different slots with different data.
+    """
+    as_pointer = getattr(fcurve, "as_pointer", None)
+    if callable(as_pointer):
+        try:
+            return ("pointer", as_pointer())
+        except Exception:
+            pass
+    return ("object", id(fcurve))
+
+
+def action_fcurves(action, slot=None):
+    """F-curves of an action through the layered/slotted API when it is in use.
+
+    Blender 4.4 made actions layered and slotted; 5.2 removed the
+    Action.fcurves shortcut.  Do not detect the generation with
+    hasattr(action, "fcurves"): third-party shims (mmd_tools is one) expose a
+    one-slot compatibility collection and make a shim-driven "legacy" branch
+    silently skip every other slot.  The structural test is action.layers.
+
+    slot=None returns the union of every slot (each curve once); pass the
+    slot assigned to the object (obj.animation_data.action_slot) for the
+    curves that actually drive it.  Pre-4.4 actions keep using
+    Action.fcurves.
+    """
+    if action is None:
+        return []
+    layers = getattr(action, "layers", None)
+    if layers is not None:
+        slots = [slot] if slot is not None else list(getattr(action, "slots", None) or ())
+        curves = []
+        seen = set()
+        for candidate in slots:
+            channelbag = None
+            for layer in layers:
+                for strip in getattr(layer, "strips", None) or ():
+                    try:
+                        channelbag = strip.channelbag(candidate)
+                    except Exception:
+                        channelbag = None
+                    if channelbag is not None:
+                        break
+                if channelbag is not None:
+                    break
+            if channelbag is None:
+                continue
+            for fcurve in getattr(channelbag, "fcurves", None) or ():
+                identity = _dsh_fcurve_identity(fcurve)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                curves.append(fcurve)
+        return curves
+    try:
+        return list(getattr(action, "fcurves", None) or ())
+    except AttributeError:
+        return []
+
+
 def wrap_dispatch(base, extra=None):
     """给已有 dispatch 挂附加 op（如 selftest）：命中 extra 走额外表，否则交回原 dispatch。
 
@@ -531,6 +596,7 @@ _K.dsh_kit = types.SimpleNamespace(
     scene_units=scene_units, api=api,
     Api=Api, register=register, flatten=flatten, dispatch_table=dispatch_table,
     objects=objects, world_tris=world_tris, bvh=bvh, iou=iou,
+    action_fcurves=action_fcurves,
     find_runtime_file=find_runtime_file, RUNTIME_DOMAINS=RUNTIME_DOMAINS,
     pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree, BatchUpdates=BatchUpdates,
     norm_evidence=norm_evidence,

@@ -16,6 +16,7 @@
     "motion": "core",
     "sweep": "core",
     "audit": "core",
+    "asset": "core",
     "offline_bootstrap": "core",
     "geo": "geometry",
     "mesh_fix": "geometry",

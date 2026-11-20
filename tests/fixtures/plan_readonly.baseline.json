@@ -4,6 +4,8 @@
  "asm_manifest",
  "asm_scan",
  "asm_selftest",
+ "asset_help",
+ "asset_search",
  "audit_connectivity",
  "audit_drift",
  "audit_duplicates",

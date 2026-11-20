@@ -62,6 +62,8 @@ function clearDeadWorker(w: WorkerRecord): Record<string, unknown> | null {
   w.ready = false
   w.pid = null
   w.child = null
+  w.file = null
+  w.objects = null
   return had ? cleared : null
 }
 

@@ -1,6 +1,6 @@
 {
-  "families_count": 35,
-  "ops_count": 261,
+  "families_count": 36,
+  "ops_count": 264,
   "tools_count": 6,
   "tools": [
     "blender_inspect",
@@ -14,6 +14,10 @@
     {
       "f": "assembly",
       "ops": 8
+    },
+    {
+      "f": "asset",
+      "ops": 3
     },
     {
       "f": "audit",

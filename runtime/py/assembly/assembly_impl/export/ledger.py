@@ -30,6 +30,8 @@ def _asm_ledger_events(ctx):
         "gate_verdict": (ctx["gate_slim"] or {}).get("verdict"),
         "objects": summary["counts"].get("objects"),
         "formats": ctx["ok_formats"], "failed": ctx["failed"],
+        "use_case": (ctx.get("use_case") or {}).get("name"),
+        "export_options": (ctx.get("use_case") or {}).get("options"),
         "tool": "asm_export", "version": ASSEMBLY_VERSION})
     return events
 

@@ -43,6 +43,7 @@ export interface JobView {
 export interface WorkerView {
   start: WorkerApi['workerStart']
   exec: WorkerApi['workerExec']
+  digest: WorkerApi['workerDigest']
   see: WorkerApi['workerSee']
   watch: WorkerApi['workerWatch']
   reset: WorkerApi['workerReset']
@@ -79,7 +80,7 @@ export interface EngineSurface {
   stop: () => unknown
   metrics: () => unknown
   protocol: () => Promise<unknown>
-  doctor: () => Promise<unknown>
+  doctor: (opts?: Record<string, unknown>) => Promise<unknown>
   status: () => Promise<unknown>
   act: (code: unknown, timeoutMs?: number, file?: unknown) => Promise<unknown>
   cmd: (name: unknown, params?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>

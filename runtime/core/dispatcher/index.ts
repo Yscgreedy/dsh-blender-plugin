@@ -18,6 +18,7 @@ export interface PlanCallDeps {
   ensureHuman: () => Promise<unknown>
   ensureImg: () => Promise<unknown>
   ensureMaterial: () => Promise<unknown>
+  ensureAsset: () => Promise<unknown>
   ensureMontage: () => Promise<unknown>
   ensureMotion: () => Promise<unknown>
   ensurePipeline: () => Promise<unknown>

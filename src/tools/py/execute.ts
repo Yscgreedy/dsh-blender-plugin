@@ -1,14 +1,26 @@
-/** blender_py：在 ready 的 GUI 会话里执行 agent 写的 Python（GET /act 路径）。 */
+/** blender_py：在 ready 的 GUI 会话里执行 agent 写的 Python（POST /act 通道）。 */
 import fs from 'node:fs'
 import { BACKEND_HINT } from '../../constants.js'
-import { ensureBackend } from '../../host/backend/index.js'
-import { backendPost, fetchFrame, leasedText } from '../../host/http.js'
 import { text } from '../../contracts/dynamic.js'
+import { ensureBackend } from '../../host/backend/index.js'
 import type { HostContext } from '../../host/context.js'
-import { dedupeNote, frameDedupe } from '../../utils/frame-cache.js'
-import { toAttachment } from '../../utils/image.js'
-import { toolError } from '../errors.js'
+import { backendPost, leasedText } from '../../host/http.js'
+import { errorLine, toolError } from '../errors.js'
+import type { ToolFailure } from '../errors.js'
+import { hostCancelled } from './cancel.js'
+import { checkpointMode, takePreExecCheckpoint } from './checkpoint.js'
+import type { PreExecCheckpoint } from './checkpoint.js'
 import { formatActText } from './envelope.js'
+import type { PyOutcomeMeta } from './envelope.js'
+import { withFrame } from './frame.js'
+
+const LF = String.fromCharCode(10)
+
+/**
+ * /act 的客户端等待窗口。到点只说明"没等到回执"，**不说明脚本失败** ——
+ * Blender 侧可能还在跑（见 unknownOutcome）。
+ */
+const ACT_TIMEOUT_MS = 180000
 
 /**
  * 痛点1b 伴生修法：wm.read_factory_settings / wm.read_homefile 在 **GUI 会话**里会把插件
@@ -37,6 +49,62 @@ function factoryResetGuard(code: string, file: string | null): string | null {
     '③ 确认要重置则显式传 allow_factory_reset=true。'
   )
 }
+
+/**
+ * "没拿到回执"的回执（超时/断连路径）。
+ *
+ * 现场：/act 的客户端等待是 180 s。超时或 addon 掉线后脚本**仍可能在 Blender 里跑**，
+ * 若把它写成"失败"，模型会立刻重跑，场景里叠出第二份材质/节点 —— 而 audit_mesh 不会报
+ * （重复材质不是 mesh 缺陷）。所以这里只说"结果未知"，并把 host 侧 request_id 与
+ * 执行前回退点交出去，让下一步是"确认现场"而不是"再跑一遍"。
+ */
+function unknownOutcome(checkpoint: PreExecCheckpoint, cause: unknown): ToolFailure {
+  const label = checkpoint.label
+  const where = label
+    ? 'checkpoint=' + label
+    : checkpoint.mode === 'off'
+      ? 'checkpoint=off（本次调用显式关了回退点）'
+      : 'checkpoint=none（回退点没建成：' + clip(checkpoint.note, 80) + '）'
+  const message = [
+    'Python 结果未知：/act 等 ' +
+      String(ACT_TIMEOUT_MS / 1000) +
+      's 没回执（客户端超时或连接中断）—— 这不代表脚本失败：它可能仍在 Blender 里跑，也可能已经跑完并改了场景。',
+    'request_id=' + checkpoint.requestId,
+    where,
+    '原因：' + clip(errorLine(cause), 120),
+    '别直接重跑同一段脚本：重复的材质/节点不会被 audit_mesh 报出来（它不是 mesh 缺陷）。',
+  ].join(LF)
+  const next =
+    '先确认现场：blender_inspect command=get_scene_info（看材质/节点有没有重复）；' +
+    (label
+      ? '要多退一步 → blender_session action=txn op=restore label=' +
+        label +
+        '（文件级快照，回到这次执行前）；'
+      : '') +
+    '对象级 mark 用 blender_session action=txn op=revert label=<MARK>；' +
+    '只有确认场景没变（例如请求根本没送到 Blender）才直接重跑。'
+  const failure = toolError('outcome_unknown', message, next, undefined, 'transport')
+  failure.envelope.evidence.request_id = checkpoint.requestId
+  failure.envelope.evidence.outcome = 'unknown'
+  failure.envelope.evidence.checkpoint = label
+  return failure
+}
+
+function clip(value: string, size: number): string {
+  const trimmed = value.trim()
+  return trimmed.length > size ? trimmed.slice(0, size) + '…' : trimmed
+}
+
+/** 成功回执的锚点：谁跑的、执行前退到哪。 */
+function outcomeMeta(checkpoint: PreExecCheckpoint): PyOutcomeMeta {
+  return {
+    requestId: checkpoint.requestId,
+    checkpoint: checkpoint.label,
+    checkpointMode: checkpoint.mode,
+    checkpointWarning: checkpoint.label ? null : checkpoint.note || null,
+  }
+}
+
 /**
  * Execute code inside the GUI session's Blender. The dispatcher already
  * resolved the ready session; no path here starts a headless Blender.
@@ -61,21 +129,36 @@ export async function executePy(
       'PY 需要 code 或 file 之一',
       '给 code（短 Python）或 file（磁盘上的 .py 脚本路径）',
     )
+  const mode = checkpointMode(args.checkpoint)
+  if (!mode)
+    return toolError(
+      'invalid_params',
+      'blender_py checkpoint 只接受 auto / off，收到：' + text(args.checkpoint),
+      '去掉 checkpoint（默认 auto）或显式写 checkpoint=off',
+    )
   const blocked = args.allow_factory_reset === true ? null : factoryResetGuard(code, file)
   if (blocked)
     return toolError('factory_reset_blocked', blocked, '改用逐对象删除，或改走 headless/worker')
-  const r = await backendPost(
-    port,
-    '/act',
-    {
-      code: code,
-      file: file,
-      py: true,
-      sessionId: String(session.id || ''),
-      waitMs: Number(args.wait_ms) || 0,
-    },
-    180000,
-  )
+  // 执行前回退点（默认 auto）：快照失败不挡这次编辑，只在回执里告警。
+  const checkpoint = await takePreExecCheckpoint(port, mode)
+  let r: Record<string, unknown>
+  try {
+    r = await backendPost(
+      port,
+      '/act',
+      {
+        code: code,
+        file: file,
+        py: true,
+        sessionId: String(session.id || ''),
+        waitMs: Number(args.wait_ms) || 0,
+      },
+      ACT_TIMEOUT_MS,
+    )
+  } catch (e) {
+    if (hostCancelled()) throw e
+    return unknownOutcome(checkpoint, e)
+  }
   const lt = leasedText(r)
   if (lt) return { text: lt }
   if (!r || r.ok !== true)
@@ -84,34 +167,9 @@ export async function executePy(
       'PY 执行失败 · ' + text(r.error || r.raw || 'unknown'),
       '看 traceback/stderr 修脚本；脚本可以重跑。需要后台执行时用 blender_run(kind=headless)。',
     )
-  const out: Record<string, unknown> = { text: formatActText(r).join(String.fromCharCode(10)) }
-  if (args.see !== false) {
-    const size = Math.max(120, Math.min(1600, Number(args.max_size || 560)))
-    let f
-    try {
-      f = await fetchFrame(port, size)
-    } catch {
-      return out
-    }
-    const dd = frameDedupe('py-see:' + String(size), f.hash, !!args.force)
-    if (dd.dup) {
-      out.text = text(out.text) + dedupeNote(dd.repeats)
-      return out
-    }
-    const img = await toAttachment(ctx, f.png, 'py-see-' + String(Date.now()) + '.png')
-    if (img.ref) out.image = img.ref
-    out.text =
-      text(out.text) +
-      String.fromCharCode(10) +
-      'SEE ' +
-      String(size) +
-      'px · ' +
-      String(f.ms) +
-      'ms · hash ' +
-      f.hash
-    if (!img.ref)
-      out.text =
-        text(out.text) + String.fromCharCode(10) + '⚠ 图片未回传：' + text(img.why || '未知原因')
+  const out: Record<string, unknown> = {
+    text: formatActText(r, outcomeMeta(checkpoint)).join(LF),
   }
-  return out
+  if (args.see === false) return out
+  return await withFrame(ctx, port, args, out)
 }

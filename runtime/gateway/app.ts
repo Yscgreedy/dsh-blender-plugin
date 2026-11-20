@@ -121,6 +121,7 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
   const E: HttpRouteDeps = {
     sessionRegistry,
     jobQueue,
+    addon: addonClient,
     gatewayOwner: () => app.owner,
     engine,
     selectionStore,

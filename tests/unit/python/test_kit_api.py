@@ -82,5 +82,48 @@ def test_default_op_is_visible_and_coerced():
     assert make_api(default_op="")[0].default_op == "help"
 
 
+# ── Action.fcurves 5.x compatibility ────────────────────────────────────────
+
+from types import SimpleNamespace
+
+
+class _Curve:
+    def __init__(self, pointer):
+        self._pointer = pointer
+
+    def as_pointer(self):
+        return self._pointer
+
+
+def test_action_fcurves_legacy_action():
+    a, b = _Curve(1), _Curve(2)
+    action = SimpleNamespace(fcurves=[a, b])
+    assert kit.action_fcurves(action) == [a, b]
+
+
+def test_action_fcurves_layered_action_unions_slots_once():
+    a, b = _Curve(11), _Curve(12)
+    slot_a, slot_b = object(), object()
+    strip = SimpleNamespace(
+        channelbag=lambda slot: SimpleNamespace(fcurves=[a])
+        if slot is slot_a
+        else SimpleNamespace(fcurves=[b])
+        if slot is slot_b
+        else None
+    )
+    action = SimpleNamespace(layers=[SimpleNamespace(strips=[strip])], slots=[slot_a, slot_b])
+    assert kit.action_fcurves(action) == [a, b]
+    assert kit.action_fcurves(action, slot_b) == [b]
+
+
+def test_action_fcurves_layered_action_without_slot_is_empty_not_legacy():
+    action = SimpleNamespace(layers=[], slots=[])
+    assert kit.action_fcurves(action) == []
+
+
+def test_action_fcurves_missing_attribute_returns_empty():
+    assert kit.action_fcurves(object()) == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

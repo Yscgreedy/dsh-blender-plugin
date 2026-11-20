@@ -149,12 +149,12 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ## Tools
 
-The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (35 families / 261 ops), so the surface stays small.
+The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (36 families / 264 ops), so the surface stays small.
 
 | Tool | What it gives you |
 |---|---|
 | blender_session | GUI session lifecycle and ownership: list/status/doctor, attach, claim/release, grant/revoke write scopes, pause state, presence, and `action=txn` snapshots/marks for rollback. Blender and the Gateway are host-managed. |
-| blender_op | The capability catalog (`op="catalog"`, 35 families / 261 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
+| blender_op | The capability catalog (`op="catalog"`, 36 families / 264 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
 | blender_py | Runs Python in the attached GUI session with a persistent kernel; `see=true` returns a frame. GUI-only: there is no headless fallback. |
 | blender_see | GUI capture only: `viewpoint=viewport|camera|custom`, `mode=frame|sequence`, fixed aspect/size tiers. Camera animation and batch renders go to `blender_run(kind="render")`. |
 | blender_run | The only job entry point: `action=submit` with `kind=render|headless` returns a job id immediately; `status/wait/collect/cancel/list` manage it; `action=tune` covers render performance. |
@@ -176,6 +176,8 @@ On Windows and Linux the Gateway can launch an isolated Blender GUI for the agen
 - Third-party checklist: [docs/给第三方的安装清单.md](docs/给第三方的安装清单.md)
 - DSH upgrade compatibility: [docs/DSH-更新适配.md](docs/DSH-更新适配.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
+- Feature backlog: [docs/待办-角色动画与卡通渲染需求.md](docs/待办-角色动画与卡通渲染需求.md)
+- OCCT backend plan (deferred): [docs/OCCT后端-接入计划.md](docs/OCCT后端-接入计划.md)
 - Modeling skill: [skills/blender-modeling/](skills/blender-modeling/)
 - Release notes: [GitHub Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) and [CHANGELOG.md](CHANGELOG.md)
 

@@ -1,5 +1,6 @@
 // worker 登记与单次请求
 import net from 'node:net'
+import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 
 export interface WorkersDeps {
@@ -16,6 +17,10 @@ export interface WorkerRecord {
   startedAt: number | null
   gpu: unknown
   pid: number | null
+  /** bpy.data.filepath after the worker opened/created its scene (null until hello/status). */
+  file: string | null
+  /** len(bpy.data.objects) for the same moment; 0 is a valid value, null means unknown. */
+  objects: number | null
   lastError: string | null
   stdoutTail: string
   stderrTail: string
@@ -59,6 +64,8 @@ export function workerState(ctx: WorkersCtx, name: unknown): WorkerRecord {
     startedAt: null,
     gpu: null,
     pid: null,
+    file: null,
+    objects: null,
     lastError: null,
     stdoutTail: '',
     stderrTail: '',
@@ -81,6 +88,8 @@ export function workerSnapshot(w: WorkerRecord): Record<string, unknown> {
     //（复测现场：stop 之后立刻 status 出现 alive:false + 旧 pid，读起来像没停干净）。
     pid: alive ? w.pid : null,
     port: w.port,
+    file: w.file,
+    objects: w.objects,
     uptimeMs: w.startedAt ? Date.now() - w.startedAt : null,
     idleMs: w.lastUsed ? Date.now() - w.lastUsed : null,
     gpu: w.gpu,
@@ -160,4 +169,22 @@ export function workerCall(
       }
     })
   })
+}
+
+/** Same scene file? Windows paths are case-insensitive and slash-insensitive. */
+export function sameWorkerFile(a: unknown, b: unknown): boolean {
+  const left = String(a === undefined || a === null ? '' : a).trim()
+  const right = String(b === undefined || b === null ? '' : b).trim()
+  if (!left || !right) return false
+  const windows =
+    process.platform === 'win32' ||
+    /^[A-Za-z]:[\\/]/.test(left) ||
+    /^[A-Za-z]:[\\/]/.test(right) ||
+    left.startsWith('\\\\') ||
+    right.startsWith('\\\\')
+  const norm = (p: string): string =>
+    (windows ? path.win32.resolve(p) : path.resolve(p)).replace(/[\\/]+$/, '')
+  const x = norm(left)
+  const y = norm(right)
+  return windows ? x.toLowerCase() === y.toLowerCase() : x === y
 }

@@ -6,7 +6,7 @@
 
 This repository is the **DSH × Blender plugin** (v3.2.0-alpha.1): a DeepSeek Harness plugin that drives a live
 Blender session over a loopback TCP bridge. Model surface: **6 tools** (`blender_session` / `blender_op` / `blender_py` / `blender_see` / `blender_run` / `blender_inspect`); planning surface:
-**35 families / 261 ops**; Blender addon **v2.0.0 / protocol 12** (Blender extension install); Gateway `127.0.0.1:39877`, addon dials the Gateway (no inbound port).
+**36 families / 264 ops**; Blender addon **v2.0.0 / protocol 12** (Blender extension install); Gateway `127.0.0.1:39877`, addon dials the Gateway (no inbound port).
 Ports, config keys, and paths are facts of [docs/配置参考.md](docs/配置参考.md) — never invent them.
 
 ## 1. Commands (single source)
@@ -33,9 +33,8 @@ Every other document links here instead of repeating commands.
 Addon typing: install `requirements-typecheck.txt` (fake-bpy stubs + NumPy for legacy imports; type-only; behavior is real-Blender E2E).
 Addon IDE: root `pyrightconfig.json` = whole-addon editor config; it ignores legacy `tests/e2e/blender/native` and `runtime/py` diagnostics. `pyrightconfig.extension.json` = typed-core gate; `pyrightconfig.python.json` = pure-logic runtime scope; `pyproject.toml` = pytest/Ruff configuration.
 
-Node **24.9** is the minimum supported version; CI runs on Node 24. Python tests need a venv with `pytest`, selected through
-`PYTHON` (`PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1` on Windows); layers and fixtures:
-[tests/README.md](tests/README.md).
+Node **24.9** is the minimum supported version (CI runs on Node 24); Python tests need a venv with `pytest`,
+selected through `PYTHON` (`PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1` on Windows); layers and fixtures: [tests/README.md](tests/README.md).
 
 ## 2. Architecture map
 
@@ -87,8 +86,8 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 
 ## 5. Definition of done
 
-- Typecheck and the tests for the touched layer pass; contract counts stay 6 tools / 35 families /
-  261 ops / 25 addon commands / 29 routes / protocol 12 unless the change declares a new count.
+- Typecheck and the tests for the touched layer pass; contract counts stay 6 tools / 36 families /
+  264 ops / 25 addon commands / 29 routes / protocol 12 unless the change declares a new count.
   The addon count is 25 **registered** commands; the transport-only `ping` makes 26 wire commands.
   The single truth is `extension/dsh_blender_bridge/command_registry.py` (see architecture §5).
 - New behavior has a failing test first. No `skip`, no retry, and no relaxed assertion to hide a failure.
@@ -118,3 +117,4 @@ review failure.
 | Architecture and constraints | [docs/architecture.md](docs/architecture.md) |
 | Test layers and fixtures | [tests/README.md](tests/README.md) |
 | Version history and migrations | [CHANGELOG.md](CHANGELOG.md) · [MIGRATIONS.md](MIGRATIONS.md) |
+| External-project comparison and gap decisions (Mixar) | [docs/Mixar-差距分析.md](docs/Mixar-差距分析.md) |
