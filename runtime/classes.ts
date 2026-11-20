@@ -173,7 +173,7 @@ export function renderHandoff(): string {
   L.push('# Blender 工具指路（子代理必读 · 30 秒）')
   L.push('')
   L.push(
-    '**别猜工具**：先 `blender_op(action="plan", op="catalog")` 看 34 个能力族；按建模类型查 `args={classes:true}`（或单类 `args={class:"recon"}`）。',
+    '**别猜工具**：先 `blender_op(action="plan", op="catalog")` 看 38 个能力族；按建模类型查 `args={classes:true}`（或单类 `args={class:"recon"}`）。',
   )
   L.push('模型侧 ' + String(MODEL_FACING_TOOLS.length) + ' 个工具：' + MODEL_FACING_TOOLS.join(' '))
   L.push('')

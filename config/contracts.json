@@ -179,6 +179,16 @@
       "file": "runtime/py/render/view.py",
       "prefix": "gui_"
     },
+    "anim": {
+      "kind": "register-ops",
+      "file": "runtime/py/core/anim.py",
+      "name": "anim"
+    },
+    "toon": {
+      "kind": "register-ops",
+      "file": "runtime/py/render/toon.py",
+      "name": "toon"
+    },
     "montage": {
       "kind": "api-dict",
       "file": "runtime/py/render/montage.py",
@@ -302,6 +312,20 @@
     "blockout": {
       "api": "dsh_blockout_api",
       "table": "blockout"
+    },
+    "anim": {
+      "api": "dsh_anim_api",
+      "table": "anim",
+      "pythonExtras": [
+        "help"
+      ]
+    },
+    "toon": {
+      "api": "dsh_toon_api",
+      "table": "toon",
+      "pythonExtras": [
+        "help"
+      ]
     },
     "eval": {
       "api": "dsh_evalharness_api",

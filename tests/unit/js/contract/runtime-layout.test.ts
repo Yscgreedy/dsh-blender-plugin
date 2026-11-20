@@ -35,7 +35,7 @@ describe('runtime domain package layout', () => {
   })
 
   it('maps every module name to a real file inside its domain package', () => {
-    expect(pyModuleNames().length).toBe(42)
+    expect(pyModuleNames().length).toBe(44)
     expect(pyModuleNames().sort()).toEqual(ALL.sort())
     for (const n of ALL) expect(fs.existsSync(pyModuleFile(n))).toBe(true)
     expect(pyModuleFile('generator')).toBe(pkgPath('runtime', 'py', 'geometry', 'generator.py'))

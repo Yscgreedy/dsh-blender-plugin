@@ -93,7 +93,7 @@ describe('backend route contract', () => {
     for (const family of PLAN_CATALOG) {
       expect(new Set(family.ops).size, family.f).toBe(family.ops.length)
     }
-    expect(PLAN_CATALOG).toHaveLength(36)
-    expect(PLAN_CATALOG.reduce((n: any, f: any) => n + f.ops.length, 0)).toBe(264)
+    expect(PLAN_CATALOG).toHaveLength(38)
+    expect(PLAN_CATALOG.reduce((n: any, f: any) => n + f.ops.length, 0)).toBe(269)
   })
 })

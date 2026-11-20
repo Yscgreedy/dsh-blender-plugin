@@ -1,4 +1,6 @@
 [
+ "anim_deform_audit",
+ "anim_rig_report",
  "asm_gate",
  "asm_help",
  "asm_manifest",
@@ -92,6 +94,7 @@
  "surface_help",
  "sweep_analyze",
  "sweep_help",
+ "toon_outline_audit",
  "uv_help",
  "uv_stats",
  "vehicle_help",

@@ -1,6 +1,6 @@
 {
-  "families_count": 36,
-  "ops_count": 264,
+  "families_count": 38,
+  "ops_count": 269,
   "tools_count": 6,
   "tools": [
     "blender_inspect",
@@ -11,6 +11,10 @@
     "blender_session"
   ],
   "families": [
+    {
+      "f": "anim",
+      "ops": 3
+    },
     {
       "f": "assembly",
       "ops": 8
@@ -142,6 +146,10 @@
     {
       "f": "sweep",
       "ops": 4
+    },
+    {
+      "f": "toon",
+      "ops": 2
     },
     {
       "f": "uv",

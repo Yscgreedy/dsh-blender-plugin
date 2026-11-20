@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import {
   pyModuleFile,
+  ANIM_PATH,
   ASSEMBLY_PATH,
   AUDIT_PATH,
   BLOCKOUT_PATH,
@@ -36,6 +37,7 @@ import {
   SHAPE_PATH,
   SURFACE_PATH,
   SWEEP_PATH,
+  TOON_PATH,
   TXN_PATH,
   UV_PATH,
   VEHICLE_PATH,
@@ -365,6 +367,10 @@ const ensureAssembly = (d: KernelIoDeps) =>
   injectModule(d, needFile(ASSEMBLY_PATH, 'assembly'), 'ASSEMBLY_READY', 'ASSEMBLY_VERSION')
 const ensureBlockout = (d: KernelIoDeps) =>
   injectModule(d, needFile(BLOCKOUT_PATH, 'blockout'), 'BLOCKOUT_READY', 'BLOCKOUT_VERSION')
+const ensureAnim = (d: KernelIoDeps) =>
+  injectModule(d, needFile(ANIM_PATH, 'anim'), 'ANIM_READY', 'ANIM_VERSION')
+const ensureToon = (d: KernelIoDeps) =>
+  injectModule(d, needFile(TOON_PATH, 'toon'), 'TOON_READY', 'TOON_VERSION')
 const ensureVisualReport = (d: KernelIoDeps) =>
   injectModule(
     d,
@@ -479,6 +485,8 @@ const createEnsures = (
   ensurePipeline: () => ensurePipeline(d),
   ensureAssembly: () => ensureAssembly(d),
   ensureBlockout: () => ensureBlockout(d),
+  ensureAnim: () => ensureAnim(d),
+  ensureToon: () => ensureToon(d),
   ensureVisualReport: () => ensureVisualReport(d),
   ensureShapesolve: () => ensureShapesolve(d),
   ensureEvalharness: () => ensureEvalharness(d),

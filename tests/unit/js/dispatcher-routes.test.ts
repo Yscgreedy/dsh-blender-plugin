@@ -7,6 +7,7 @@ import {
 import { routeExtRouting } from '../../../runtime/core/dispatcher/ext-routing.js'
 
 const ensureNames = [
+  'ensureAnim',
   'ensureAssembly',
   'ensureAudit',
   'ensureBlockout',
@@ -35,6 +36,7 @@ const ensureNames = [
   'ensureShapesolve',
   'ensureSurface',
   'ensureSweep',
+  'ensureToon',
   'ensureUv',
   'ensureVehicle',
   'ensureView',

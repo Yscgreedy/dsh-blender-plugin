@@ -2,6 +2,7 @@
 export interface PlanCallDeps {
   SESSION_NAME: string
   addon: import('../../transport/probes.js').AddonClient
+  ensureAnim: () => Promise<unknown>
   ensureAssembly: () => Promise<unknown>
   ensureAudit: () => Promise<unknown>
   ensureBlockout: () => Promise<unknown>
@@ -31,6 +32,7 @@ export interface PlanCallDeps {
   ensureShapesolve: () => Promise<unknown>
   ensureSurface: () => Promise<unknown>
   ensureSweep: () => Promise<unknown>
+  ensureToon: () => Promise<unknown>
   ensureUv: () => Promise<unknown>
   ensureVehicle: () => Promise<unknown>
   ensureView: () => Promise<unknown>

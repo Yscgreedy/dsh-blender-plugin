@@ -168,6 +168,10 @@ export const PIPELINE_PATH = pyModuleFile('pipeline')
 export const ASSEMBLY_PATH = pyModuleFile('assembly')
 /** 白模：声明式 blockout + 3 视图 + GLB 导出 */
 export const BLOCKOUT_PATH = pyModuleFile('blockout')
+/** 角色动画：骨架体检 / pose 施加 / rest-evaluated 变形审计（anim_* 前缀 op） */
+export const ANIM_PATH = pyModuleFile('anim')
+/** 卡通渲染：Shader to RGB 色阶材质 + 反向外壳描边（toon_* 前缀 op） */
+export const TOON_PATH = pyModuleFile('toon')
 /** 同机位 QC 视觉报告（verdict-first） */
 export const VISUALREPORT_PATH = pyModuleFile('visualreport')
 /** 无头多视轮廓拟合（解析投影，不渲染） */

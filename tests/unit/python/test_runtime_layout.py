@@ -181,7 +181,7 @@ def test_modules_manifest_is_single_source():
     """modules.json 唯一清单，paths.ts / offline_bootstrap.py 都读它。"""
     assert MANIFEST["version"] >= 1
     assert MANIFEST["domains"] == ["core", "geometry", "assembly", "render", "export"]
-    assert len(MANIFEST["modules"]) == len(set(MANIFEST["modules"])) == 42
+    assert len(MANIFEST["modules"]) == len(set(MANIFEST["modules"])) == 44
     for name, dom in MANIFEST["modules"].items():
         assert dom in MANIFEST["domains"], (name, dom)
         p = os.path.join(PY, dom, name + ".py")

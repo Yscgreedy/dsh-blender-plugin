@@ -572,6 +572,28 @@ export const PLAN_CATALOG: PlanFamily[] = [
     ops: ['montage', 'help'],
     key: '',
   },
+  {
+    f: 'anim',
+    requires_session: true,
+    write_scope: 'exclusive',
+    prefix: 'anim_',
+    when: '角色动画要体检 / 要真 pose：骨架与骨骼、约束、IK、权重覆盖（顶点的非零权重组数）、动作与帧范围一次看清；按通道施 pose；改完比 rest 与 evaluated 的边长/面积/翻转面',
+    not: '不做绑定与权重绘制（不建骨骼、不刷权重、不做 IK 解算收敛判定）；不是渲染验收（出图对比走 qc_render_views / visualreport_report）；**别直接改 pose bone 的 matrix** —— 走 anim_pose_apply 的通道口径（location / rotation_euler / rotation_quaternion / scale）',
+    sk: 'op="anim_rig_report", args={objects:["Armature"]} → op="anim_pose_apply", args={armature:"Armature", pose:{Hips:{rotation_euler:[0,0,0.3]}}} → op="anim_deform_audit", args={objects:["Body"]}',
+    ops: ['rig_report', 'pose_apply', 'deform_audit'],
+    key: '三态 pass/fail/degraded（degraded 不是通过，ok 只在 pass 时 true）。权重覆盖是「组名 ∈ 变形骨 且 weight > 0」的上界估计，不判权重质量；deform_audit 只比同拓扑，改拓扑的修改器（Subsurf/阵列/布尔）直接 degraded；IK 只记录不解算。写作用域 exclusive：pose_apply 前先 blender_session(op="txn", action="snapshot")。失败回执带 repro。',
+  },
+  {
+    f: 'toon',
+    requires_session: true,
+    write_scope: 'exclusive',
+    prefix: 'toon_',
+    when: '要卡通 / 赛璐璐外观：Shader to RGB + ColorRamp(CONSTANT) 色阶材质 + 反向外壳描边（Solidify flip normals + 背面剔除 + 自发光）',
+    not: '不是通用材质编辑器（节点图细活用 material_*）；不是描边像素验收（出图对比走 qc_render_views / visualreport_report）；**Shader to RGB 只在 EEVEE 生效**，Cycles 下色阶退化成纯 Emission',
+    sk: 'op="toon_build", args={objects:["Body"], bands:3, outline_mm:2.0} → op="toon_outline_audit", args={objects:["Body"]}',
+    ops: ['build', 'outline_audit'],
+    key: 'EEVEE 限制写进 warnings：Shader to RGB 只在 EEVEE；反向外壳靠 use_backface_culling + 阴影 NONE。三态：厚度越界 / 没翻转法线 / 没背面剔除 = fail，缺自发光 / 可见性估算不足 = degraded。写作用域 exclusive：改材质前先 snapshot。失败回执带 repro。',
+  },
 ]
 
 /** plan 之外的顶层工具：先决定"用哪个工具"，再决定 op */
@@ -707,5 +729,9 @@ export const PLAN_READ_ONLY_OPS: string[] = [
   'fix_interference',
   'blockout_help',
   'blockout_selftest',
+  // anim / toon 族：体检与审计只读；anim_pose_apply / toon_build 是写
+  'anim_rig_report',
+  'anim_deform_audit',
+  'toon_outline_audit',
 ]
 export const PLAN_READ_ONLY = new Set<string>(PLAN_READ_ONLY_OPS)

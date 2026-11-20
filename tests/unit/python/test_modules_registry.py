@@ -22,7 +22,7 @@ def test_schema_and_domains():
     assert MANIFEST["version"] == 1
     assert MANIFEST["domains"] == ["core", "geometry", "assembly", "render", "export"]
     modules = MANIFEST["modules"]
-    assert isinstance(modules, dict) and len(modules) == 42
+    assert isinstance(modules, dict) and len(modules) == 44
     for name, dom in modules.items():
         assert name.isidentifier(), name
         assert dom in MANIFEST["domains"], (name, dom)

@@ -5,7 +5,7 @@
 bpy/numpy 与共享内核 K.dsh_kit，只在 Blender 注入路径或显式访问时才加载）。
 访问子模块：import runtime.py.render.kit  或  runtime.py.render.kit（惰性属性）。
 """
-__all__ = ['view', 'qc', 'qc_render', 'render_guard', 'material', 'visualreport', 'imgtools', 'calib', 'montage']
+__all__ = ['view', 'qc', 'qc_render', 'render_guard', 'material', 'visualreport', 'imgtools', 'calib', 'montage', 'toon']
 
 
 def __getattr__(name):

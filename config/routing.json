@@ -602,6 +602,32 @@
       "preload": "geo"
     },
     {
+      "id": "ext-anim",
+      "side": "gui",
+      "family": "anim",
+      "group": "ext",
+      "kind": "dispatch",
+      "match": "prefix",
+      "prefix": "anim_",
+      "strip": 5,
+      "api": "dsh_anim_api",
+      "ensure": "ensureAnim",
+      "timeoutMs": 600000
+    },
+    {
+      "id": "ext-toon",
+      "side": "gui",
+      "family": "toon",
+      "group": "ext",
+      "kind": "dispatch",
+      "match": "prefix",
+      "prefix": "toon_",
+      "strip": 5,
+      "api": "dsh_toon_api",
+      "ensure": "ensureToon",
+      "timeoutMs": 600000
+    },
+    {
       "id": "ext-contract",
       "side": "gui",
       "family": "contract",
