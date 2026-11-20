@@ -203,13 +203,53 @@ export function formatLocalEvidence(
   return lines
 }
 
+/**
+ * 工单 6e：会话数的唯一判据是 local_evidence.sessions（Gateway 的 registry.list()），
+ * 不是本调用者可见的行（registry.listFor(caller)）。别人的会话会让两者不一致：
+ * 旧文本会同时写「0 个会话」和「未认领」，用户照着 attach 只会吃 session_in_use。
+ * 返回 null 表示这份证据没带 sessions 字段（老 Gateway / 部分 fixture），退回行数。
+ */
+function evidenceSessions(evidence?: Record<string, unknown> | null): SessionRow[] | null {
+  const raw = evidence ? evidence.sessions : undefined
+  if (!Array.isArray(raw)) return null
+  return raw.filter(isRecord).map(asRecord)
+}
+
+function claimedElsewhereText(rows: SessionRow[]): string {
+  const shown = rows
+    .slice(0, 4)
+    .map((s) => text(s.id || '-') + '(' + text(s.kind || '-') + ',' + text(s.status || '-') + ')')
+  if (rows.length > shown.length) shown.push('+' + String(rows.length - shown.length))
+  return shown.join(' · ')
+}
+
 export function formatSessionList(
   sessions: SessionRow[],
   evidence?: Record<string, unknown> | null,
   addon?: Record<string, unknown> | null,
 ): string {
   const blocks = formatLocalEvidence(evidence)
+  const evidenceRows = evidenceSessions(evidence)
+  const total = evidenceRows ? evidenceRows.length : sessions.length
+  const header =
+    total === sessions.length
+      ? 'SESSION list · ' + String(total) + ' 个会话'
+      : 'SESSION list · ' +
+        String(total) +
+        ' 个会话（本调用者可见 ' +
+        String(sessions.length) +
+        '）'
   if (!sessions.length) {
+    if (evidenceRows && evidenceRows.length) {
+      return [
+        header,
+        '已认领但不在本调用者名下：' + claimedElsewhereText(evidenceRows),
+        '说明：这些会话已有 owner，attach 会被 session_in_use 拒绝 —— 让 owner 先 detach/release，或换一个 DSH 会话。',
+        'next_actions · blender_session action=list（owner 释放后再 attach）',
+      ]
+        .concat(blocks)
+        .join(LF)
+    }
     // 2026-11-19 纠正：3.1+ addon 主动拨 39877，**不需要用户点 Connect**。
     // list=0 只说明"还没认领"，不说明通道离线 —— 文案必须给可粘贴的 attach。
     const view = asRecord(addon)
@@ -228,7 +268,7 @@ export function formatSessionList(
         ? 'addon 已连，ready_instances=' + String(ready)
         : 'addon 未连，ready_instances=0'
     const head = [
-      'SESSION list · 0 个会话',
+      header,
       '未认领（' + addonText + '）' + (attachLine ? ' → 直接 attach：' + attachLine : ''),
       '说明：list=0 只是未认领，不代表 addon 离线。',
       attachLine
@@ -239,7 +279,7 @@ export function formatSessionList(
     ]
     return head.concat(blocks).join(LF)
   }
-  const lines = ['SESSION list · ' + String(sessions.length) + ' 个会话']
+  const lines = [header]
   for (const s of sessions) {
     const agents = Array.isArray(s.agents) ? s.agents.length : 0
     lines.push(

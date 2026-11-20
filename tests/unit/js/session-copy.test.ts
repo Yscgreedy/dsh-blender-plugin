@@ -32,6 +32,79 @@ describe('工单 6 session list copy', () => {
     expect(text).not.toContain('点 Connect')
   })
 
+  // 工单 6e：会话数与"未认领"措辞必须由 evidence.sessions 驱动，不能按本调用者可见的行数判断。
+  it('counts sessions from evidence when another caller already claimed one', () => {
+    const text = formatSessionList(
+      [],
+      {
+        sessions: [
+          { id: 'sess-owned-elsewhere', kind: 'user-gui', status: 'ready', instanceId: 'abc' },
+        ],
+        local_processes: [],
+        ports: [],
+        ports_evidence: {
+          conflicts: [],
+          source: 'netstat',
+          scanned_at: '2026-11-19T13:50:21.417Z',
+        },
+        false_positives: [],
+        fixture: null,
+      },
+      addon,
+    )
+    expect(text).toContain('SESSION list · 1 个会话（本调用者可见 0）')
+    expect(text).toContain('sess-owned-elsewhere')
+    expect(text).toContain('session_in_use')
+    expect(text).not.toContain('未认领')
+    expect(text).not.toContain('list=0 只是未认领')
+  })
+
+  it('keeps the zero-claim copy when evidence confirms zero sessions', () => {
+    const text = formatSessionList(
+      [],
+      {
+        sessions: [],
+        local_processes: [],
+        ports: [],
+        ports_evidence: {
+          conflicts: [],
+          source: 'netstat',
+          scanned_at: '2026-11-19T13:50:21.417Z',
+        },
+        false_positives: [],
+        fixture: null,
+      },
+      addon,
+    )
+    expect(text).toContain('SESSION list · 0 个会话')
+    expect(text).toContain('未认领')
+  })
+
+  it('reports the evidence total next to the visible rows when they differ', () => {
+    const rows = [{ id: 'sess-mine', kind: 'user-gui', status: 'ready', instanceId: 'abc' }]
+    const text = formatSessionList(
+      rows,
+      {
+        sessions: [
+          { id: 'sess-mine', kind: 'user-gui', status: 'ready' },
+          { id: 'sess-theirs', kind: 'virtual-gui', status: 'ready' },
+        ],
+        local_processes: [],
+        ports: [],
+        ports_evidence: {
+          conflicts: [],
+          source: 'netstat',
+          scanned_at: '2026-11-19T13:50:21.417Z',
+        },
+        false_positives: [],
+        fixture: null,
+      },
+      addon,
+    )
+    expect(text).toContain('SESSION list · 2 个会话（本调用者可见 1）')
+    expect(text).toContain('sess-mine')
+  })
+
   it('prints the evidence blocks when given', () => {
     const text = formatSessionList(
       [],
