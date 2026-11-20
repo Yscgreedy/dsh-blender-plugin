@@ -11,6 +11,8 @@
  * 超时 abort/presenter/lossless/session 门。
  */
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
 import * as plugin from '../../../../src/index'
@@ -61,7 +63,8 @@ const ASPECTS = [
     id: 'sessionFallback',
     title: 'session 门',
     description:
-      '需要 GUI 会话的工具在没有 ready 会话时给出决策请求，不启动 Blender、不转 headless',
+      '需要 GUI 会话的工具在没有 ready 会话时给出决策请求，不启动 Blender、不转 headless' +
+      '（唯一显式例外：blender_op 带 args.file 的本地无 GUI 车道）',
   },
 ] as const
 
@@ -458,7 +461,7 @@ describe('sessionFallback：无 ready 会话时拒绝并给两个选择', () => 
     record(name, 'sessionFallback', 'PASS', evidence)
   })
 
-  it.each(['blender_session', 'blender_op', 'blender_run', 'blender_inspect'])(
+  it.each(['blender_session', 'blender_run', 'blender_inspect'])(
     '%s has no headless fallback concept',
     (name) => {
       record(
@@ -470,4 +473,52 @@ describe('sessionFallback：无 ready 会话时拒绝并给两个选择', () => 
       )
     },
   )
+
+  // 显式例外（本地无 GUI 车道）：白名单 op + 显式 args.file + 没有 ready 会话时才提交
+  // headless 作业；没有 file 的调用必须继续按 session 门拒绝、不产生 Blender 进程。
+  it('blender_op 只对「白名单 op + args.file」开本地车道', async () => {
+    const blend = path.join(os.tmpdir(), 'dsh-matrix-local-' + String(Date.now()) + '.blend')
+    fs.writeFileSync(blend, 'BLENDER-fake-scene')
+    let evidence: string
+    try {
+      backend.setHandler('POST /lease', NO_SESSION_HANDLER)
+      const laneStart = backend.requests.length
+      const laneOut = await run('blender_op', {
+        action: 'plan',
+        op: 'audit_mesh',
+        args: { file: blend },
+      })
+      const laneText = textOf(laneOut)
+      expect(laneText).toContain('job-1')
+      expect(laneText).toContain('blender_run')
+      expect(laneText).toContain('degraded')
+      const laneReqs = requestsSince(laneStart)
+      const submit = laneReqs.find((r) => r.path === '/job')
+      expect(submit?.body, '带 file 的白名单 op 必须复用作业入口').toMatchObject({
+        surface: 'queue',
+        op: 'submit',
+        kind: 'headless',
+        catalog_op: 'audit_mesh',
+        file: blend,
+      })
+      expect(laneReqs.some((r) => r.path === '/plan')).toBe(false)
+
+      const gatedStart = backend.requests.length
+      const gatedOut = await run('blender_op', { action: 'plan', op: 'qc_render_views' })
+      const gatedText = textOf(gatedOut)
+      expect(gatedText).toContain('session_required')
+      const gatedReqs = requestsSince(gatedStart)
+      expect(gatedReqs.some((r) => r.path === '/job')).toBe(false)
+      expect(gatedReqs.some((r) => r.path === '/plan')).toBe(false)
+      evidence =
+        'file+audit_mesh → /job submit(catalog_op) job=' +
+        String((submit?.body as Record<string, unknown> | undefined)?.kind ?? '') +
+        '；无 file 的 qc_render_views → ' +
+        gatedText.split('\n')[0].slice(0, 100)
+    } finally {
+      backend.setHandler('POST /lease', null)
+      fs.rmSync(blend, { force: true })
+    }
+    record('blender_op', 'sessionFallback', 'PASS', evidence)
+  })
 })

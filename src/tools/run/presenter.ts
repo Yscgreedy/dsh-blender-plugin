@@ -62,6 +62,8 @@ export function formatJob(job: Record<string, unknown>): string[] {
           ? ' · parsed=' + clip(JSON.stringify(result.parsed), 1200)
           : ''),
     )
+  const channelLines = formatChannels(result.parsed)
+  if (channelLines.length) lines.push(...channelLines)
   const provenance = asRecord(result.provenance)
   if (result.provenance)
     lines.push(
@@ -92,6 +94,50 @@ export function formatJob(job: Record<string, unknown>): string[] {
       'error   ' + text(err.code) + ' · stage=' + text(err.stage) + ' · ' + text(err.root_cause),
       'fix     ' + text(err.fix || '-'),
     )
+  return lines
+}
+
+/**
+ * render channels 回执：verdict + 每通道路径/四项指标（或 skipped 原因）+ 可抄的 repro。
+ * 数据来自 result.parsed（队列执行器把 CHANNELS 标记折成这个形状）；没请求通道时不出行。
+ */
+export function formatChannels(parsed: unknown): string[] {
+  const p = asRecord(parsed)
+  const verdict = text(p.verdict)
+  if (!verdict) return []
+  const evidence = asRecord(p.evidence)
+  const head =
+    'channels  verdict=' +
+    verdict +
+    (Array.isArray(evidence.requested) && evidence.requested.length
+      ? ' · requested=' + evidence.requested.map((n) => text(n)).join(',')
+      : '') +
+    (Array.isArray(evidence.skipped) && evidence.skipped.length
+      ? ' · skipped=' + evidence.skipped.map((n) => text(n)).join(',')
+      : '') +
+    (evidence.frame === undefined || evidence.frame === null
+      ? ''
+      : ' · frame=' + text(evidence.frame))
+  const lines = [head]
+  for (const raw of Array.isArray(p.channels) ? p.channels : []) {
+    const c = asRecord(raw)
+    const m = asRecord(c.metrics)
+    let line = '  ' + text(c.name) + ' · ' + text(c.status)
+    if (text(c.path)) line += ' · ' + text(c.path)
+    if (m.foreground_px !== undefined)
+      line +=
+        ' · foreground_px=' +
+        text(m.foreground_px) +
+        ' · coverage=' +
+        text(m.coverage) +
+        ' · n_components=' +
+        text(m.n_components) +
+        ' · bbox=' +
+        (Array.isArray(m.bbox) ? m.bbox.map((n) => text(n)).join(',') : '-')
+    if (text(c.reason)) line += ' · ' + text(c.reason)
+    lines.push(line)
+  }
+  if (text(p.repro)) lines.push('repro  ' + text(p.repro))
   return lines
 }
 
@@ -193,7 +239,9 @@ export function runHelp(): string {
   return [
     'blender_run 动作（唯一作业入口：submit → jobId → status/wait/collect/cancel；无同步模式）：',
     '  action=submit kind=render|headless + 参数',
-    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/priority',
+    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/channels/priority',
+    '      · channels=["render","alpha","mask","ink"]（默认 ["render"]）：每通道给路径 + foreground_px/coverage/n_components/bbox；' +
+      '缺 ink 对象时该通道 skipped、整体 verdict=degraded（degraded ≠ 通过，但不是失败）',
     '    headless（跑脚本）：script/script_file/file/outdir/timeout_ms/engine/preload/factory_startup/bootstrap/workdir/include_noise/out_json/args/env/priority',
     '      · 默认注入内核 K（bootstrap=false 才关）+ preload 模块；preload 名不存在 → job_prepare_failed',
     '      · args=string（引号分词）| string[]；env={KEY:VALUE}；两者都写进 result.provenance 供对账',

@@ -28,6 +28,56 @@ import {
 
 const LF = String.fromCharCode(10)
 
+/**
+ * 渲染通道（render / alpha / mask / ink）：允许列表与默认值只在这一处。
+ *
+ * 台账（docs/archive/2026-11-20-角色动画与卡通渲染需求.md 第 72-74 行，render channels 条）：
+ * kind=render 支持 channels，默认只渲 render；未知通道一律 invalid_params 并把允许值列出来。
+ */
+export const CHANNEL_NAMES = ['render', 'alpha', 'mask', 'ink'] as const
+export type ChannelName = (typeof CHANNEL_NAMES)[number]
+
+function isChannel(name: string): name is ChannelName {
+  return (CHANNEL_NAMES as readonly string[]).includes(name)
+}
+
+function allowed(): string {
+  return CHANNEL_NAMES.join(' | ')
+}
+
+/**
+ * 归一化 channels 参数：undefined → 默认 ["render"]；string 按逗号分词；数组逐项收窄。
+ * 去空白、去重、保序；未知通道/空列表/非字符串项都是 invalid_params 的错误文本。
+ */
+export function normalizeChannels(value: unknown): { channels: ChannelName[] } | { error: string } {
+  if (value === undefined || value === null) return { channels: ['render'] }
+  const raw = typeof value === 'string' ? value.split(',') : value
+  if (!Array.isArray(raw))
+    return {
+      error:
+        'channels 只认字符串数组（如 ["render","alpha"]；也收逗号分隔的字符串），收到 ' +
+        typeof value,
+    }
+  const out: ChannelName[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string')
+      return {
+        error:
+          'channels 的每一项都必须是字符串通道名（收到 ' + typeof item + '）；允许：' + allowed(),
+      }
+    const name = item.trim()
+    if (!name) continue
+    if (!isChannel(name))
+      return {
+        error: '未知的渲染通道：' + name + '；允许：' + allowed() + '（默认只渲 render）',
+      }
+    if (!out.includes(name)) out.push(name)
+  }
+  if (out.length === 0)
+    return { error: 'channels 不能是空列表；允许：' + allowed() + '（不传就是 ["render"]）' }
+  return { channels: out }
+}
+
 const RENDER_KEYS = [
   'file',
   'output',
@@ -216,8 +266,14 @@ function submitPayload(args: Record<string, unknown>): Record<string, unknown> |
     if (present(args.script) || present(args.script_file))
       return 'render 不接受 script/script_file：最终渲染是声明式入口；跑脚本请用 kind=headless 或 blender_py'
     for (const k of RENDER_KEYS) if (present(args[k])) payload[k] = args[k]
+    // render channels：默认 ["render"]，非法值 invalid_params 并把允许列表还回去。
+    const channels = normalizeChannels(args.channels)
+    if ('error' in channels) return channels.error
+    payload.channels = channels.channels
     return payload
   }
+  if (args.channels !== undefined)
+    return 'channels 只对 kind=render 有效（headless 跑脚本，没有通道回执）：删掉 channels 或改用 kind=render'
   if (!present(args.script) && !present(args.script_file) && !present(args.file))
     return 'headless 需要 script / script_file / file 之一'
   for (const k of HEADLESS_KEYS) if (present(args[k])) payload[k] = args[k]

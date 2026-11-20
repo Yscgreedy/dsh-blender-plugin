@@ -3,6 +3,9 @@
  *
  * 执行型 op 需要 ready 的 GUI 会话；catalog / 只读 op / dry-run 是本地或
  * Gateway 只读路径，不需要会话，也不会启动 Blender。
+ *
+ * 唯一例外是本地无 GUI 车道（见 local.ts）：白名单 op + 显式 args.file + 没有
+ * ready 会话时，提交一个 headless 作业并回 job_id —— 不在工具调用里同步等长活。
  */
 import { BACKEND_HINT } from '../../constants.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
@@ -11,6 +14,7 @@ import { ensureBackend } from '../../host/backend/index.js'
 import { jsonPayload } from '../../host/http.js'
 import { toolError } from '../errors.js'
 import { requireReadySession } from '../shared/session.js'
+import { tryLocalLane } from './local.js'
 import { executeLoop } from './loop.js'
 import { executeOpt } from './opt.js'
 import { executePlan } from './plan.js'
@@ -20,7 +24,7 @@ import { READ_ONLY } from './read-only.js'
 export function opHelp(): string {
   return [
     'blender_op 动作（catalog 算子与参数搜索；执行型需要 GUI 会话）：',
-    '  action=plan   op=<catalog op> args={...}：36 family / 264 op 的主入口（op=catalog 看目录）',
+    '  action=plan   op=<catalog op> args={...}：38 family / 269 op 的主入口（op=catalog 看目录）',
     '  action=loop   op=start|status|stop|board|export|help|bench：参数搜索内环（target=gui|session）',
     '  action=opt    op=analyze|join|help：对象精简分析/合并',
     '  action=preset op=list|get|apply|save|delete|export|import|help：配方库',
@@ -64,6 +68,7 @@ export async function executeOp(
   ctx: HostContext,
   port: number,
   args: Record<string, unknown>,
+  exec?: unknown,
 ): Promise<unknown> {
   const action = text(args.action).trim() || 'plan'
   const instanceId = targetInstance(args)
@@ -82,6 +87,15 @@ export async function executeOp(
         'OP ' + op + ' 失败 · args 不是合法 JSON 对象：' + text(args.args).slice(0, 200),
         'args 传 JSON 对象，例如 {"family":"audit"}',
       )
+    const lane = await tryLocalLane({
+      ctx,
+      port,
+      op,
+      payload: jsonPayload(args.args),
+      instanceId,
+      exec,
+    })
+    if (lane) return lane
     const blocked = await gate(port, !READ_ONLY.has(op) && !dryRun(args.args), instanceId)
     if (blocked) return blocked
     return executePlan(ctx, port, Object.assign({ instance_id: instanceId }, args))

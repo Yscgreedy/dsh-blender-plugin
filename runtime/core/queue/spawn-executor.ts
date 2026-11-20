@@ -14,6 +14,8 @@ import { preloadChunk } from '../kernel/api.js'
 import { envPrelude, scriptFileBlock, workdirBlock } from '../scripts.js'
 import { isRecord } from '../json.js'
 import { inputPathBaseList, resolveExistingInput } from '../../execution/input-paths.js'
+import { buildLocalOpJob } from '../../execution/local-op/index.js'
+import { channelReceiptFor, channelsPostlude } from '../../execution/render-channels.js'
 import type { JobExecutionResult, JobExecutor, JobHandle, JobRecord } from './types.js'
 
 export interface SpawnExecutorOptions {
@@ -166,6 +168,22 @@ function headlessPrelude(
   return { code: parts.filter(Boolean).join('\n'), preloads: mods, bootstrap }
 }
 
+/**
+ * 本地车道：把车道自带的 preload 模块并进调用方声明的清单（去重，pi 序不变）。
+ * headlessPrelude 只认一个 preload 串，这里先合并 —— 未知名字仍在那边报错。
+ */
+function withPreloads(
+  params: Record<string, unknown>,
+  extra: readonly string[],
+): Record<string, unknown> {
+  const raw = params.preload
+  const own = (Array.isArray(raw) ? raw.map(asString) : raw ? String(raw).split(',') : [])
+    .map((m) => m.trim().replace(/\.py$/, ''))
+    .filter(Boolean)
+  for (const name of extra) if (!own.includes(name)) own.push(name)
+  return { ...params, preload: own.join(',') }
+}
+
 function frameRange(params: Record<string, unknown>): { start: number; end: number } | null {
   const raw = params.frames
   if (Array.isArray(raw) && raw.length === 2) return { start: Number(raw[0]), end: Number(raw[1]) }
@@ -258,6 +276,8 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
     args.push('-b', '--factory-startup', '--python-expr', renderPrelude(renderParams))
     const frames = frameRange(params)
     if (frames) args.push('-s', String(frames.start), '-e', String(frames.end), '-a')
+    // render channels：-a 之后追加一次 numpy 收尾（没传 channels 时一个参数都不加）
+    args.push(...channelsPostlude(renderParams, outdir))
     if (output && !output.endsWith('/') && !output.endsWith('\\')) ensureDir(path.dirname(output))
     return {
       args,
@@ -277,13 +297,18 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
   if (file) args.push(wslToWin(file))
   args.push('-b')
   if (params.factory_startup !== false) args.push('--factory-startup')
-  const script = asString(params.script)
+  // 无 GUI 本地车道：catalog_op 由 runtime/execution/local-op 生成脚本 + preload 清单
+  const localOp = params.catalog_op ? buildLocalOpJob(params) : null
+  const script = localOp ? localOp.script : asString(params.script)
   const rawScriptFile = asString(params.script_file)
   // 脚本路径同样先解析再写进 job.py（_dsh_target 与 prelude 用同一个绝对路径）
   const scriptFile = rawScriptFile
     ? resolveExistingInput(rawScriptFile, jobPathBases(params), 'script_file')
     : rawScriptFile
-  const prelude = headlessPrelude(params, env)
+  const prelude = headlessPrelude(
+    localOp === null ? params : withPreloads(params, localOp.preloads),
+    env,
+  )
   if (script) {
     const scriptPath = path.join(tempDir, 'job.py')
     const body = prelude.code ? prelude.code + '\n' + script : script
@@ -523,7 +548,8 @@ export class SpawnJobExecutor implements JobExecutor {
             /* temp cleanup is best effort */
           }
         }
-        const parsed = job.kind === 'headless' ? parseHeadless(logs.stdout) : undefined
+        const render = channelReceiptFor(job.params, logs.stdout)
+        const parsed = job.kind === 'headless' ? parseHeadless(logs.stdout) : (render ?? undefined)
         resolve({
           exitCode,
           signal,
