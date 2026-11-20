@@ -70,7 +70,8 @@ describe('check-doc-paths', () => {
     expect(report).not.toBeNull()
     expect(report!.mode).toBe('warn')
     expect(report!.legacy.failures).toEqual([])
-    expect(report!.docs.extendedCount).toBe(25)
+    // 24 = 原 25 篇 extended 文档减去已归档的角色动画台账（docs/archive 计入 legacy 口径）。
+    expect(report!.docs.extendedCount).toBe(24)
     expect(report!.findings.orphanDocs).toHaveLength(0)
     expect(report!.findings.missingRefs).toHaveLength(7)
     expect(report!.baseline.present).toBe(true)

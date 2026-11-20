@@ -55,6 +55,35 @@ for (const rel of ['docs/操作教程.md', 'skills/blender-modeling/SKILL.md']) 
   })
 }
 
+// 2026-11-20：其余"当前口径"文档/入口同样锁死计数（CHANGELOG 与 Mixar 差距分析是历史
+// 记录，保留当时的 36/264 原文，不在此列）。新增 op 时这里会自动跟着 catalog 走。
+for (const rel of [
+  'llms.txt',
+  'package.json',
+  'docs/AI-安装提示词.md',
+  'docs/DSH-更新适配.md',
+  'docs/配置参考.md',
+  'docs/部署SOP.md',
+  'docs/给第三方的安装清单.md',
+  'docs/宿主集成-接口契约-v2.3增补.md',
+  'docs/OCCT后端-接入计划.md',
+  'src/index.ts',
+  'src/tools/op/execute.ts',
+  'tests/fixtures/README.md',
+]) {
+  targets.push({
+    file: path.join(ROOT, rel),
+    pairs: [
+      [/\d+ family \/ \d+ op/g, fams + ' family / ' + ops + ' op'],
+      [/\d+ families \/ \d+ ops/g, fams + ' families / ' + ops + ' ops'],
+      [/\d+ 个 family \/ \d+ 个 op/g, fams + ' 个 family / ' + ops + ' 个 op'],
+      [/catalog 的 \d+\/\d+/g, 'catalog 的 ' + fams + '/' + ops],
+      [/catalog 不是 \d+\/\d+/g, 'catalog 不是 ' + fams + '/' + ops],
+      [/\d+\/\d+ catalog/g, fams + '/' + ops + ' catalog'],
+    ],
+  })
+}
+
 let changed = 0
 for (const t of targets) {
   if (!fs.existsSync(t.file)) {

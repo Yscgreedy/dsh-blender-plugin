@@ -1,19 +1,19 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-20T02:05:55.117Z",
+  "generatedAt": "2026-11-20T03:15:58.304Z",
   "mode": "warn",
   "totals": {
-    "all": 1515,
-    "exempt": 1515,
+    "all": 1484,
+    "exempt": 1484,
     "residual": 0
   },
   "byPrefix": {},
   "byKind": {},
   "files": {
     "CHANGELOG.md": {
-      "count": 232,
-      "exempt": 232,
+      "count": 239,
+      "exempt": 239,
       "residual": 0
     },
     "MIGRATIONS.md": {
@@ -41,6 +41,16 @@
       "exempt": 4,
       "residual": 0
     },
+    "docs/archive/2026-11-20-角色动画与卡通渲染需求.md": {
+      "count": 25,
+      "exempt": 25,
+      "residual": 0
+    },
+    "docs/archive/README.md": {
+      "count": 2,
+      "exempt": 2,
+      "residual": 0
+    },
     "docs/archive/headless优先-路线决定.md": {
       "count": 4,
       "exempt": 4,
@@ -64,11 +74,6 @@
     "docs/宿主集成-接口契约-v2.3增补.md": {
       "count": 52,
       "exempt": 52,
-      "residual": 0
-    },
-    "docs/待办-角色动画与卡通渲染需求.md": {
-      "count": 70,
-      "exempt": 70,
       "residual": 0
     },
     "docs/证据分级与读图纪律.md": {
@@ -297,8 +302,8 @@
       "residual": 0
     },
     "tests/BEHAVIOR_MATRIX.md": {
-      "count": 309,
-      "exempt": 309,
+      "count": 314,
+      "exempt": 314,
       "residual": 0
     },
     "tests/MIGRATION.md": {

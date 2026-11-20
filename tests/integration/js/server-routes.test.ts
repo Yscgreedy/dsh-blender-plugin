@@ -2,6 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
 import { pkgPath } from '../../helpers/pkg'
+import fs from 'node:fs'
+
+const lock = JSON.parse(
+  fs.readFileSync(new URL('../../fixtures/capability.lock.json', import.meta.url), 'utf8'),
+) as { ops_count: number }
 import { startFakeWsAddon } from '../../helpers/fake-ws-addon.mjs'
 
 let addon: { instanceId: string; ready: Promise<unknown>; close: () => Promise<void> }
@@ -121,7 +126,7 @@ describe('backend HTTP routes against a fake addon', () => {
     expect(catalog.status).toBe(200)
     const cj = (await catalog.json()) as any
     expect(cj.ok).toBe(true)
-    expect(cj.result.ops_count).toBe(264)
+    expect(cj.result.ops_count).toBe(lock.ops_count)
 
     const ok = await post('/cmd', { holder, name: 'ping', params: {} })
     expect(ok.status).toBe(200)

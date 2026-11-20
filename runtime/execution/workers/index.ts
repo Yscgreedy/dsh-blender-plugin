@@ -214,7 +214,6 @@ export function createWorkersApi(E: WorkersDeps) {
       CFG.workerPort ||
       9879,
   }
-  const { metrics } = ctx
   const start = (opts: Record<string, unknown> = {}, nameArg?: unknown) =>
     workerStart(ctx, opts, nameArg)
   const workerExec = (

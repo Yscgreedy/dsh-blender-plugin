@@ -12,7 +12,7 @@
  *     local_evidence.ports_evidence    {source: netstat|fixture, scanned_at: ISO8601, ...}
  *     local_evidence.degraded          bool（空数组必须 true + error）
  *
- * 三条纪律（9877 误报那次现场）：
+ * 三条纪律（9877 误报那次现场的 3.0.x 历史教训）：
  *   ① 端口 → 进程必须互相印证：监听行给 pid，进程表必须能给出同名条目；对不上的一律不认。
  *   ② 9877 是 3.0.x 旧后端，**不是判据**：expected=false / counts_as_gateway=false。
  *   ③ 探不到就 degraded + error，端口 listening=false（不是"关着"），不拿空数组冒充正常。
@@ -684,7 +684,7 @@ export function classifyLocals(input: LocalsInput): LocalEvidence {
     platform: process.platform,
     source,
     note: scanOk
-      ? '端口 → 进程双向印证；9877 是旧后端，不是判据'
+      ? '端口 → 进程双向印证；9877 是 3.0.x 旧后端，不是判据'
       : '进程/端口表拿不到：listening=false + degraded，不冒充关闭',
   }
 }

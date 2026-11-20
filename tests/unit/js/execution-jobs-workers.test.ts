@@ -696,13 +696,7 @@ describe('workers', () => {
   it('exec with the same file proceeds and updates the receipt fields', async () => {
     const api = makeWorkers()
     await bootWorker(api, { file: 'C:/scene/a.blend', warmup: false }, 'same')
-    const running: Promise<any> = api.workerExec(
-      'print(1)',
-      5000,
-      null,
-      'same',
-      'C:/scene/a.blend',
-    )
+    const running: Promise<any> = api.workerExec('print(1)', 5000, null, 'same', 'C:/scene/a.blend')
     await flush()
     const req = await answerSocket({ ok: true, file: 'C:/scene/a.blend', objects: 14 })
     const r: any = await running
