@@ -8,21 +8,9 @@
 import { EXT_ROUTES, MAIN_ROUTES, MODULE_ROUTES } from '../../core/dispatcher/routes.generated.js'
 import type { GuiRoute } from '../../core/dispatcher/routes.generated.js'
 import { routeMatches } from '../../core/dispatcher/plan-call.js'
+import { isLocalOpName } from './names.js'
 
-/** 显式白名单（img_ 前缀另算，见 isLocalOp）。 */
-export const LOCAL_OP_NAMES: readonly string[] = [
-  'audit_mesh',
-  'img_digest',
-  'img_probe',
-  'img_measure',
-  'img_calib',
-  'visualreport_report',
-  'qc_render_views',
-  'montage',
-]
-
-/** img_ 全族共用同一条车道（同一路由行、同一 preload 模块）。 */
-export const LOCAL_OP_PREFIXES: readonly string[] = ['img_']
+export { LOCAL_OP_NAMES, LOCAL_OP_PREFIXES, isLocalOpName } from './names.js'
 
 /** routing.json 的 montage 行走显式 API 调用，那一行没有 preload 字段。 */
 const MODULE_BY_KIND: Record<string, readonly string[]> = { montage: ['montage'] }
@@ -47,10 +35,7 @@ const ALL_ROUTES: readonly GuiRoute[] = [...MAIN_ROUTES, ...MODULE_ROUTES, ...EX
  * 后端只负责把活干对。
  */
 export function isLocalOp(op: unknown): boolean {
-  const name = String(op === undefined || op === null ? '' : op).trim()
-  if (!name) return false
-  if (LOCAL_OP_NAMES.includes(name)) return true
-  return LOCAL_OP_PREFIXES.some((prefix) => name.startsWith(prefix))
+  return isLocalOpName(op)
 }
 
 /** 路由行（按 generated 表的顺序匹配，与 /plan 的派发口径一致）。 */

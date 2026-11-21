@@ -37,6 +37,32 @@ describe('catalog contract', () => {
     expect(catalogPayload({ family: '__nope__' }).ok).toBe(false)
   })
 
+  it('exposes machine-readable needs_gui / headless flags (format=json)', () => {
+    const structured = catalogPayload({ format: 'json' }) as any
+    expect(structured.ok).toBe(true)
+    expect(structured.format).toBe('json')
+    expect(structured.families).toHaveLength(lock.families_count)
+    expect(structured.ops_count).toBe(lock.ops_count)
+    const rows = new Map<string, any>()
+    let count = 0
+    for (const f of structured.families)
+      for (const o of f.ops) {
+        count++
+        rows.set(o.name, o)
+      }
+    expect(count).toBe(lock.ops_count)
+    expect(rows.get('audit_mesh')).toMatchObject({
+      needs_gui: false,
+      headless: true,
+      read_only: true,
+    })
+    expect(rows.get('shapesolve_solve')).toMatchObject({ needs_gui: true, headless: false })
+    expect(rows.get('audit_scene')).toMatchObject({ needs_gui: false, read_only: true })
+    expect(rows.get('img_digest')).toMatchObject({ needs_gui: false, headless: true })
+    expect(rows.get('gui_frame')).toMatchObject({ needs_gui: true, read_only: true })
+    expect((catalogPayload({ format: 'yaml' }) as any).ok).toBe(false)
+  })
+
   it('rejects duplicate family members', () => {
     const names = payload.families
     expect(new Set(names).size).toBe(names.length)

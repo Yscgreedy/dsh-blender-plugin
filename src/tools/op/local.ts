@@ -106,6 +106,10 @@ function resolveOutdir(raw: string, view: WorkspaceView): string {
  */
 export function opPayloadOf(payload: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...payload }
+  const hasFile = !!(payload.file && String(payload.file).trim())
+  // file + objects=[] 在车道里等于"这个文件里的全部 mesh"：file 会被剥给队列打开，
+  // 空列表不能留给 op（否则会被当成显式空列表拒掉）。
+  if (hasFile && Array.isArray(out.objects) && out.objects.length === 0) delete out.objects
   delete out.file
   delete out.dry_run
   return out
@@ -150,12 +154,18 @@ export function localLaneReceipt(
   op: string,
   file: string,
   body: Record<string, unknown>,
+  forced = false,
 ): Record<string, unknown> {
   const job = asRecord(body.job)
   const id = text(job.id || body.jobId)
   const take = 'blender_run(action="wait", id="' + id + '")'
   const lines = [
-    'OP ' + op + ' · 没有 ready GUI 会话 → 本地无头车道（白名单 op + 显式 file）',
+    'OP ' +
+      op +
+      ' · ' +
+      (forced
+        ? '显式 headless=true → 本地无头车道（白名单 op + 显式 file；有 GUI 会话也不抢）'
+        : '没有 ready GUI 会话 → 本地无头车道（白名单 op + 显式 file）'),
     'job_id: ' + id + ' · kind=headless · file: ' + file,
     '取件：' + take + '（status / collect / cancel；长活不在本次调用里同步等）',
     'verdict: degraded —— 作业已提交、结果未取回，不是 pass；作业失败或结果 ok=false 一律按 degraded + evidence 处理',
@@ -169,7 +179,7 @@ export function localLaneReceipt(
     file,
     take,
     summary: '已提交本地无头作业 · ' + (text(job.status || job.state) || 'queued'),
-    provenance: { route: '/job', surface: 'queue', kind: 'headless' },
+    provenance: { route: '/job', surface: 'queue', kind: 'headless', forced: forced },
   }
   if (text(job.outdir)) envelope.outdir = text(job.outdir)
   if (text(job.logDir)) envelope.log_dir = text(job.logDir)
@@ -227,6 +237,8 @@ export interface LocalLaneInput {
   payload: Record<string, unknown>
   instanceId: string
   exec?: unknown
+  /** 显式 headless=true：即使有 ready GUI 会话也提交无头作业（并发场景不抢 GUI）。 */
+  force?: boolean
 }
 
 /**
@@ -234,17 +246,33 @@ export interface LocalLaneInput {
  * 返回对象 = 本次调用的最终回执（作业已提交，或参数/提交失败）。
  */
 export async function tryLocalLane(input: LocalLaneInput): Promise<unknown | null> {
-  if (!isLocalLaneOp(input.op)) return null
+  if (!isLocalLaneOp(input.op)) {
+    if (!input.force) return null
+    return toolError(
+      'invalid_params',
+      'headless=true 只支持本地车道白名单 op：' + LOCAL_OPS.join(' / ') + '（img_* 前缀另算）',
+      '去掉 headless 走 GUI 会话，或换白名单 op；白名单见 blender_op action=help',
+    )
+  }
   if (input.payload.dry_run === true) return null
   const given = text(input.payload.file).trim()
-  if (!given) return null
+  if (!given) {
+    if (!input.force) return null
+    return toolError(
+      'invalid_params',
+      'headless=true 需要 args.file=<存在的 .blend>（本次没有提交任何作业）',
+      '给绝对路径；车道会在 fresh headless 进程里打开它再跑 op',
+    )
+  }
   const resolved = resolveBlendFile(given, input.exec, input.ctx)
   if (resolved.failure) return resolved.failure
   const file = text(resolved.path)
-  const ready = await requireReadySession(input.port, undefined, input.instanceId)
-  if (ready.ok) return null
-  // 只有"确实没有 ready 会话"才开车道；会话查询本身失败（Gateway/传输）如实回错。
-  if (ready.failure.envelope.error.code !== 'session_required') return ready.failure
+  if (!input.force) {
+    const ready = await requireReadySession(input.port, undefined, input.instanceId)
+    if (ready.ok) return null
+    // 只有"确实没有 ready 会话"才开车道；会话查询本身失败（Gateway/传输）如实回错。
+    if (ready.failure.envelope.error.code !== 'session_required') return ready.failure
+  }
   const body = await submitLocalJob({
     port: input.port,
     op: input.op,
@@ -254,7 +282,7 @@ export async function tryLocalLane(input: LocalLaneInput): Promise<unknown | nul
     ctx: input.ctx,
   })
   const jobId = text(asRecord(body.job).id || body.jobId)
-  if (body.ok === true && jobId) return localLaneReceipt(input.op, file, body)
+  if (body.ok === true && jobId) return localLaneReceipt(input.op, file, body, input.force === true)
   if (body.ok === true)
     return localLaneFailure(input.op, file, {
       ok: false,

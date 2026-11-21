@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import * as plugin from '../../../src/index'
-import { buildJobArgs } from '../../../runtime/core/queue/spawn-executor.js'
+import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
 import type { JobRecord } from '../../../runtime/core/queue/types.js'
 import {
   LOCAL_OP_NAMES,
@@ -271,6 +271,38 @@ describe('本地车道：无会话 + 白名单 op + file → headless 作业', (
     await run('blender_op', { action: 'plan', op: 'audit_mesh', args: { file: blendFile } })
     const reqs = requestsSince(before)
     expect(reqs.some((r) => r.path === '/plan')).toBe(true)
+    expect(reqs.some((r) => r.path === '/job')).toBe(false)
+  })
+
+  it('headless=true 时有 ready 会话也强制走无头作业（并发不抢 GUI）', async () => {
+    const before = backend.requests.length
+    const out = await run('blender_op', {
+      action: 'plan',
+      op: 'audit_mesh',
+      args: { file: blendFile },
+      headless: true,
+    })
+    const reqs = requestsSince(before)
+    const job = reqs.find((r) => r.path === '/job')
+    expect(job, '显式 headless=true 必须提交作业').toBeTruthy()
+    expect(bodyOf(job).catalog_op).toBe('audit_mesh')
+    expect(reqs.some((r) => r.path === '/plan')).toBe(false)
+    expect(envelopeOf(out).provenance).toMatchObject({ forced: true })
+    expect(textOf(out)).toContain('显式 headless=true')
+  })
+
+  it('headless=true 但缺 file / 非白名单 op → invalid_params，不提交作业', async () => {
+    const before = backend.requests.length
+    const noFile = await run('blender_op', { action: 'plan', op: 'audit_mesh', headless: true })
+    expect(textOf(noFile)).toContain('headless=true 需要 args.file')
+    const notLane = await run('blender_op', {
+      action: 'plan',
+      op: 'shape_solve',
+      args: { file: blendFile },
+      headless: true,
+    })
+    expect(textOf(notLane)).toContain('白名单')
+    const reqs = requestsSince(before)
     expect(reqs.some((r) => r.path === '/job')).toBe(false)
   })
 

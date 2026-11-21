@@ -1,8 +1,54 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
-import { runWithInstance } from '../../transport/instance-target.js'
+import { isRecord, errorMessage, errorField } from '../../core/json.js'
+import { currentInstanceId, runWithInstance } from '../../transport/instance-target.js'
 import { targetAmbiguity } from '../target.js'
+import { currentCaller } from '../caller.js'
+
+/**
+ * 反馈 3: every op receipt says whose session produced it.
+ *
+ * The op family used to answer with a bare source{file,scene} while the caller
+ * owned no session - an audit of someone else's live scene looked like the
+ * caller's own. owner + is_mine make attribution mechanical; read-only ops
+ * remain allowed cross-session (with borrowed=true), writes are gated earlier.
+ */
+export function withSessionSource(
+  out: unknown,
+  registry: {
+    sessionInfo: (c: never, instanceId?: string | null) => Record<string, unknown> | null
+  } | null,
+  caller: ReturnType<typeof currentCaller>,
+  op: string,
+): unknown {
+  if (!registry || !caller) return out
+  let info: Record<string, unknown> | null
+  try {
+    info = registry.sessionInfo(caller as never, currentInstanceId())
+  } catch {
+    return out
+  }
+  if (!info) return out
+  const attribution = {
+    owner: info.owner ?? null,
+    is_mine: info.is_mine === true,
+    borrowed: info.borrowed === true,
+    sessionId: info.sessionId ?? null,
+  }
+  if (isRecord(out)) {
+    const source = isRecord(out.source) ? out.source : {}
+    out.source = { ...source, ...attribution }
+    out.is_mine = info.is_mine === true
+    if (!source.file && !source.mode && attribution.borrowed)
+      out.note =
+        String(out.note || '') +
+        (out.note ? ' · ' : '') +
+        'read-only result from a session owned by another DSH session (is_mine=false)'
+    return out
+  }
+  if (typeof out === 'string') return { ok: true, op, result: out, source: attribution }
+  return { ok: true, op, result: out, source: attribution }
+}
 // HTTP 路由 /plan：契约层/规划器/catalog
 export function createPlanRoutes(E: HttpRouteDeps) {
   const { engine, isReadOnly, json, leaseGate, pushRtt, readBody, sessionRegistry, stats } = E
@@ -39,9 +85,10 @@ export function createPlanRoutes(E: HttpRouteDeps) {
       const instanceId = String(payload.instance_id ?? payload.instanceId ?? '')
       try {
         const out2 = await runWithInstance(instanceId, () => engine.plan(op, payload.args || {}))
+        const annotated = withSessionSource(out2, sessionRegistry, currentCaller(), op)
         stats.lastPlanMs = Date.now() - t0p
         pushRtt('plan', stats.lastPlanMs)
-        json(res, 200, { ok: true, op: op, result: out2 })
+        json(res, 200, { ok: true, op: op, result: annotated })
       } catch (e) {
         stats.lastError = errorMessage(e)
         json(res, 200, {

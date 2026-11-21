@@ -25,6 +25,8 @@ export function opHelp(): string {
   return [
     'blender_op 动作（catalog 算子与参数搜索；执行型需要 GUI 会话）：',
     '  action=plan   op=<catalog op> args={...}：38 family / 269 op 的主入口（op=catalog 看目录）',
+    '    · op=catalog args={format:"json"} 取机器可读目录（families[].ops[].needs_gui/headless）',
+    '    · headless=true + args.file：白名单 op 强制走本地无头车道（有 GUI 会话也不抢；audit_mesh / img_* / visualreport_report / qc_render_views / montage）',
     '  action=loop   op=start|status|stop|board|export|help|bench：参数搜索内环（target=gui|session）',
     '  action=opt    op=analyze|join|help：对象精简分析/合并',
     '  action=preset op=list|get|apply|save|delete|export|import|help：配方库',
@@ -94,6 +96,7 @@ export async function executeOp(
       payload: jsonPayload(args.args),
       instanceId,
       exec,
+      force: args.headless === true || String(args.headless ?? '') === 'true',
     })
     if (lane) return lane
     const blocked = await gate(port, !READ_ONLY.has(op) && !dryRun(args.args), instanceId)

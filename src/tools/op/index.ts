@@ -14,15 +14,14 @@ function buildOpTool(ctx: HostContext, port: number) {
     description:
       '【算子】执行 catalog 的 plan 算子（38 family / 269 op；op=catalog 看目录），以及参数搜索 loop、对象精简 opt、配方库 preset。' +
       '执行型 op 需要 ready 的 GUI 会话；catalog / 只读 op / args.dry_run=true 不需要会话，也不会启动 Blender。' +
-      '无会话 + file：转本地作业。' +
-      '旧工具迁移：blender_rt_plan → action=plan；blender_rt_loop → action=loop；blender_rt_opt → action=opt；blender_rt_preset → action=preset。' +
+      '无会话 + file：转本地作业；headless=true 强制无头（有 GUI 也不抢）。' +
       '写文件/改场景的算子按 write scope 申请 grant；写类操作需要人类未暂停。',
     parameters: {
       action: { type: 'string', description: ACTIONS.join(' | ') + '（默认 plan）' },
       op: {
         type: 'string',
         description:
-          'plan：catalog 算子名（如 audit_mesh / img_digest / shape_solve；op=help 列 family）；loop: start|status|stop|board|export|help|bench；opt: analyze|join|help；preset: list|get|apply|save|delete|export|import|help',
+          'plan：catalog 算子名（op=help 列 family）；loop：start|status|stop|board|export|bench；opt：analyze|join；preset：list|get|apply|save|delete|export|import|help',
       },
       args: {
         type: 'json',
@@ -34,9 +33,18 @@ function buildOpTool(ctx: HostContext, port: number) {
         description:
           '多实例时指定目标 Blender 实例（blender_session list 里的 instanceId）；省略=驱动本会话自己那个实例',
       },
+      write_scope: {
+        type: 'json',
+        description:
+          '写作用域：exclusive（默认）| collection:名 | prefix:前缀 | object:uid；子 agent 必须与父 grant 一致，超出回 scope_required',
+      },
       attach_images: {
         type: 'boolean',
         description: 'plan：是否把结果里的图附图（默认按 op 决定）',
+      },
+      headless: {
+        type: 'boolean',
+        description: 'plan：强制本地无头车道（需 args.file=<.blend>；有 GUI 也不抢）',
       },
       session: {
         type: 'string',
