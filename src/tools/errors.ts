@@ -64,6 +64,21 @@ export function errorLine(error: unknown): string {
  * Build a lossless tool failure. text keeps the human/model channel readable;
  * envelope.error is the machine-readable channel used by the contract.
  */
+/**
+ * Put the same structured evidence in all three receipt channels:
+ * top level (caller spreads it), envelope.evidence and error.detail. The
+ * 400-char `detail` truncation is kept only for the legacy text field; the
+ * structured copy is full.
+ */
+export function withFailureEvidence(
+  failure: ToolFailure,
+  evidence: Record<string, unknown>,
+): ToolFailure {
+  const detail = JSON.stringify(evidence)
+  failure.envelope.evidence = { ...failure.envelope.evidence, ...evidence, detail }
+  failure.envelope.error.detail = detail
+  return failure
+}
 export function toolError(
   code: string,
   message: string,

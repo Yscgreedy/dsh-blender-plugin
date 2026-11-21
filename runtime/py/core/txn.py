@@ -190,7 +190,14 @@ def t_snapshot(label=None, note=""):
            # v4：记下"取快照时的 filepath" —— restore 按它把会话放回原文件（之后开过别的文件也认得出）
            "filepath": str(bpy.data.filepath or ""), "unsaved": (not bpy.data.filepath)}
     st["snapshots"][name] = rec
-    return _txn_j({"ok": True, "snapshot": rec, "total": len(st["snapshots"])})
+    # 容量上限：快照落 AppData，单档 ~10 MB；不设上限时一个下午就几十档（反馈 8-3）。
+    # 默认保留最近 20 档 / 1024 MB，可用 DSH_TXN_KEEP / DSH_TXN_MAX_MB 调整。
+    removed = _txn_autoprune()
+    return _txn_j({"ok": True, "snapshot": rec, "total": len(st["snapshots"]),
+                   "auto_pruned": removed,
+                   "keep": _txn_keep(),
+                   "max_mb": _txn_max_mb(),
+                   "snapshot_dir": d})
 
 
 _TXN_INTO = ("auto", "original", "snapshot")
@@ -309,6 +316,50 @@ def t_list():
                "snapshot_dir": os.path.join(_txn_out_dir(), "snapshots")})
 
 
+def _txn_keep():
+    try:
+        return max(1, int(os.environ.get("DSH_TXN_KEEP") or 20))
+    except Exception:
+        return 20
+
+
+def _txn_max_mb():
+    try:
+        return max(16, int(os.environ.get("DSH_TXN_MAX_MB") or 1024))
+    except Exception:
+        return 1024
+
+
+def _txn_autoprune(keep=None, max_mb=None):
+    """按档数与总容量回收最老的快照（只删快照目录里的文件）。"""
+    st = _txn_store()
+    keep = max(1, int(keep or _txn_keep()))
+    max_bytes = max(16, int(max_mb or _txn_max_mb())) * 1024 * 1024
+    removed = []
+
+    def drop(rec):
+        try:
+            path = str(rec.get("path") or "")
+            if path and os.path.isfile(path):
+                os.remove(path)
+            removed.append(rec.get("label"))
+            st["snapshots"].pop(rec.get("label"), None)
+        except Exception:
+            pass
+
+    snaps = sorted(st["snapshots"].values(), key=lambda r: str(r.get("t") or ""))
+    if len(snaps) > keep:
+        for rec in snaps[:len(snaps) - keep]:
+            drop(rec)
+    total = sum(int(r.get("bytes") or 0) for r in st["snapshots"].values())
+    for rec in sorted(st["snapshots"].values(), key=lambda r: str(r.get("t") or "")):
+        if total <= max_bytes:
+            break
+        total -= int(rec.get("bytes") or 0)
+        drop(rec)
+    return removed
+
+
 def t_prune(keep=5):
     st = _txn_store()
     keep = max(1, int(keep or 5))
@@ -322,7 +373,9 @@ def t_prune(keep=5):
         except Exception as e:
             pass
         st["snapshots"].pop(rec["label"], None)
-    return _txn_j({"ok": True, "removed": removed, "kept": sorted(st["snapshots"])})
+    return _txn_j({"ok": True, "removed": removed, "kept": sorted(st["snapshots"]),
+                   "snapshot_dir": _txn_snap_dir(), "keep": keep,
+                   "max_mb": _txn_max_mb(), "auto_keep": _txn_keep()})
 
 
 # ---------------------------------------------------------------- 对象级

@@ -21,7 +21,7 @@ const MAX_SIZES: Record<string, number[]> = {
 const CAMERA_MAX_SIZES = [544, 768, 1024, 1280]
 const DEFAULT_ASPECT = '16:9'
 
-const CUSTOM_ONLY = ['lens', 'ortho', 'ortho_scale'] as const
+const CUSTOM_ONLY = ['lens', 'ortho', 'ortho_scale', 'fit', 'fit_object'] as const
 const ASPECT_FIX =
   'aspect=1:1|4:3|16:9；max_size 必须是对应比例的固定档位（1:1: 544/768/1024/1280；4:3: 640/960/1280；16:9: 1024/1152/1280）'
 const VEC_FIX = '写法 from="7,-7,5" / "7, -7, 5" / [7,-7,5]（世界坐标 x,y,z，三个数字）'
@@ -45,6 +45,8 @@ export interface FramePlan {
   lens?: number
   ortho?: boolean
   orthoScale?: number
+  fit?: string
+  clipStart?: number
   shading?: string
   overlays?: boolean
   diagnostics?: boolean
@@ -226,21 +228,42 @@ function buildSequence(
 }
 
 function cameraFrame(args: Record<string, unknown>): FramePlan | Failure {
-  if (has(args.from) || has(args.look_at) || has(args.full) || has(args.area) || has(args.aspect))
+  if (has(args.from) || has(args.look_at) || has(args.full) || has(args.area))
     return invalidParams(
-      'camera 视角不接受 from/look_at/full/area/aspect',
-      'camera 用当前帧相机与渲染比例；max_size 只作长边上限（544/768/1024/1280）',
+      'camera 视角不接受 from/look_at/full/area',
+      'camera 用当前帧相机；想要固定比例给 aspect（按该比例重算分辨率，不改相机本身）',
     )
   const rejected = rejectCustomOnly('camera', args)
   if (rejected) return rejected
+  // 反馈 6: camera used to reject aspect and always inherited the sensor ratio.
+  // With aspect it renders at that ratio (Blender sensor fit, no distortion).
+  if (has(args.aspect)) {
+    const dims = dimsOrFailure(text(args.aspect).trim(), args.max_size)
+    if ('text' in dims) return dims
+    const cameraArg = args.camera === true ? '' : text(args.camera).trim()
+    return {
+      kind: 'frame',
+      viewpoint: 'camera',
+      camera: cameraArg || undefined,
+      dims,
+      clipStart: args.clip_start === undefined ? undefined : Number(args.clip_start),
+      force: !!args.force,
+    }
+  }
   const size = args.max_size === undefined ? 1024 : Number(args.max_size)
   if (!CAMERA_MAX_SIZES.includes(size))
     return invalidParams(
       'max_size 只接受 544 / 768 / 1024 / 1280',
-      'camera 按渲染比例缩放；改 max_size 控制长边',
+      'camera 按渲染比例缩放；改 max_size 控制长边，或给 aspect 固定比例',
     )
   const cameraArg = args.camera === true ? '' : text(args.camera).trim()
-  return { kind: 'frame', viewpoint: 'camera', camera: cameraArg || undefined, force: !!args.force }
+  return {
+    kind: 'frame',
+    viewpoint: 'camera',
+    camera: cameraArg || undefined,
+    clipStart: args.clip_start === undefined ? undefined : Number(args.clip_start),
+    force: !!args.force,
+  }
 }
 
 function viewportFrame(args: Record<string, unknown>): FramePlan | Failure {
@@ -255,7 +278,9 @@ function viewportFrame(args: Record<string, unknown>): FramePlan | Failure {
       kind: 'frame',
       viewpoint: 'viewport',
       full: true,
-      area: Number(args.area) || 0,
+      // 反馈 6: full=true with no area = the whole window (one image), not the
+      // first area (which used to be the properties panel, 453x1098).
+      area: args.area === undefined ? undefined : Number(args.area),
       force: !!args.force,
     }
   if (has(args.aspect)) {
@@ -273,14 +298,21 @@ function customFrame(args: Record<string, unknown>): FramePlan | Failure {
     return invalidParams('custom 不支持 full/area', '整窗口截图只在 viewpoint=viewport + full=true')
   if (has(args.camera))
     return invalidParams('custom 不接受 camera', '要跟场景相机请用 viewpoint=camera')
-  if (!has(args.from) || !has(args.look_at))
+  // 反馈 6: fit=object|scene|<name> computes from/look_at/ortho_scale from the bbox,
+  // so "框住全身" is one call instead of two failed guesses at ortho_scale.
+  const fit = has(args.fit)
+    ? text(args.fit).trim()
+    : has(args.fit_object)
+      ? text(args.fit_object).trim()
+      : ''
+  if (!fit && (!has(args.from) || !has(args.look_at)))
     return invalidParams(
-      'custom 视角必须同时给 from 与 look_at',
-      '例如 from="4,-4,3" look_at="0,0,1"',
+      'custom 视角必须同时给 from 与 look_at（或用 fit=object|scene|<对象名> 自动取景）',
+      '例如 from="4,-4,3" look_at="0,0,1"，或 fit=object',
     )
   const dims = dimsOrFailure(text(args.aspect).trim() || DEFAULT_ASPECT, args.max_size)
   if ('text' in dims) return dims
-  const vectors = customVectors(args)
+  const vectors = fit ? { from: [], lookAt: [] } : customVectors(args)
   if ('text' in vectors) return vectors
   return {
     kind: 'frame',
@@ -291,6 +323,8 @@ function customFrame(args: Record<string, unknown>): FramePlan | Failure {
     lens: args.lens === undefined ? undefined : Number(args.lens),
     ortho: args.ortho === undefined ? undefined : !!args.ortho,
     orthoScale: args.ortho_scale === undefined ? undefined : Number(args.ortho_scale),
+    fit: fit || undefined,
+    clipStart: args.clip_start === undefined ? undefined : Number(args.clip_start),
     shading: text(args.shading) || undefined,
     overlays: args.overlays === undefined ? undefined : !!args.overlays,
     diagnostics: args.diagnostics === undefined ? undefined : !!args.diagnostics,

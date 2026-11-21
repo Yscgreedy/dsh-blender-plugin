@@ -370,21 +370,46 @@ def _st_checks(ctx: Any) -> None:
     st_check("neg_missing_file_cleanup_reported", isinstance(cn_nope.get("cleanup"), dict),
              cn_nope.get("cleanup"))
 
-    # ⑦ file= 误用到不收 file 的 op 上：必须回"定向提示"，不许只回一句泛化的"参数不匹配"
+    # ⑦ audit_mesh 也接受 file=（2026-11-20 三路并发反馈：12 件几何的拓扑验收无法用插件做）
+    mesh_file = st_call("mesh", {"file": B, "self_intersect": False})
+    ST_MEAS["mesh_file"] = {"ok": mesh_file.get("ok"), "count": mesh_file.get("count"),
+                            "totals": mesh_file.get("totals"), "source": mesh_file.get("source"),
+                            "cleanup": mesh_file.get("cleanup")}
+    st_check("⑦mesh_file_ok", mesh_file.get("ok") is True and mesh_file.get("count") == 1,
+             mesh_file.get("error") or mesh_file.get("count"))
+    st_check("⑦mesh_file_reports_source",
+             (mesh_file.get("source") or {}).get("mode") == "file"
+             and (mesh_file.get("source") or {}).get("file") == B
+             and (mesh_file.get("source") or {}).get("objects") == [ST_CTX],
+             mesh_file.get("source"))
+    st_check("⑦mesh_file_cleanup_removes_loaded_objects",
+             isinstance(mesh_file.get("cleanup"), dict)
+             and bool((mesh_file.get("cleanup") or {}).get("removed", {}).get("objects")),
+             mesh_file.get("cleanup"))
+
+    # file= 误用到仍不收 file 的 op 上：必须回"定向提示"，不许只回一句泛化的"参数不匹配"
     #    （2026-09-30 实测反馈：QBZ-191 项目里 4 个 agent 独立踩过这个坑，每次都靠试错才找到出路）
-    mesh_bad = st_call("mesh", {"file": B})
-    hint = str(mesh_bad.get("error_hint") or "")
-    ST_MEAS["mesh_file_misuse"] = {"ok": mesh_bad.get("ok"), "error": mesh_bad.get("error"),
-                                   "error_hint": hint, "file_arg_ops": mesh_bad.get("file_arg_ops")}
-    st_check("⑦mesh_rejects_file_arg", mesh_bad.get("ok") is False, mesh_bad)
-    st_check("⑦mesh_file_misuse_has_targeted_hint",
-             "不吃" in hint and "open_mainfile" in hint and "audit_gate" in hint, hint)
-    st_check("⑦mesh_file_misuse_lists_capable_ops",
-             mesh_bad.get("file_arg_ops") == ["connectivity", "gate", "measure", "overlap", "interference"],
-             mesh_bad.get("file_arg_ops"))
+    scene_bad = st_call("scene", {"file": B})
+    hint = str(scene_bad.get("error_hint") or "")
+    ST_MEAS["mesh_file_misuse"] = {"ok": scene_bad.get("ok"), "error": scene_bad.get("error"),
+                                   "error_hint": hint, "file_arg_ops": scene_bad.get("file_arg_ops")}
+    st_check("⑦scene_rejects_file_arg", scene_bad.get("ok") is False, scene_bad)
+    st_check("⑦scene_file_misuse_has_targeted_hint",
+             "不吃" in hint and "open_mainfile" in hint and "audit_mesh" in hint, hint)
+    st_check("⑦scene_file_misuse_lists_capable_ops",
+             scene_bad.get("file_arg_ops") == ["mesh", "connectivity", "gate", "measure",
+                                               "overlap", "interference"],
+             scene_bad.get("file_arg_ops"))
     # 对照：合法 op 传 file= 不需要这条 hint（别把定向提示乱撒）
     st_check("⑦valid_file_op_has_no_misuse_hint",
              not cn_nope.get("error_hint") and not cn_nope.get("file_arg_ops"), cn_nope)
+
+    # objects=[] 是显式空列表：不许静默审当前场景（三路并发现场：审到了用户打开的另一个文件）
+    empty_scope = st_call("mesh", {"objects": []})
+    ST_MEAS["mesh_empty_objects"] = {"ok": empty_scope.get("ok"), "error": empty_scope.get("error"),
+                                     "hint": empty_scope.get("hint")}
+    st_check("⑦mesh_empty_objects_fails", empty_scope.get("ok") is False
+             and "objects=[]" in str(empty_scope.get("error")), empty_scope)
 
 
 

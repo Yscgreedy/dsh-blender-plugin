@@ -40,10 +40,20 @@ export async function captureCamera(
 ): Promise<unknown> {
   let fv
   try {
+    const dims = plan.dims
     fv = await fetchView(port, {
       mode: 'camera',
       camera: plan.camera || '',
       max_size: Number(maxSize) || DEFAULT_WIDTH,
+      ...(dims
+        ? {
+            width: dims.width,
+            height: dims.height,
+            aspect: dims.aspect,
+            resize: true,
+          }
+        : {}),
+      ...(plan.clipStart === undefined ? {} : { clip_start: plan.clipStart }),
     })
   } catch (e: unknown) {
     const msg = failureFromView(e)
@@ -84,7 +94,8 @@ export async function captureFull(
   plan: FramePlan,
   sessionId?: string,
 ): Promise<unknown> {
-  const area = Number(plan.area) || 0
+  // -1 = whole window (bpy.ops.screen.screenshot); >=0 = one area (screenshot_area).
+  const area = plan.area === undefined ? -1 : Number(plan.area)
   let fr
   try {
     fr = await fetchFrame(port, DEFAULT_WIDTH, true, area)
@@ -94,7 +105,9 @@ export async function captureFull(
   const [width, height] = pngSize(fr.png)
   const dedupe = frameDedupe('see:full:' + String(area), fr.hash, plan.force)
   let t =
-    'SEE full · ' +
+    'SEE full(' +
+    (area < 0 ? 'window' : 'area ' + String(area)) +
+    ') · ' +
     String(width) +
     'x' +
     String(height) +
@@ -131,11 +144,18 @@ function viewSpec(plan: FramePlan): Record<string, unknown> {
       ortho_scale: plan.orthoScale,
       width: dims.width,
       height: dims.height,
+      clip_start: plan.clipStart,
+      fit: plan.fit,
       shading: plan.shading,
       overlays: plan.overlays,
       diagnostics: plan.diagnostics,
     }
-  return { mode: 'current', width: dims.width, height: dims.height }
+  return {
+    mode: 'current',
+    width: dims.width,
+    height: dims.height,
+    clip_start: plan.clipStart,
+  }
 }
 
 async function publishPlanView(port: number, sessionId: string, plan: FramePlan): Promise<void> {

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """Split from audit.py; behavior preserved by the facade."""
 from .common import *  # noqa: F401,F403
+from .conn_helpers import _file_extras, _nm, _objs_with_optional_file
 from .scene_profile import GATE_HINT, resolve_scene_profile
+from .scope import empty_objects_guard, mesh_source
 
 
 def _mesh_totals():
@@ -435,32 +437,78 @@ def _mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect
 
 def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_intersect=True,
                max_issues=20, min_dist=1e-6, summary_only=False,
-               island_split=False, min_island_verts=0):
-    """v0.9.6（现场反馈 #1）：island_split=true 时把自交按**连通岛**分栏（同岛/跨岛），
+               island_split=False, min_island_verts=0, file=None):
+    """单对象/一组对象的网格体检；file=<.blend> 时临时加载该文件再跑（v0.9.1 file_mode）。
+
+    v0.9.6（现场反馈 #1）：island_split=true 时把自交按**连通岛**分栏（同岛/跨岛），
     min_island_verts=N 时忽略"任一侧面属于 <N 顶点小岛"的相交 —— 铆钉/小五金按工艺压入宿主
-    必然相交，那是良性的；这一栏就是现场手工做过的归因实验（肩甲 1640 对里大部分是这种）。"""
-    """单对象/一组对象的网格体检。envelope=[x0,y0,z0,x1,y1,z1] 时给 out_of_bounds。"""
-    objs, missing, err = _pick(objects, scope)
-    if err:
-        return _j({"ok": False, "error": err})
-    objs = [o for o in objs if o.type == "MESH"]
-    if not objs:
-        # ★ 硬规则：0 个 mesh 必须失败（外部反馈的"静默空产出"）
-        return _j({"ok": False, "error": "体检对象里 0 个 mesh", "objects": objects, "scope": scope,
-                   "hint": "多半是 build 空跑了：确认对象名/集合名，或先跑 audit_scene 看场景里有什么",
-                   "missing": missing})
-    err, env = _mesh_envelope(envelope)
-    if err:
-        return err
-    total = _mesh_totals()
-    parts = []
-    for ob in objs:
-        info = _mesh_object_info(ob, eps_area, self_intersect, max_issues, min_dist,
-                                 island_split, min_island_verts, env)
-        _mesh_totals_add(total, info)
-        parts.append(info)
-    _genus_finalize(total)
-    return _j(_mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect))
+    必然相交，那是良性的；这一栏就是现场手工做过的归因实验（肩甲 1640 对里大部分是这种）。
+
+    2026-11-20（三路并发现场）：
+      * objects=[] 不再等于"当前场景全部对象"（显式空列表 → ok=false）；全场景请用 audit_scene。
+      * 回执固定带 source{file,scene,scope,objects,requested}，把"审的是哪个文件里的哪几个对象"写死。
+      * file= 与 connectivity/gate/measure 同一套加载/清理语义（file_load / cleanup / 文件原名上报）。
+    """
+    guard = empty_objects_guard(objects, scope, file)
+    if guard:
+        return _j(guard)
+    S = _objs_with_optional_file(objects, scope, True, file)
+    crep = None
+    reported_names = []
+    res = {"ok": False, "error": "audit_mesh 内部错误：没有产生回执"}
+    try:
+        objs, missing, err, name_of = S["objs"], S["missing"], S["err"], S["name_of"]
+        # ★ 必须在 cleanup 之前抓名字：cleanup 会把临时加载的对象删掉，之后碰 ob.type 会
+        #   ReferenceError: StructRNA of type Object has been removed（真机 E2E 抓到）。
+        reported_names = [_nm(o, name_of) for o in objs if getattr(o, "type", "") == "MESH"]
+        if err:
+            res = {"ok": False, "error": err, "missing": missing,
+                   "file": (S["load"] or {}).get("path"),
+                   "hint": "file= 模式：文件要能打开、里面有可见 mesh；空产出一律 ok:false"}
+        else:
+            objs = [o for o in objs if o.type == "MESH"]
+            if not objs:
+                # ★ 硬规则：0 个 mesh 必须失败（外部反馈的"静默空产出"）
+                res = {"ok": False, "error": "体检对象里 0 个 mesh", "objects": objects, "scope": scope,
+                       "hint": "多半是 build 空跑了：确认对象名/集合名，或先跑 audit_scene 看场景里有什么",
+                       "missing": missing}
+            else:
+                env_err, env = _mesh_envelope(envelope)
+                if env_err:
+                    try:
+                        res = json.loads(env_err)
+                    except Exception:
+                        res = {"ok": False, "error": str(env_err)}
+                else:
+                    total = _mesh_totals()
+                    parts = []
+                    for ob in objs:
+                        info = _mesh_object_info(ob, eps_area, self_intersect, max_issues, min_dist,
+                                                 island_split, min_island_verts, env)
+                        info["name"] = _nm(ob, name_of)
+                        _mesh_totals_add(total, info)
+                        parts.append(info)
+                    _genus_finalize(total)
+                    res = _mesh_payload(objs, parts, total, missing, env, summary_only, self_intersect)
+    finally:
+        crep = S["cleanup"]() if S.get("cleanup") else None
+    if isinstance(res, str):
+        try:
+            res = json.loads(res)
+        except Exception:
+            res = {"ok": False, "error": res}
+    # 顺序要紧：_file_extras 会把 source 写成字符串（file:<path>），结构化来源块必须最后覆盖它。
+    res = _file_extras(res, S, crep)
+    res["source"] = mesh_source(
+        mode=("file" if file else "session"),
+        file_path=((S["load"] or {}).get("path") if file else (bpy.data.filepath or None)),
+        scene=bpy.context.scene.name,
+        scope=("file" if file else ("objects" if objects else ("scope:" + str(scope) if scope else "current_scene"))),
+        objects=reported_names,
+        requested=objects if isinstance(objects, (list, tuple)) else None,
+        session_file=(bpy.data.filepath or None),
+    )
+    return _j(res)
 
 def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=None, top_k=None,
                 self_intersect=None, profile="screen"):
@@ -522,6 +570,10 @@ def audit_scene(envelope=None, limit=40, eps_area=1e-9, summary_only=None, top_k
                   if any(x == "degraded" for x in states) else "")
         reason = reason or "未查完"
     payload = {"ok": True, "count": len(objs), "totals": tot, "worst": rows_out,
+               "source": mesh_source(mode="session", file_path=(bpy.data.filepath or None),
+                                     scene=bpy.context.scene.name, scope="current_scene",
+                                     objects=[str(o.name) for o in objs],
+                                     session_file=(bpy.data.filepath or None)),
                "clean": bool(r.get("clean") and state == "pass" and self_intersect),
                "state": state, "verdict": state, "reason": reason,
                "profile": prof["profile"], "gate_ready": bool(prof["gate_ready"]),

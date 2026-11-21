@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Split from audit.py; behavior preserved by the facade."""
 from .common import *  # noqa: F401,F403
+from .scope import library_meta, purge_libraries
 
 def _conn_max_tris():
     import os
@@ -116,7 +117,7 @@ def __load_file_objects_p1(st):
         # 「本次加载造出来的东西」——必须在 load 一结束就抓下来：同一次 op 里可能加载**两个**文件
         # （audit_overlap/interference 的 A、B 两侧），两个 cleanup 都在 finally 里跑，
         # 靠快照 diff 当场锁定归属，才不会把对方的东西删掉（第一轮自检就在这里翻过车）。
-        mine = {"objects": [], "libraries": []}
+        mine = {"objects": [], "libraries": [], "library_meta": []}
         mine_ids = {k: [] for k in _PURGE_KINDS}
 
         def _capture_mine():
@@ -125,6 +126,11 @@ def __load_file_objects_p1(st):
                 if cur is None:
                     continue
                 mine[k] = [x for x in cur if x not in before.get(k, set())]
+            # ★ 库条目必须在删除**之前**快照成纯 Python 值：同一个 .blend 可能被 append 成
+            #   多条 Library（实测 geometry_nodes_essentials.blend + .001）；remove 第一条会把
+            #   同批的其余条目一起失效，之后再碰 lib.name 就是
+            #   ReferenceError: StructRNA of type Library has been removed。
+            mine["library_meta"] = library_meta(mine["libraries"])
             for k in _PURGE_KINDS:
                 cur = getattr(bpy.data, k, None)
                 if cur is None:
@@ -208,15 +214,16 @@ def __load_file_objects_p2(st):
                     else:
                         kept.setdefault(kind, []).append(str(db.name))
             # ④ 本次出现的库条目（实测：link=False 追加也会留下一条 users==1 的 Library，可以直接 remove）
-            for lib in list(mine["libraries"]):
-                if lib in before.get("libraries", set()):
-                    continue
-                lname = str(lib.name)
-                try:
-                    bpy.data.libraries.remove(lib, do_unlink=True)
-                    rm.setdefault("libraries", []).append(lname)
-                except Exception as e:
-                    rep["failed"].append("library %s: %s" % (lname, str(e)[:80]))
+            #    名字/路径用 _capture_mine 抓的纯值；remove 同批条目时后一条可能已被连带失效，
+            #    ReferenceError 视为"已经删掉"而不是失败（旧实现就死在这里）。
+            libs_removed, libs_failed = purge_libraries(
+                mine.get("library_meta"),
+                lambda lib: bpy.data.libraries.remove(lib, do_unlink=True),
+            )
+            if libs_removed:
+                rm["libraries"] = libs_removed
+            for msg in libs_failed:
+                rep["failed"].append("library " + msg)
             rep["removed"] = rm
             if kept:
                 rep["kept"] = kept

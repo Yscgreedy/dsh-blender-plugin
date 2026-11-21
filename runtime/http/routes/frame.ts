@@ -9,7 +9,8 @@ export function createFrameRoutes(E: HttpRouteDeps) {
     async frame(req: IncomingMessage, res: ServerResponse, url: URL, _p: string): Promise<void> {
       const size = Math.max(120, Math.min(1600, Number(url.searchParams.get('size') || 560)))
       const full = url.searchParams.get('full') === '1'
-      const areaIndex = Number(url.searchParams.get('area') || 0)
+      // area=-1 captures the whole window; area>=0 captures that area (反馈 6 full=true).
+      const areaIndex = Number(url.searchParams.get('area') ?? (full ? '-1' : '0'))
       const t0 = Date.now()
       try {
         const out = objArg(full ? await engine.frameArea(areaIndex) : await engine.frame(size))

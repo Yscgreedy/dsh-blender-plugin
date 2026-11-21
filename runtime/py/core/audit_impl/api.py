@@ -118,7 +118,8 @@ def _audit_gate_selftest_body():
 
 def audit_help():
     return _j({"version": AUDIT_VERSION,
-               "ops": {"mesh": "audit_mesh(objects|scope, envelope, eps_area, self_intersect)",
+               "ops": {"mesh": "audit_mesh(objects|scope|file, envelope, eps_area, self_intersect, ...)"
+                               " → 拓扑/朝向/自交/亏格/有符号体积；回执带 source{file,scene,scope,objects}",
                        "scene": "audit_scene(envelope, limit)",
                        "duplicates": "audit_duplicates()",
                        "purge_orphans": "purge_orphans()",
@@ -136,7 +137,7 @@ def audit_help():
                                        " + 三态 verdict",
                        "selftest": "audit_selftest()",
                        "gate_selftest": "audit_gate_selftest() → 装配级判据合成自检"},
-               "file_mode": "v0.9.1：connectivity / gate / measure 都接受 file=<.blend 路径> —— "
+               "file_mode": "v0.9.1：connectivity / gate / measure / mesh 都接受 file=<.blend 路径> —— "
                             "把文件里的对象**临时**追加进会话跑同一条链路，finally 删净（对象/临时集合/"
                             "新造孤儿数据/库条目），返回体给 source / file_load / cleanup；此时 objects/scope "
                             "当**文件内的对象名**筛选（append 不带集合成员关系）。"
@@ -156,8 +157,10 @@ def audit_help():
                "honest_limits": "overlap：overlap() 是**真三角-三角相交**，但**共面且互相覆盖的面不报**（实测）→ "
                                 "共面贴合看 contact_probe；interference：Monte-Carlo **不是精确布尔**，"
                                 "非流形/开放网格一律 unresolved（不给数）；误差 ∝1/√samples（口径见 error_caliber）",
-               "hard_rule": "0 个 mesh ⇒ ok=false（静默空产出必须失败）；大网格 ⇒ analyzed=false，"
-                            "未分析不得读作已连通/无重叠；file= 打不开/没 mesh/全隐藏 ⇒ ok=false"})
+               "hard_rule": "0 个 mesh ⇒ ok=false（静默空产出必须失败）；objects=[] 是显式空列表 ⇒ ok=false"
+                            "（不是'全场景'：全场景用 audit_scene，未给 objects 才审当前场景）；"
+                            "回执的 source 写明 file/scene/scope/objects，禁止来源误判；"
+                            "大网格 ⇒ analyzed=false，未分析不得读作已连通/无重叠；file= 打不开/没 mesh/全隐藏 ⇒ ok=false"})
 
 
 def audit_dispatch(op, args=None):
@@ -192,14 +195,13 @@ def audit_dispatch(op, args=None):
         bad = [k for k in ("file", "file_a", "file_b")
                if k in kw and ("unexpected keyword argument '%s'" % k) in msg]
         if bad:
-            takes_file = ["connectivity", "gate", "measure", "overlap", "interference"]
+            takes_file = ["mesh", "connectivity", "gate", "measure", "overlap", "interference"]
             out["error_hint"] = (
-                "`audit_%s` 不吃 %s —— 整个 audit 家族里只有 %s 接受 file="
+                "`audit_%s` 不吃 %s —— 接受 file= 的是 %s"
                 "（overlap / interference 用 file_a / file_b）。"
-                "要对**另一个 .blend** 里的件跑单件自证，只有这一条路："
-                "先 bpy.ops.wm.open_mainfile(filepath=PATH) 真的打开它，"
-                "再 audit_mesh(objects=[...])（headless 里 preload=\"audit\" 后 "
-                "K.dsh_audit_api(\"mesh\", {...}) 同口径）。"
+                "要对**另一个 .blend** 里的件跑单件自证：单件拓扑用 audit_mesh(file=PATH, objects=[...])"
+                "（临时加载 → 跑 → finally 删净，回执带 source/file_load/cleanup）；"
+                "其它 op 才需要先 bpy.ops.wm.open_mainfile(filepath=PATH) 再跑。"
                 % (op, "/".join(bad), " / ".join("audit_" + t for t in takes_file)))
             out["file_arg_ops"] = takes_file
         return _j(out)

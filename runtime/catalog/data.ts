@@ -148,7 +148,7 @@ export const PLAN_CATALOG: PlanFamily[] = [
       'gate_selftest',
       'help',
     ],
-    key: '相接口径 micro_gap_mm 默认 0.3（3D 打印口径）；带设计间隙的装配件按工艺给 1–2；audit_interference/overlap 支持 file= 跨 .blend；回执太大时加 summary_only=true / top_k=N（实测 40 对象场景 9,176→1,148 字符，判定不变）；audit_scene 读 gate_ready：false 表示这次没跑自交、不能当门',
+    key: '相接口径 micro_gap_mm 默认 0.3（3D 打印口径）；带设计间隙的装配件按工艺给 1–2；audit_mesh/connectivity/gate/measure 都接受 file=（临时加载 → 跑 → finally 删净），overlap/interference 用 file_a/file_b 跨 .blend；回执带 source{file,scene,scope,objects}；回执太大时加 summary_only=true / top_k=N（实测 40 对象场景 9,176→1,148 字符，判定不变）；audit_scene 读 gate_ready：false 表示这次没跑自交、不能当门',
   },
   {
     f: 'qc',

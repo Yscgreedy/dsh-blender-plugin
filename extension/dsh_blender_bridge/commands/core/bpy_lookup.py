@@ -23,51 +23,51 @@ class BpyApiLookupCommands(DescribeCommands):
             return {"error": "Empty query"}
 
         q = query[4:] if query.startswith("bpy.") else query
-
-        # bpy.ops.<category>.<operator_name>
         if q.startswith("ops."):
-            op_parts = q[len("ops."):].split(".")
-            op_parts = [p.split("(")[0] for p in op_parts if p]
-            if len(op_parts) < 2:
-                return {"error": f"Incomplete operator path: bpy.{q}. Expected bpy.ops.<category>.<name>"}
-            category, op_name = op_parts[0], op_parts[1]
-            op_group = getattr(bpy.ops, category, None)
-            op = getattr(op_group, op_name, None) if op_group is not None else None
-            if op is None:
-                return {"error": f"Unknown operator: bpy.ops.{category}.{op_name}"}
-            try:
-                rna = op.get_rna_type()
-            except Exception as e:
-                return {"error": f"Could not introspect operator bpy.ops.{category}.{op_name}: {e}"}
-            parameters = [
-                self._describe_property(prop)
-                for prop in rna.properties
-                if prop.identifier != "rna_type"
-            ]
-            return {
-                "kind": "operator",
-                "idname": f"bpy.ops.{category}.{op_name}",
-                "label": rna.name,
-                "description": rna.description,
-                "parameters": parameters,
-            }
-
+            return self._lookup_operator(q)
         parts = [p for p in q.split(".") if p and p != "types"]
         if not parts:
             return {"error": "Empty query"}
+        return self._lookup_type(parts)
 
+    def _lookup_operator(self, q):
+        """bpy.ops.<category>.<operator_name> → parameters + alias keys."""
+        op_parts = [p.split("(")[0] for p in q[len("ops."):].split(".") if p]
+        if len(op_parts) < 2:
+            return {"error": f"Incomplete operator path: bpy.{q}. Expected bpy.ops.<category>.<name>"}
+        category, op_name = op_parts[0], op_parts[1]
+        op_group = getattr(bpy.ops, category, None)
+        op = getattr(op_group, op_name, None) if op_group is not None else None
+        if op is None:
+            return {"error": f"Unknown operator: bpy.ops.{category}.{op_name}"}
+        try:
+            rna = op.get_rna_type()
+        except Exception as e:
+            return {"error": f"Could not introspect operator bpy.ops.{category}.{op_name}: {e}"}
+        parameters = [
+            self._describe_property(prop)
+            for prop in rna.properties
+            if prop.identifier != "rna_type"
+        ]
+        return {
+            "kind": "operator",
+            "idname": f"bpy.ops.{category}.{op_name}",
+            "label": rna.name,
+            "description": rna.description,
+            "parameters": parameters,
+            # Alias keys (field 反馈 8-4): name/doc/params are the documented spelling.
+            "name": f"bpy.ops.{category}.{op_name}",
+            "doc": rna.description,
+            "params": parameters,
+        }
+
+    def _lookup_type(self, parts):
+        """Type, Type.member: properties/functions with identifier/description aliases."""
         type_name = parts[0]
         node_cls = getattr(bpy.types, type_name, None)
         if node_cls is None:
-            matches = sorted(
-                name for name in dir(bpy.types)
-                if type_name.lower() in name.lower()
-            )
-            return {
-                "error": f"Unknown type: {type_name}",
-                "did_you_mean": matches[:15],
-            }
-
+            matches = sorted(name for name in dir(bpy.types) if type_name.lower() in name.lower())
+            return {"error": f"Unknown type: {type_name}", "did_you_mean": matches[:15]}
         if len(parts) == 1:
             properties = [
                 self._describe_property(prop)
@@ -92,9 +92,10 @@ class BpyApiLookupCommands(DescribeCommands):
                 "description": node_cls.bl_rna.description,
                 "properties": properties,
                 "functions": functions,
+                "name": type_name,
+                "doc": node_cls.bl_rna.description,
+                "params": properties,
             }
-
-        # Type.member - could be a property or a function/method
         member_name = parts[1]
         prop = node_cls.bl_rna.properties.get(member_name)
         if prop is not None:
@@ -102,7 +103,6 @@ class BpyApiLookupCommands(DescribeCommands):
             entry["kind"] = "property"
             entry["owner_type"] = type_name
             return entry
-
         func = node_cls.bl_rna.functions.get(member_name)
         if func is not None:
             return {
@@ -112,8 +112,10 @@ class BpyApiLookupCommands(DescribeCommands):
                 "description": func.description,
                 "parameters": [self._describe_property(p) for p in func.parameters if not p.is_output],
                 "returns": [self._describe_property(p) for p in func.parameters if p.is_output],
+                "name": func.identifier,
+                "doc": func.description,
+                "params": [self._describe_property(p) for p in func.parameters if not p.is_output],
             }
-
         available = sorted(
             list(node_cls.bl_rna.properties.keys()) + list(node_cls.bl_rna.functions.keys())
         )

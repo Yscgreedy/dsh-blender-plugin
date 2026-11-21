@@ -82,7 +82,7 @@ export interface EngineSurface {
   protocol: () => Promise<unknown>
   doctor: (opts?: Record<string, unknown>) => Promise<unknown>
   status: () => Promise<unknown>
-  act: (code: unknown, timeoutMs?: number, file?: unknown) => Promise<unknown>
+  act: (code: unknown, timeoutMs?: number, file?: unknown, scope?: unknown) => Promise<unknown>
   cmd: (name: unknown, params?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>
   commands: () => Promise<unknown>
   loopStart: (spec: unknown) => Promise<unknown>

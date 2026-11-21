@@ -23,6 +23,11 @@ function buildPyTool(ctx: HostContext, port: number) {
       see: { type: 'boolean', description: '跑完是否抓当前视口一帧（默认 true）' },
       max_size: { type: 'integer', description: 'see 的最长边像素，默认 560' },
       force: { type: 'boolean', description: 'see：同画面默认不重复附图，true 强制重发' },
+      write_scope: {
+        type: 'json',
+        description:
+          "写作用域（授权判据）：exclusive（默认）| 'collection:COL' | 'prefix:LGT-' | 'object:uid'。子 agent 必须与父 grant 覆盖范围一致；执行后回执用 changed_objects 核对，超出即 scope_violation",
+      },
       checkpoint: {
         type: 'string',
         description:

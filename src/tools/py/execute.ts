@@ -1,16 +1,16 @@
 /** blender_py：在 ready 的 GUI 会话里执行 agent 写的 Python（POST /act 通道）。 */
 import fs from 'node:fs'
 import { BACKEND_HINT } from '../../constants.js'
-import { text } from '../../contracts/dynamic.js'
+import { isRecord, text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import type { HostContext } from '../../host/context.js'
 import { backendPost, leasedText } from '../../host/http.js'
-import { errorLine, toolError } from '../errors.js'
+import { errorLine, toolError, withFailureEvidence } from '../errors.js'
 import type { ToolFailure } from '../errors.js'
 import { hostCancelled } from './cancel.js'
 import { checkpointMode, takePreExecCheckpoint } from './checkpoint.js'
 import type { PreExecCheckpoint } from './checkpoint.js'
-import { formatActText } from './envelope.js'
+import { actDeltaEvidence, formatActText } from './envelope.js'
 import type { PyOutcomeMeta } from './envelope.js'
 import { withFrame } from './frame.js'
 
@@ -95,6 +95,87 @@ function clip(value: string, size: number): string {
   return trimmed.length > size ? trimmed.slice(0, size) + '…' : trimmed
 }
 
+/**
+ * Gateway gate (409 session_in_use / scope_required / human_paused): keep the code,
+ * root cause, fix and the caller/owner/grant ids instead of "PY 失败 · unknown".
+ */
+function declaredScopeText(args: Record<string, unknown>): string {
+  return [args.write_scope, args.write_scopes, args.scope]
+    .filter((v) => v !== undefined && v !== null)
+    .flatMap((v) => (Array.isArray(v) ? v : [v]))
+    .map(String)
+    .join(',')
+}
+function gateFailureReceipt(r: Record<string, unknown>): Record<string, unknown> | null {
+  const code = text(r.code)
+  if (!code) return null
+  const evidence = isRecord(r.evidence) ? r.evidence : {}
+  const failure = toolError(
+    code,
+    'PY 未执行 · ' + text(r.root_cause || r.error || code),
+    text(r.fix || r.hint || '按回执里的 caller/owner/grant_holders 修权限后重试'),
+    r.evidence ? JSON.stringify(r.evidence) : undefined,
+    'session',
+  )
+  const caller = isRecord(evidence.caller) ? evidence.caller : null
+  // Field retest: the gate detail was truncated at 400 chars and cut the UUID in
+  // half. Promote the full identity to the top level (never truncated).
+  const normalized = {
+    ...evidence,
+    caller,
+    caller_agent_id: caller ? text(caller.agentId) || null : null,
+    caller_dsh_session_id: caller ? text(caller.dshSessionId) || null : null,
+    session_id: text(evidence.sessionId ?? evidence.session_id) || null,
+    owner_agent: text(evidence.owner_agent) || null,
+    required_scope: evidence.required_scope ?? evidence.requested ?? null,
+    grant_holders: Array.isArray(evidence.grant_holders) ? evidence.grant_holders : [],
+  }
+  withFailureEvidence(failure, normalized)
+  return { ...failure, ...normalized }
+}
+/**
+ * 反馈 4: CANCELLED / no-effect / out-of-scope are failures with the numbers that
+ * prove it, not a success with a warning buried in stdout.
+ */
+function pyFailureResult(r: Record<string, unknown>, kind: string): unknown {
+  const delta = actDeltaEvidence(r)
+  const code =
+    kind === 'cancelled'
+      ? 'op_cancelled'
+      : kind === 'no_effect'
+        ? 'op_no_effect'
+        : kind === 'uv_failed'
+          ? 'uv_failed'
+          : kind === 'scope_violation'
+            ? 'scope_violation'
+            : 'py_error'
+  const why =
+    kind === 'cancelled'
+      ? '算子返回 CANCELLED（没有执行，几何未改变）'
+      : kind === 'no_effect'
+        ? 'bpy.ops 返回 FINISHED 但场景内容没有变化（空选择 / 上下文不对）'
+        : kind === 'uv_failed'
+          ? 'uv.unwrap 报 Unwrap failed to solve（UV 没铺开）'
+          : kind === 'scope_violation'
+            ? '改动超出本次 grant 的写作用域'
+            : 'PY 执行失败'
+  const stdout = text(r.stdout || '').trim()
+  const failure = toolError(
+    code,
+    why + ' · ' + text(r.error || r.raw || 'unknown'),
+    kind === 'scope_violation'
+      ? '缩小脚本的写入范围到 grant 的 collection/prefix，或让 main agent 扩大 grant'
+      : kind === 'cancelled' || kind === 'no_effect'
+        ? '先选中目标（bpy.context.view_layer.objects.active + select_set）并在 OBJECT 模式重试；读回执里的 faces_delta 确认几何真的变了'
+        : '看 traceback/stderr 修脚本；脚本可以重跑。需要后台执行时用 blender_run(kind=headless)。',
+    JSON.stringify({ ...delta, stdout: stdout.slice(-1200) }),
+  )
+  const payload = { ...delta, ...(stdout ? { stdout: stdout.slice(-1200) } : {}) }
+  withFailureEvidence(failure, payload)
+  // 反馈 4：失败回执也把 changed/faces/scope/rollback 提到顶层，别让 agent 二次解析 detail。
+  return { ...failure, ...payload }
+}
+
 /** 成功回执的锚点：谁跑的、执行前退到哪。 */
 function outcomeMeta(checkpoint: PreExecCheckpoint): PyOutcomeMeta {
   return {
@@ -140,7 +221,16 @@ export async function executePy(
   if (blocked)
     return toolError('factory_reset_blocked', blocked, '改用逐对象删除，或改走 headless/worker')
   // 执行前回退点（默认 auto）：快照失败不挡这次编辑，只在回执里告警。
-  const checkpoint = await takePreExecCheckpoint(port, mode)
+  // 反馈 1：子 agent 的 collection grant 覆盖不了 exclusive，文件级快照必然
+  // scope_required —— 直接跳过并说明，别用一个必然失败的调用污染回执。
+  let checkpoint = await takePreExecCheckpoint(port, mode)
+  const scopeText = declaredScopeText(args)
+  if (mode === 'auto' && scopeText && !scopeText.includes('exclusive'))
+    checkpoint = {
+      ...checkpoint,
+      label: null,
+      note: 'scoped grant：文件级快照需要 exclusive，已跳过；要回退用对象级 mark/revert 或让 main agent 走 txn',
+    }
   let r: Record<string, unknown>
   try {
     r = await backendPost(
@@ -152,6 +242,11 @@ export async function executePy(
         py: true,
         sessionId: String(session.id || ''),
         waitMs: Number(args.wait_ms) || 0,
+        ...(args.write_scope !== undefined ||
+        args.write_scopes !== undefined ||
+        args.scope !== undefined
+          ? { write_scope: args.write_scope ?? args.write_scopes ?? args.scope }
+          : {}),
       },
       ACT_TIMEOUT_MS,
     )
@@ -161,14 +256,13 @@ export async function executePy(
   }
   const lt = leasedText(r)
   if (lt) return { text: lt }
-  if (!r || r.ok !== true)
-    return toolError(
-      'py_error',
-      'PY 执行失败 · ' + text(r.error || r.raw || 'unknown'),
-      '看 traceback/stderr 修脚本；脚本可以重跑。需要后台执行时用 blender_run(kind=headless)。',
-    )
+  const gate = gateFailureReceipt(r)
+  if (gate) return gate
+  const kind = text(r.errorKind)
+  if (!r || r.ok !== true) return pyFailureResult(r, kind)
   const out: Record<string, unknown> = {
     text: formatActText(r, outcomeMeta(checkpoint)).join(LF),
+    ...actDeltaEvidence(r),
   }
   if (args.see === false) return out
   return await withFrame(ctx, port, args, out)

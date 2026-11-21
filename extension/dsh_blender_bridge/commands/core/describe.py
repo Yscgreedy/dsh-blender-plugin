@@ -12,6 +12,9 @@ class DescribeCommands:
             "name": prop.name,
             "type": prop.type,  # FLOAT, INT, BOOLEAN, STRING, ENUM, POINTER, COLLECTION
             "description": prop.description,
+            # Alias keys: docs/tools have written name/doc/params for years while the
+            # implementation answered identifier/description/parameters (field 反馈 8-4).
+            "doc": prop.description,
         }
         for attr in ("is_required", "is_readonly", "is_argument_optional", "array_length"):
             value = getattr(prop, attr, None)

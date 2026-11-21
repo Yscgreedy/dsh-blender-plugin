@@ -23,7 +23,7 @@
 """
 import bpy, json, time, os, re, struct, zlib, tempfile
 
-VIEW_VERSION = 3
+VIEW_VERSION = 4
 
 # 近空帧的 PNG 字节阈值（v0.9.4）：**低于它才自动**跑一次诊断三项。
 # 为什么要这个阈值：诊断（coverage / scene_bbox / objects_in_frame）实测 403 物体 560px 要 63 ms、
@@ -198,6 +198,12 @@ def _spec(spec):
         "clear": s.get("clear", [0.05, 0.05, 0.05, 1.0]),
         # v0.9.4：默认**不跑**诊断三项（省 45–490 ms/次）；true = 强制每次跑
         "diagnostics": bool(s.get("diagnostics", False)),
+        # v4：自动取景与标定（反馈 6）
+        "fit": s.get("fit", s.get("fit_object")),
+        "fit_margin": float(s.get("fit_margin") or 1.15),
+        "aspect": str(s.get("aspect") or ""),
+        "resize": bool(s.get("resize", False)),
+        "ortho_given": "ortho" in dict(spec or {}),
     }
 
 
@@ -296,7 +302,7 @@ def _capture_viewport(s, vm=None, pm=None, width=None, height=None):
                   "shading_used": space.shading.type}
 
 
-def _current_matrices(space, reg, w, h):
+def _current_matrices(space, reg, w, h, clip_start=0.1):
     """mode=current：用户当前视口朝向 + 同一镜头参数，按目标宽高重算投影（不拉伸、不动视口）。"""
     r3d = space.region_3d
     if r3d is None:
@@ -305,12 +311,12 @@ def _current_matrices(space, reg, w, h):
     cam = bpy.context.scene.camera
     if r3d.view_perspective == "CAMERA" and cam is not None:
         cd = cam.data
-        return vm, make_proj_matrix(w, h, cd.lens, cd.sensor_width, 0.1, 1000.0, cd.sensor_fit,
+        return vm, make_proj_matrix(w, h, cd.lens, cd.sensor_width, clip_start, 1000.0, cd.sensor_fit,
                                     cd.type == "ORTHO", cd.ortho_scale, cd.shift_x, cd.shift_y)
     sensor = 36.0
     if getattr(space, "camera", None) is not None and getattr(space.camera, "data", None) is not None:
         sensor = float(space.camera.data.sensor_width)
-    return vm, make_proj_matrix(w, h, float(getattr(space, "lens", 50.0)), sensor, 0.1, 1000.0, "AUTO",
+    return vm, make_proj_matrix(w, h, float(getattr(space, "lens", 50.0)), sensor, clip_start, 1000.0, "AUTO",
                                 r3d.is_perspective is False, float(r3d.view_distance), 0.0, 0.0)
 
 
@@ -325,9 +331,14 @@ def _camera_matrices(s, scene, cam):
     r = scene.render
     ax = (float(r.resolution_x) * float(getattr(r, "pixel_aspect_x", 1.0))) / max(
         1.0, float(r.resolution_y) * float(getattr(r, "pixel_aspect_y", 1.0)))
-    m = int(s.get("max_size") or 1024)
-    w = m if ax >= 1.0 else max(16, int(round(m * ax)))
-    h = max(16, int(round(m / ax))) if ax >= 1.0 else m
+    if s.get("resize") and s.get("width") and s.get("height"):
+        # 反馈 6: the caller asked for a fixed aspect; camera FOV follows Blender's
+        # sensor fit at that size (no distortion, honest 'requested' framing).
+        w, h = max(16, int(s["width"])), max(16, int(s["height"]))
+    else:
+        m = int(s.get("max_size") or 1024)
+        w = m if ax >= 1.0 else max(16, int(round(m * ax)))
+        h = max(16, int(round(m / ax))) if ax >= 1.0 else m
     loc = ce.matrix_world.translation
     fwd = ce.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))
     s["from"] = [float(loc.x), float(loc.y), float(loc.z)]
@@ -796,6 +807,164 @@ def host_scene_items(spec_json):
     return _j({"ok": True, "objects": objects, "materials": materials, "collections": collections})
 
 
+
+# ---------------------------------------------------------------- v4：自动取景 + 标定（反馈 6）
+
+def _fit_objects(s):
+    """fit=object|scene|<name> → 参与取景的对象（默认：选中，其次全部可见 mesh）。"""
+    fit = s.get("fit")
+    scene_meshes = [o for o in bpy.context.scene.objects
+                    if o.type == "MESH" and not (o.hide_render or o.hide_viewport)]
+    if isinstance(fit, str):
+        key = fit.strip().lower()
+        if key in ("", "false", "none", "off", "0"):
+            return []
+        if key not in ("true", "auto", "object", "selected", "scene"):
+            ob = bpy.data.objects.get(fit)
+            if ob is None:
+                raise ValueError("fit_object=%s 不存在（bpy.data.objects 里没有这个名字）" % fit)
+            return [ob]
+        if key == "scene":
+            return scene_meshes
+        sel = [o for o in bpy.context.selected_objects if o.type == "MESH"]
+        return sel or scene_meshes
+    if fit is True:
+        sel = [o for o in bpy.context.selected_objects if o.type == "MESH"]
+        return sel or scene_meshes
+    return []
+
+
+def _world_corners(objs):
+    from mathutils import Vector
+    pts = []
+    for ob in objs:
+        try:
+            for c in ob.bound_box:
+                pts.append(ob.matrix_world @ Vector((c[0], c[1], c[2])))
+        except Exception:
+            continue
+    return pts
+
+
+def _fit_camera(s):
+    """按对象世界 bbox 一次框全：改 from/look_at/(ortho, ortho_scale)。
+
+    默认正交（覆盖率与距离无关，近摄不会因为 near clip 全白）；显式给
+    ortho=false 时才按视锥算距离。
+    """
+    import math
+    from mathutils import Vector
+    objs = _fit_objects(s)
+    pts = _world_corners(objs)
+    if not pts:
+        raise ValueError("fit_object 没有可框的 mesh（选中为空且场景没有可见 mesh）")
+    mn = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    mx = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    center = (mn + mx) * 0.5
+    span = mx - mn
+    frm = s.get("from") or [center.x + 1.0, center.y - 1.0, center.z + 0.8]
+    forward = Vector((center.x - float(frm[0]), center.y - float(frm[1]), center.z - float(frm[2])))
+    if forward.length < 1e-9:
+        forward = Vector((1.0, -1.0, -0.8))
+    forward.normalize()
+    up = Vector((0.0, 0.0, 1.0))
+    right = forward.cross(up)
+    if right.length < 1e-6:
+        right = Vector((1.0, 0.0, 0.0))
+    right.normalize()
+    true_up = right.cross(forward).normalized()
+    xs = [(p - center).dot(right) for p in pts]
+    ys = [(p - center).dot(true_up) for p in pts]
+    zs = [(p - center).dot(forward) for p in pts]
+    wbox = max(xs) - min(xs)
+    hbox = max(ys) - min(ys)
+    depth = max(zs) - min(zs)
+    w, h = float(s["width"]), float(s["height"])
+    margin = float(s.get("fit_margin") or 1.15)
+    use_ortho = bool(s.get("ortho")) or not s.get("ortho_given")
+    if use_ortho:
+        if w >= h:
+            sx = max(wbox, hbox * (w / h)) * margin
+        else:
+            sx = max(hbox, wbox * (h / w)) * margin
+        s["ortho"] = True
+        s["ortho_scale"] = float(max(0.001, sx))
+        dist = max(0.001, depth * 1.5 + max(wbox, hbox) * 2.0)
+    else:
+        fov = 2.0 * math.atan((float(s["sensor"]) * 0.5) / max(1e-6, float(s["lens"])))
+        dist = (max(wbox, hbox) * 0.5) / max(1e-6, math.tan(fov * 0.5)) * margin
+    s["from"] = [round(center.x - forward.x * dist, 6),
+                 round(center.y - forward.y * dist, 6),
+                 round(center.z - forward.z * dist, 6)]
+    s["look_at"] = [round(center.x, 6), round(center.y, 6), round(center.z, 6)]
+    return {
+        "objects": [getattr(o, "name", "") for o in objs][:40],
+        "bbox": {"center": [round(float(v), 6) for v in center],
+                 "span": [round(float(v), 6) for v in span]},
+        "ortho": bool(s.get("ortho")),
+        "ortho_scale": round(float(s.get("ortho_scale") or 0.0), 6) or None,
+        "distance": round(float(dist), 6),
+        "frame_margin": margin,
+        "direction": [round(float(forward.x), 4), round(float(forward.y), 4), round(float(forward.z), 4)],
+    }
+
+
+def _frame_metrics(s, bbox=None):
+    """像素↔毫米标定：PX_PER_MM + 可见阈值（4.5 px 经验值，见反馈 6 探针表）。"""
+    w = float(s.get("width") or 0)
+    h = float(s.get("height") or 0)
+    ppm = None
+    frame_w_mm = None
+    focus = None
+    if w > 0:
+        if s.get("ortho"):
+            sx = float(s.get("ortho_scale") or 0.0)
+            x_extent = sx if w >= h else sx * (w / max(h, 1.0))
+            if x_extent > 0:
+                frame_w_mm = x_extent * 1000.0
+                ppm = w / frame_w_mm
+        else:
+            if bbox:
+                focus = ((float(s["from"][0]) - float(bbox["center"][0])) ** 2 +
+                         (float(s["from"][1]) - float(bbox["center"][1])) ** 2 +
+                         (float(s["from"][2]) - float(bbox["center"][2])) ** 2) ** 0.5
+            if focus and focus > 0 and float(s.get("lens") or 0) > 0:
+                frame_w_m = 2.0 * focus * (float(s["sensor"]) * 0.5 / float(s["lens"]))
+                frame_w_mm = frame_w_m * 1000.0
+                ppm = w / frame_w_mm
+    return {
+        "px_per_mm": round(float(ppm), 4) if ppm else None,
+        "frame_width_mm": round(float(frame_w_mm), 2) if frame_w_mm else None,
+        "visible_threshold_mm": round(4.5 / float(ppm), 3) if ppm else None,
+        "focus_distance": round(float(focus), 6) if focus else None,
+        "clip_start": round(float(s.get("clip_start") or 0.0), 6),
+        "ortho": bool(s.get("ortho")),
+        "ortho_scale": round(float(s.get("ortho_scale") or 0.0), 6) or None,
+    }
+
+
+def _near_clip_note(s, bbox, cov):
+    """近摄全白：距离 < clip_start 时先说清 near clip，而不是报"瞄空"。"""
+    if cov is None or cov > 0.004:
+        return None
+    clip = float(s.get("clip_start") or 0.1)
+    center = bbox["center"] if bbox else s.get("look_at") or [0, 0, 0]
+    d = ((float(s["from"][0]) - float(center[0])) ** 2 +
+         (float(s["from"][1]) - float(center[1])) ** 2 +
+         (float(s["from"][2]) - float(center[2])) ** 2) ** 0.5
+    if d >= clip:
+        return None
+    return {
+        "code": "frame_clipped_by_near_plane",
+        "coverage": round(float(cov), 6),
+        "clip_start": round(clip, 6),
+        "camera_distance": round(float(d), 6),
+        "suggest_clip_start": round(max(0.0005, d * 0.5), 6),
+        "why": "相机到目标的距离 %.4g BU < clip_start %.4g BU：整帧被近裁剪面切掉（不是瞄空）" % (d, clip),
+        "hint": "把 clip_start 设成 %.4g（或把相机拉远到 > %.4g BU）再取一次；毫米级零件默认 0.1 BU 必然全白" % (max(0.0005, d * 0.5), clip),
+    }
+
+
 def capture(spec_json):
     """出图主入口：按 spec 出一帧 PNG，返回 JSON（含路径/尺寸/矩阵/耗时）。"""
     t0 = time.perf_counter()
@@ -810,6 +979,12 @@ def capture(spec_json):
     err = None
     vm = pm = None
     extra = {}
+    if s.get("fit"):
+        try:
+            extra["fit"] = _fit_camera(s)
+        except Exception as e:
+            return _j({"ok": False, "mode": mode, "error": "%s: %s" % (type(e).__name__, e),
+                       "hint": "fit=object|scene 或 fit=<对象名>；也可以显式给 from/look_at"})
     if mode == "camera":
         raw_cam = s.get("camera")
         wanted = str(raw_cam).strip() if raw_cam is not None else ""
@@ -823,7 +998,8 @@ def capture(spec_json):
         if cam is None:
             return _j({"ok": False, "mode": mode, "error": "unsupported: 场景没有活动相机（scene.camera 为空）"})
         try:
-            vm, pm, w, h, extra = _camera_matrices(s, bpy.context.scene, cam)
+            vm, pm, w, h, cam_extra = _camera_matrices(s, bpy.context.scene, cam)
+            extra.update(cam_extra or {})
             s["width"], s["height"] = w, h
             rgba, meta = _capture_viewport(s, vm, pm, w, h)
         except Exception as e:
@@ -831,7 +1007,7 @@ def capture(spec_json):
     elif mode == "current":
         try:
             win, area, reg, space = _find_view3d(s.get("area"))
-            vm, pm = _current_matrices(space, reg, s["width"], s["height"])
+            vm, pm = _current_matrices(space, reg, s["width"], s["height"], float(s.get("clip_start") or 0.1))
             rgba, meta = _capture_viewport(s, vm, pm)
         except Exception as e:
             return _j({"ok": False, "mode": mode, "error": "%s: %s" % (type(e).__name__, e)})
@@ -847,36 +1023,47 @@ def capture(spec_json):
         if not os.path.isfile(path):
             return _j({"ok": False, "error": err or "出图失败（viewport 与 render 两条路都没产出）", "mode": mode})
         size = os.path.getsize(path)
-        # 近空帧/显式 diagnostics 才补跑诊断（原实现这里连调两次 _scene_bbox，403 物体 ~18 ms×2）。
+        bbox_r = _scene_bbox()
+        metrics_r = _frame_metrics(s, bbox_r)
+        # 近空帧/显式 diagnostics 才补跑逐对象投影（403 物体 ~18 ms×2）。
         need_diag_r = bool(s.get("diagnostics")) or int(size) < EMPTY_PNG_BYTES
-        bbox_r = _scene_bbox() if need_diag_r else None
+        warn_r = _near_clip_note(s, bbox_r, 0.0) if need_diag_r else None
         return _j({"ok": True, "mode": mode, "path": path, "bytes": size,
                    "width": s["width"], "height": s["height"], "fallback_from": err,
                    "diagnostics": need_diag_r,
                    "coverage_estimate": None, "scene_bbox": bbox_r,
-                   "warning": (None if bbox_r else (_empty_frame_note(0.0, None, s) if need_diag_r else None)),
+                   "warning": (warn_r or (None if bbox_r else (_empty_frame_note(0.0, None, s) if need_diag_r else None))),
+                   "px_per_mm": metrics_r["px_per_mm"],
+                   "visible_threshold_mm": metrics_r["visible_threshold_mm"],
+                   "clip_start": s["clip_start"], "frame_metrics": metrics_r,
                    "matrix": {"view": [[round(v, 6) for v in r] for r in make_view_matrix(s["from"], s["look_at"])],
                               "proj": [[round(v, 6) for v in r] for r in make_proj_matrix(
                                   s["width"], s["height"], s["lens"], s["sensor"], s["clip_start"], s["clip_end"],
                                   s["sensor_fit"], s["ortho"], s["ortho_scale"], s["shift_x"], s["shift_y"])]},
                    "meta": meta, "ms": int((time.perf_counter() - t0) * 1000), "spec": s})
     n = write_png(path, s["width"], s["height"], rgba)
-    need_diag = bool(s.get("diagnostics")) or int(n) < EMPTY_PNG_BYTES
+    # 反馈 6：覆盖率与 px/mm 变成**每次都有**的标定（不再只在近空帧时才算）。
+    cov = _coverage(rgba, s["width"], s["height"], None)   # 底色取众数（background=true 时世界底色也算像素）
+    bbox = _scene_bbox()
+    metrics = _frame_metrics(s, bbox)
+    need_diag = bool(s.get("diagnostics")) or int(n) < EMPTY_PNG_BYTES or cov <= 0.004
+    in_frame = margin_px = None
     if need_diag:
-        cov = _coverage(rgba, s["width"], s["height"], None)   # 底色取众数（background=true 时世界底色也算像素）
-        bbox = _scene_bbox()
         try:
             in_frame, margin_px = _objects_in_frame(s, vm, pm)
         except Exception:
             in_frame, margin_px = None, None
+    warn = _near_clip_note(s, bbox, cov) if need_diag else None
+    if warn is None and need_diag:
         warn = _empty_frame_note(cov, bbox, s, in_frame)
-    else:
-        cov = bbox = in_frame = margin_px = warn = None
     out = {"ok": True, "mode": mode, "path": path, "bytes": n,
            "diagnostics": need_diag,
            "width": s["width"], "height": s["height"], "fallback_from": err,
-           "coverage_estimate": (None if cov is None else round(float(cov), 6)), "scene_bbox": bbox,
+           "coverage_estimate": round(float(cov), 6), "scene_bbox": bbox,
            "objects_in_frame": in_frame, "min_margin_px": margin_px, "warning": warn,
+           "px_per_mm": metrics["px_per_mm"],
+           "visible_threshold_mm": metrics["visible_threshold_mm"],
+           "frame_metrics": metrics, "clip_start": s["clip_start"],
            "matrix": {"view": [[round(v, 6) for v in r] for r in
                                (vm if vm is not None else make_view_matrix(s["from"], s["look_at"]))],
                       "proj": [[round(v, 6) for v in r] for r in

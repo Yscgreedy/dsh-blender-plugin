@@ -38,6 +38,18 @@ export function formatViewText(
     mt.coverage_estimate === undefined || mt.coverage_estimate === null
       ? ''
       : ' · 覆盖 ' + (Number(mt.coverage_estimate) * 100).toFixed(2) + '%'
+  // 反馈 6: px_per_mm is the calibration that makes "can I see 0.2 mm" answerable.
+  const ppm = mt.px_per_mm === undefined || mt.px_per_mm === null ? '' : Number(mt.px_per_mm)
+  const calib =
+    ppm === ''
+      ? ''
+      : ' · ' +
+        ppm.toFixed(3) +
+        ' px/mm' +
+        (mt.visible_threshold_mm
+          ? ' · 可见阈值≈' + Number(mt.visible_threshold_mm).toFixed(3) + ' mm'
+          : '') +
+        (mt.clip_start !== undefined ? ' · clip_start=' + String(mt.clip_start) : '')
   return (
     'SEE ' +
     label +
@@ -53,6 +65,7 @@ export function formatViewText(
     String(fv.hash) +
     (extras.length ? ' · ' + extras.join(' · ') : '') +
     cov +
+    calib +
     (label === 'camera'
       ? ' · 当前帧求值，未改 scene.camera / 帧 / 选择 / 用户视口'
       : ' · 场景与用户视口均未改动')
@@ -61,6 +74,22 @@ export function formatViewText(
 
 export function appendEmptyFrameWarning(t: string, raw: unknown): string {
   const warning = asRecord(raw)
+  if (warning.code === 'frame_clipped_by_near_plane') {
+    return (
+      t +
+      LF +
+      '⚠ frame_clipped_by_near_plane：' +
+      text(warning.why) +
+      LF +
+      '  clip_start=' +
+      text(warning.clip_start) +
+      ' · camera_distance=' +
+      text(warning.camera_distance) +
+      LF +
+      '  ' +
+      text(warning.hint)
+    )
+  }
   if (warning.code !== 'frame_looks_empty') return t
   const sceneBbox = asRecord(warning.scene_bbox)
   const suggest = asRecord(warning.suggest)

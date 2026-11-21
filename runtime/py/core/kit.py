@@ -483,6 +483,247 @@ def pairwise_clearance(objs_a, objs_b, samples=1200, seed=0):
     return {"gap_m": best, "interpenetrating": len(ov) > 0, "overlap_tri_pairs": len(ov)}
 
 
+
+# ────────────────────────────── 场景内容探针（回执自证） ──────────────────────────────
+state_VERSION = 1
+_STATE_MAT_KEYS = ("Base Color", "Metallic", "Roughness", "IOR", "Alpha",
+                   "Emission Color", "Emission Strength", "Transmission Weight")
+_STATE_COORD_BUDGET = 400000  # 浮点预算（≈13 万顶点）；超了只哈希拓扑/变换并标 truncated
+
+
+def _state_text(h, tag, value):
+    h.update(("%s|%s" % (tag, value)).encode("utf-8", "replace"))
+
+
+def _state_number(value, digits=6):
+    try:
+        return round(float(value), int(digits))
+    except Exception:
+        return value
+
+
+def _state_material_sig(mat):
+    """材质签名：漫反射 + Principled 关键输入（Roughness/Metallic/Base Color…）。"""
+    import hashlib
+    h = hashlib.sha256()
+    _state_text(h, "N", getattr(mat, "name", ""))
+    try:
+        _state_text(h, "C", ",".join("%.4f" % float(c) for c in mat.diffuse_color))
+    except Exception:
+        pass
+    try:
+        _state_text(h, "U", bool(getattr(mat, "use_nodes", False)))
+        nt = getattr(mat, "node_tree", None)
+        nodes = list(getattr(nt, "nodes", []) or [])
+        _state_text(h, "K", len(nodes))
+        for node in nodes:
+            if str(getattr(node, "type", "")) != "BSDF_PRINCIPLED":
+                continue
+            for sock in getattr(node, "inputs", []):
+                if sock.name not in _STATE_MAT_KEYS:
+                    continue
+                value = getattr(sock, "default_value", None)
+                try:
+                    value = tuple(round(float(x), 4) for x in value)
+                except TypeError:
+                    value = _state_number(value, 4)
+                _state_text(h, "I", "%s=%s" % (sock.name, value))
+    except Exception:
+        pass
+    return h.hexdigest()[:8]
+
+
+def _state_object_sig(ob, budget):
+    """单个对象签名 + 计数；返回 (sig, counts, remaining_budget)。"""
+    import hashlib
+    h = hashlib.sha256()
+    _state_text(h, "O", "%s|%s|%s" % (getattr(ob, "name", ""), getattr(ob, "type", ""),
+                                     getattr(getattr(ob, "data", None), "name", "")))
+    for key in ("location", "delta_location", "rotation_euler", "rotation_quaternion",
+                "scale", "delta_scale"):
+        value = getattr(ob, key, None)
+        if value is None:
+            continue
+        try:
+            _state_text(h, key, ",".join("%.6f" % float(x) for x in value))
+        except Exception:
+            pass
+    try:
+        parent = getattr(ob, "parent", None)
+        _state_text(h, "P", getattr(parent, "name", ""))
+        _state_text(h, "M", ",".join("%.6f" % float(x) for row in ob.matrix_world for x in row))
+    except Exception:
+        pass
+    try:
+        mats = [slot.material.name if slot.material else "" for slot in ob.material_slots]
+        _state_text(h, "A", ",".join(mats))
+    except Exception:
+        pass
+    try:
+        mods = []
+        for mod in ob.modifiers:
+            bits = [str(getattr(mod, "type", "")), str(getattr(mod, "name", ""))]
+            for prop in getattr(getattr(mod, "bl_rna", None), "properties", []):
+                if prop.identifier in ("rna_type", "name"):
+                    continue
+                if getattr(prop, "type", "") not in ("FLOAT", "INT", "BOOLEAN", "ENUM", "STRING"):
+                    continue
+                try:
+                    bits.append("%s=%s" % (prop.identifier, _state_number(getattr(mod, prop.identifier))))
+                except Exception:
+                    continue
+            mods.append("/".join(bits))
+        _state_text(h, "D", "|".join(mods))
+    except Exception:
+        pass
+    counts, budget = _state_mesh_sig(ob, h, budget)
+    return h.hexdigest()[:8], counts, budget
+
+
+def _state_mesh_sig(ob, h, budget):
+    """Mesh part: counts, edit-mode-aware coords, UV signature."""
+    counts = {"verts": 0, "faces": 0, "edges": 0}
+    try:
+        if getattr(ob, "type", "") == "MESH" and getattr(ob, "data", None) is not None:
+            me = ob.data
+            if str(getattr(ob, "mode", "")) == "EDIT":
+                import bmesh
+                bm = bmesh.from_edit_mesh(me)
+                counts = {"verts": len(bm.verts), "faces": len(bm.faces), "edges": len(bm.edges)}
+                _state_text(h, "T", "%d|%d|%d" % (counts["verts"], counts["faces"], counts["edges"]))
+                if budget > 0 and counts["verts"] * 3 <= budget:
+                    for vert in bm.verts:
+                        _state_text(h, "V", "%.5f,%.5f,%.5f" % (vert.co.x, vert.co.y, vert.co.z))
+                    budget -= counts["verts"] * 3
+                else:
+                    _state_text(h, "V", "truncated")
+            else:
+                counts = {"verts": len(me.vertices), "faces": len(me.polygons), "edges": len(me.edges)}
+                _state_text(h, "T", "%d|%d|%d" % (counts["verts"], counts["faces"], counts["edges"]))
+                if budget > 0 and counts["verts"] * 3 <= budget:
+                    import array
+                    co = array.array("f", [0.0]) * (counts["verts"] * 3)
+                    me.vertices.foreach_get("co", co)
+                    h.update(co.tobytes())
+                    budget -= counts["verts"] * 3
+                else:
+                    _state_text(h, "V", "truncated")
+            uv = getattr(me, "uv_layers", None)
+            active = getattr(uv, "active", None)
+            if active is not None:
+                data = active.data
+                step = max(1, len(data) // 2000)
+                _state_text(h, "G", len(data))
+                for i in range(0, len(data), step):
+                    try:
+                        _state_text(h, "g", "%.5f,%.5f" % (data[i].uv.x, data[i].uv.y))
+                    except Exception:
+                        break
+    except Exception:
+        _state_text(h, "E", "mesh_unreadable")
+    return counts, budget
+
+def state_probe(budget=None):
+    """场景**内容签名**（变换/材质/修改器/网格拓扑与坐标），用于回执自证 '改没改'。
+
+    与 worker 的 digest 同口径但更轻：坐标只在预算内哈希；任何读取失败都降级为
+    '仍给出计数'，绝不因为一个坏对象让整次执行失败。
+    """
+    import bpy
+    import hashlib
+    import time as _time
+    t0 = _time.time()
+    budget = _STATE_COORD_BUDGET if budget is None else int(budget)
+    h = hashlib.sha256()
+    info = {"objects": 0, "meshes": 0, "verts": 0, "faces": 0, "materials": 0}
+    sigs = {}
+    material_sigs = {}
+    object_collections = {}
+    edit_mode = []
+    try:
+        materials = sorted(bpy.data.materials, key=lambda m: m.name)
+    except Exception:
+        materials = []
+    for mat in materials:
+        try:
+            material_sigs[mat.name] = _state_material_sig(mat)
+            h.update(material_sigs[mat.name].encode("utf-8"))
+        except Exception:
+            continue
+    info["materials"] = len(material_sigs)
+    try:
+        objects = sorted(bpy.data.objects, key=lambda o: o.name)
+    except Exception:
+        objects = []
+    for ob in objects:
+        try:
+            sig, counts, budget = _state_object_sig(ob, budget)
+        except Exception:
+            sig, counts = "unreadable", {"verts": 0, "faces": 0, "edges": 0}
+        sigs[ob.name] = sig
+        h.update(sig.encode("utf-8"))
+        info["objects"] += 1
+        if getattr(ob, "type", "") == "MESH":
+            info["meshes"] += 1
+            info["verts"] += int(counts.get("verts") or 0)
+            info["faces"] += int(counts.get("faces") or 0)
+        if str(getattr(ob, "mode", "")) == "EDIT":
+            edit_mode.append(str(ob.name))
+        try:
+            object_collections[ob.name] = sorted(c.name for c in ob.users_collection)
+        except Exception:
+            object_collections[ob.name] = []
+    return {
+        "state_version": state_VERSION,
+        "hash": h.hexdigest()[:12],
+        "objects": info["objects"],
+        "meshes": info["meshes"],
+        "verts": info["verts"],
+        "faces": info["faces"],
+        "materials": info["materials"],
+        "sigs": sigs,
+        "material_sigs": material_sigs,
+        "object_collections": object_collections,
+        "edit_mode": edit_mode,
+        "truncated": bool(budget <= 0),
+        "ms": int((_time.time() - t0) * 1000),
+    }
+
+
+def state_delta(before, after):
+    """两次 state_probe 的差：changed / faces_delta / 改动对象与材质（给人看的判据）。"""
+    b = before or {}
+    a = after or {}
+    bs = b.get("sigs") or {}
+    as_ = a.get("sigs") or {}
+    changed_objects = sorted(name for name in set(bs) | set(as_) if bs.get(name) != as_.get(name))
+    cols = a.get("object_collections") or b.get("object_collections") or {}
+    changed_collections = {
+        name: sorted(cols.get(name) or []) for name in changed_objects[:50]
+    }
+    bm = b.get("material_sigs") or {}
+    am = a.get("material_sigs") or {}
+    materials_changed = sorted(name for name in set(bm) | set(am) if bm.get(name) != am.get(name))
+    changed = bool(b.get("hash") and a.get("hash") and b.get("hash") != a.get("hash"))
+    return {
+        "changed": changed,
+        "state_before": b.get("hash"),
+        "state_after": a.get("hash"),
+        "faces_before": int(b.get("faces") or 0),
+        "faces_after": int(a.get("faces") or 0),
+        "faces_delta": int(a.get("faces") or 0) - int(b.get("faces") or 0),
+        "verts_delta": int(a.get("verts") or 0) - int(b.get("verts") or 0),
+        "objects_delta": int(a.get("objects") or 0) - int(b.get("objects") or 0),
+        "changed_objects": changed_objects[:50],
+        "changed_object_collections": changed_collections,
+        "changed_objects_count": len(changed_objects),
+        "materials_changed": materials_changed[:20],
+        "materials_changed_count": len(materials_changed),
+        "edit_mode": a.get("edit_mode") or [],
+        "truncated": bool(a.get("truncated") or b.get("truncated")),
+    }
+
+
 def selftest():
     """内核自检：JSON/单位/回执/派遣/几何/IoU —— 每条都当场验。"""
     ev = {}
@@ -600,4 +841,6 @@ _K.dsh_kit = types.SimpleNamespace(
     find_runtime_file=find_runtime_file, RUNTIME_DOMAINS=RUNTIME_DOMAINS,
     pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree, BatchUpdates=BatchUpdates,
     norm_evidence=norm_evidence,
+    # 反馈 4：回执自证（changed/faces_delta）走这两个纯函数
+    state_probe=state_probe, state_delta=state_delta,
 )

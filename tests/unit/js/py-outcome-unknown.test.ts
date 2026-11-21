@@ -285,3 +285,82 @@ describe('既有行为不回退', () => {
     expect(h.calls.length).toBe(0)
   })
 })
+
+describe('gate receipts：session 门禁不压成 py_error', () => {
+  it('keeps session_in_use + caller/owner/grant ids when /act is refused', async () => {
+    reply(snapshotReply, {
+      ok: false,
+      code: 'session_in_use',
+      root_cause: 'another DSH session owns this GUI session (is_mine=false)',
+      fix: 'ask the owner for a grant',
+      evidence: {
+        caller: { agentId: 'verify-agent-2', dshSessionId: 'dsh-child' },
+        sessionId: 'user-gui:inst-1',
+        owner_agent: 'session-b6c62cb2',
+        required_scope: [{ kind: 'collection', value: '_probe_grant' }],
+        grant_holders: [{ agentId: 'verify-agent-2' }],
+      },
+    })
+    const out = await executePy(
+      fakeCtx,
+      1,
+      { code: 'print(1)', checkpoint: 'auto', see: false },
+      SESSION,
+    )
+    expect(failCode(out)).toBe('session_in_use')
+    const text = receipt(out)
+    expect(text).toContain('PY 未执行')
+    expect(text).toContain('code: session_in_use')
+    expect(text).not.toContain('PY 执行失败 · unknown')
+    expect(JSON.stringify(envelopeOf(out))).toContain('verify-agent-2')
+    expect(JSON.stringify(envelopeOf(out))).toContain('session-b6c62cb2')
+    // 反馈 5：detail 会被截断；完整身份必须在顶层。
+    const top = out as Record<string, unknown>
+    expect(top.caller_agent_id).toBe('verify-agent-2')
+    expect((top.caller as Record<string, unknown>).dshSessionId).toBe('dsh-child')
+    expect(top.owner_agent).toBe('session-b6c62cb2')
+    expect(top.session_id).toBe('user-gui:inst-1')
+    expect(top.required_scope).toEqual([{ kind: 'collection', value: '_probe_grant' }])
+    expect(Array.isArray(top.grant_holders)).toBe(true)
+    const env = envelopeOf(out) as Record<string, unknown>
+    expect((env.evidence as Record<string, unknown>).caller_agent_id).toBe('verify-agent-2')
+    expect(String((env.error as Record<string, unknown>).detail)).toContain('verify-agent-2')
+  })
+})
+
+describe('scope failure receipt', () => {
+  it('promotes changed / scope_violations / rollback fields to the top level', async () => {
+    reply(snapshotReply, {
+      ok: false,
+      errorKind: 'scope_violation',
+      error:
+        'scope_violation: 1 个改动对象不在 grant 声明的写作用域内：_outside；已回滚新建对象: _outside',
+      changed: true,
+      faces_delta: 0,
+      scope_violations: ['_outside'],
+      rolled_back: ['_outside'],
+      unrolled: [],
+      purged_meshes: ['_outside_mesh'],
+      purged_materials: [],
+      rollback_complete: true,
+    })
+    const out = (await executePy(
+      fakeCtx,
+      1,
+      { code: 'mk()', checkpoint: 'auto', see: false },
+      SESSION,
+    )) as Record<string, unknown>
+    expect((out.envelope as Record<string, unknown>).error).toMatchObject({
+      code: 'scope_violation',
+    })
+    expect(out.scope_violations).toEqual(['_outside'])
+    expect(out.rolled_back).toEqual(['_outside'])
+    expect(out.unrolled).toEqual([])
+    expect(out.purged_meshes).toEqual(['_outside_mesh'])
+    const env = envelopeOf(out) as Record<string, unknown>
+    expect((env.evidence as Record<string, unknown>).scope_violations).toEqual(['_outside'])
+    expect(String((env.error as Record<string, unknown>).detail)).toContain('_outside')
+    expect(out.rollback_complete).toBe(true)
+    expect(out.changed).toBe(true)
+  })
+})

@@ -507,6 +507,9 @@ def _checkpoint(spec=None):
                 "traceback": traceback.format_exc()[-1200:]}
     rec = {"label": label or name, "path": path, "seq": seq,
            "objects": len(bpy.data.objects), "created_at": int(time.time()),
+           # The working file at checkpoint time: revert must return to it, not to
+           # the checkpoint copy under AppData (field 反馈 5).
+           "file": bpy.data.filepath or None,
            "bytes": os.path.getsize(path) if os.path.exists(path) else None}
     _CHECKPOINTS.append(rec)
     _ck_save(d)
@@ -516,7 +519,15 @@ def _checkpoint(spec=None):
 
 
 def _revert(spec=None):
+    """回滚到 checkpoint，并把**工作文件**放回原路径。
+
+    现场（反馈 5）：open_mainfile(checkpoint) 会把 bpy.data.filepath 改成 AppData 下的
+    快照副本；之后任何 save / 相对路径都落到运行目录。bpy.data.filepath 是只读的
+    （Blender 5.3 实测），所以这里显式 save_as_mainfile 回写原文件，并先给原文件留
+    一份 pre_revert 备份；原文件不可回写时如实报 file_changed=true + relocate。
+    """
     import bpy
+    import shutil
     spec = dict(spec or {})
     t0 = time.time()
     d = _ck_dir(spec)
@@ -528,15 +539,64 @@ def _revert(spec=None):
     path = str(rec.get("path") or "")
     if not os.path.exists(path):
         return {"ok": False, "error": "checkpoint 文件已不在磁盘：%s" % path, "dir": d}
+    before_file = bpy.data.filepath or None
     try:
         bpy.ops.wm.open_mainfile(filepath=path)
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, e), "path": path,
                 "traceback": traceback.format_exc()[-1200:]}
     _kernel_bootstrap()
+    target = str(rec.get("file") or before_file or "") or None
+    backup = None
+    relocate_error = None
+    if target and os.path.normcase(os.path.abspath(target)) != os.path.normcase(os.path.abspath(path)):
+        try:
+            if os.path.isfile(target):
+                seq = len(_CHECKPOINTS) + 1
+                backup = os.path.join(d, "%02d_pre_revert_%s" % (seq, os.path.basename(target)))
+                shutil.copy2(target, backup)
+                _CHECKPOINTS.append({"label": "pre_revert_%02d" % seq, "path": backup, "seq": seq,
+                                     "objects": None, "created_at": int(time.time()),
+                                     "file": target, "bytes": os.path.getsize(backup),
+                                     "kind": "pre_revert_backup"})
+                _ck_save(d)
+            bpy.ops.wm.save_as_mainfile(filepath=target, copy=False)
+        except Exception as e:
+            relocate_error = "%s: %s" % (type(e).__name__, e)
+    file_after = bpy.data.filepath or None
     return {"ok": True, "mode": "file-revert", "restored_from": rec, "path": path,
-            "objects": len(bpy.data.objects), "file": bpy.data.filepath or None,
+            "file_before": before_file, "file": file_after,
+            "file_changed": bool(file_after != before_file),
+            "relocated": bool(target and file_after and os.path.normcase(os.path.abspath(file_after)) == os.path.normcase(os.path.abspath(target))),
+            "backup": backup, "relocate_error": relocate_error,
+            "next_save_goes_to": file_after,
+            "objects": len(bpy.data.objects),
             "count": len(_CHECKPOINTS), "ms": int((time.time() - t0) * 1000)}
+
+
+def _relocate(spec=None):
+    """把 worker 的工作文件显式指到 spec.file（内容不变，写盘一次）。"""
+    import bpy
+    spec = dict(spec or {})
+    target = str(spec.get("file") or spec.get("path") or "").strip()
+    if not target:
+        return {"ok": False, "error": "relocate 需要 file=<目标 .blend>"}
+    target = os.path.abspath(target)
+    parent = os.path.dirname(target)
+    if parent and not os.path.isdir(parent):
+        return {"ok": False, "error": "目标目录不存在：%s" % parent, "file": target}
+    before = bpy.data.filepath or None
+    try:
+        if spec.get("save") is False:
+            return {"ok": False, "error": "bpy.data.filepath 是只读的（Blender 5.3）；要换工作文件必须写盘一次",
+                    "file_before": before, "file": before}
+        bpy.ops.wm.save_as_mainfile(filepath=target, copy=False)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, e),
+                "traceback": traceback.format_exc()[-1200:], "file": before}
+    return {"ok": True, "mode": "relocate", "file_before": before,
+            "file": bpy.data.filepath or None, "next_save_goes_to": bpy.data.filepath or None,
+            "objects": len(bpy.data.objects)}
 
 
 def _checkpoints(spec=None):
@@ -609,7 +669,21 @@ def _hash_mesh(ob, h, info, domains, budget):
     try:
         nv, npoly, ne = len(data.vertices), len(data.polygons), len(data.edges)
         info["verts"] += nv
+        info["faces"] += npoly
         h.update(("T|%d|%d|%d" % (nv, npoly, ne)).encode("utf-8"))
+        # UV layout is content too: unwrap changes nothing else (field 反馈 4).
+        uv = getattr(data, "uv_layers", None)
+        active = getattr(uv, "active", None)
+        if active is not None:
+            uvdata = active.data
+            step = max(1, len(uvdata) // 2000)
+            h.update(("G|%d" % len(uvdata)).encode("utf-8"))
+            for i in range(0, len(uvdata), step):
+                try:
+                    uv_c = uvdata[i].uv
+                    h.update(("%.5f,%.5f;" % (uv_c.x, uv_c.y)).encode("utf-8"))
+                except Exception:
+                    break
         if budget > 0 and nv * 3 <= budget:
             co = array.array("f", [0.0]) * (nv * 3)
             data.vertices.foreach_get("co", co)
@@ -623,8 +697,266 @@ def _hash_mesh(ob, h, info, domains, budget):
     return budget
 
 
-def _hash_object(ob, h, info, domains, budget):
-    """对象域：名字/类型/变换/材质槽/修改器，然后交给网格域。"""
+def _sock_value(sock):
+    """插座的 default_value → 可哈希标量/元组；不是所有插座都有值。"""
+    try:
+        val = getattr(sock, "default_value", None)
+    except Exception:
+        return None
+    if val is None:
+        return None
+    try:
+        return tuple(round(float(x), 5) for x in val)
+    except TypeError:
+        try:
+            return round(float(val), 5)
+        except Exception:
+            return str(val)[:80]
+
+
+def _hash_node_tree(nt, h, depth=0, seen=None, kind="gn"):
+    """节点树结构 + 节点输入值 + 连线。GN/材质/合成器共用。
+
+    只改一个 socket 值（不动对象变换/网格）时，这层必须让 digest 变化；
+    只哈希节点数/名字会漏掉“值改了但拓扑没变”。
+
+    成本控制：同一次 digest 内按 as_pointer() 去重；材质树 >80 节点、GN 树 >400 节点
+    只哈希 (名称, 节点数, 类型直方图) 并返回 limited=True；每节点最多 48 个输入，
+    连线最多 2×节点数。调用方据此标 digest_limited。
+    """
+    if nt is None or depth > 3:
+        return False
+    if seen is None:
+        seen = set()
+    try:
+        key = nt.as_pointer()
+    except Exception:
+        key = id(nt)
+    if key in seen:
+        return False
+    seen.add(key)
+    try:
+        nodes = list(nt.nodes)
+        links = list(nt.links)
+    except Exception:
+        return False
+    limit = 80 if kind == "material" else 400
+    try:
+        name = str(getattr(nt, "name", ""))
+    except Exception:
+        name = ""
+    if len(nodes) > limit:
+        hist = {}
+        for node in nodes:
+            bid = str(getattr(node, "bl_idname", ""))
+            hist[bid] = hist.get(bid, 0) + 1
+        h.update(("NTL|%s|%s|%d|%s" % (
+            kind, name, len(nodes), json.dumps(hist, sort_keys=True))).encode("utf-8"))
+        return True
+    limited = False
+    h.update(("NT|%s|%d|%d" % (name, len(nodes), len(links))).encode("utf-8"))
+    try:
+        nodes = sorted(nodes, key=lambda n: getattr(n, "name", ""))
+    except Exception:
+        pass
+    for node in nodes:
+        h.update(("N|%s|%s|%s" % (getattr(node, "name", ""), getattr(node, "bl_idname", ""),
+                                  getattr(node, "label", ""))).encode("utf-8"))
+        try:
+            inputs = list(getattr(node, "inputs", []) or [])
+            if len(inputs) > 48:
+                inputs = inputs[:48]
+                limited = True
+            for sock in inputs:
+                val = _sock_value(sock)
+                if val is not None:
+                    h.update(("I|%s|%s" % (getattr(sock, "name", ""), val)).encode("utf-8"))
+        except Exception:
+            pass
+        # 一个节点组节点（Group）也可能嵌套；递归但限深。
+        try:
+            sub = getattr(node, "node_tree", None)
+            if sub is not None and getattr(sub, "name", None) != getattr(nt, "name", None):
+                if _hash_node_tree(sub, h, depth + 1, seen, kind):
+                    limited = True
+        except Exception:
+            pass
+    try:
+        max_links = max(1, 2 * len(nodes))
+        if len(links) > max_links:
+            links = links[:max_links]
+            limited = True
+        for link in links:
+            h.update(("L|%s.%s>%s.%s" % (
+                getattr(getattr(link, "from_node", None), "name", ""),
+                getattr(getattr(link, "from_socket", None), "name", ""),
+                getattr(getattr(link, "to_node", None), "name", ""),
+                getattr(getattr(link, "to_socket", None), "name", ""))).encode("utf-8"))
+    except Exception:
+        pass
+    return limited
+
+
+def _hash_modifiers(ob, h, seen=None):
+    """修改器参数（不只是类型）：bevel 的 width/segments、boolean 的 solver、array 的 count…
+
+    GN modifier 还要哈希 node_group 结构 + mod.properties.inputs 的 socket 值：
+    5.3 改 Offset 只动 properties.inputs，不改任何对象/网格标量。
+    """
+    bits = []
+    limited = False
+    for mod in ob.modifiers:
+        parts = [str(mod.type)]
+        try:
+            props = mod.bl_rna.properties
+        except Exception:
+            props = []
+        for prop in props:
+            name = getattr(prop, "identifier", "")
+            if name in ("rna_type", "name"):
+                continue
+            if getattr(prop, "type", "") not in ("FLOAT", "INT", "BOOLEAN", "ENUM", "STRING"):
+                continue
+            try:
+                parts.append("%s=%s" % (name, round(float(getattr(mod, name)), 6)))
+            except Exception:
+                try:
+                    parts.append("%s=%s" % (name, getattr(mod, name)))
+                except Exception:
+                    continue
+        bits.append("/".join(parts))
+        try:
+            if _hash_node_tree(getattr(mod, "node_group", None), h, 0, seen, "gn"):
+                limited = True
+        except Exception:
+            pass
+        try:
+            inputs = getattr(getattr(mod, "properties", None), "inputs", None)
+            if inputs is not None:
+                for key in sorted(inputs.keys()):
+                    item = inputs[key]
+                    try:
+                        val = item.to_dict()
+                    except Exception:
+                        val = str(item)[:200]
+                    h.update(("GI|%s|%s" % (key, json.dumps(val, sort_keys=True, default=str))).encode("utf-8"))
+        except Exception:
+            pass
+    h.update(("D|" + "|".join(bits)).encode("utf-8"))
+    return limited
+
+
+def _hash_materials(mats, h, domains, seen=None, info=None):
+    """材质参数（不能只哈希材质名）：Roughness/Metallic/Base Color 变了必须 changed=true。"""
+    if not mats:
+        return
+    domains.append("materials")
+    import hashlib as _hl
+    keys = ("Base Color", "Metallic", "Roughness", "IOR", "Alpha", "Emission Color",
+            "Emission Strength", "Transmission Weight")
+    for mat in mats:
+        m = _hl.sha256()
+        m.update(("N|%s" % mat.name).encode("utf-8"))
+        try:
+            m.update(("C|" + ",".join("%.4f" % float(c) for c in mat.diffuse_color)).encode("utf-8"))
+        except Exception:
+            pass
+        try:
+            m.update(("U|%s" % bool(getattr(mat, "use_nodes", False))).encode("utf-8"))
+            nt = getattr(mat, "node_tree", None)
+            if _hash_node_tree(nt, m, 0, seen, "material") and info is not None:
+                info["truncated"] = True
+            nodes = list(getattr(nt, "nodes", []) or [])
+            m.update(("K|%d" % len(nodes)).encode("utf-8"))
+            for node in nodes:
+                if str(getattr(node, "type", "")) != "BSDF_PRINCIPLED":
+                    continue
+                for sock in getattr(node, "inputs", []):
+                    if sock.name not in keys:
+                        continue
+                    val = getattr(sock, "default_value", None)
+                    try:
+                        val = tuple(round(float(x), 4) for x in val)
+                    except TypeError:
+                        try:
+                            val = round(float(val), 4)
+                        except Exception:
+                            pass
+                    m.update(("I|%s=%s" % (sock.name, val)).encode("utf-8"))
+        except Exception:
+            pass
+        h.update(m.digest())
+
+
+def _hash_drivers(ad, h, tag="DR"):
+    """驱动器表达式/变量/目标；只改 expression 也必须 changed=true。"""
+    if ad is None:
+        return
+    try:
+        drivers = list(getattr(ad, "drivers", []) or [])
+    except Exception:
+        return
+    for drv in drivers:
+        try:
+            d = drv.driver
+            h.update(("%s|%s|%d|%s|%s" % (
+                tag, drv.data_path, drv.array_index, getattr(d, "type", ""),
+                getattr(d, "expression", ""))).encode("utf-8"))
+            for var in getattr(d, "variables", []) or []:
+                h.update(("DV|%s|%s|%s" % (
+                    getattr(var, "name", ""), getattr(var, "type", ""),
+                    getattr(var, "is_simple_expression", ""))).encode("utf-8"))
+                for tgt in getattr(var, "targets", []) or []:
+                    h.update(("DT|%s|%s|%s|%s" % (
+                        getattr(tgt, "id_type", ""),
+                        getattr(getattr(tgt, "id", None), "name", ""),
+                        getattr(tgt, "data_path", ""),
+                        getattr(tgt, "transform_type", ""))).encode("utf-8"))
+        except Exception:
+            pass
+
+
+def _hash_shape_keys(ob, h):
+    data = getattr(ob, "data", None)
+    sk = getattr(data, "shape_keys", None)
+    if sk is None:
+        return
+    try:
+        blocks = list(getattr(sk, "key_blocks", []) or [])
+    except Exception:
+        blocks = []
+    h.update(("SK|%d" % len(blocks)).encode("utf-8"))
+    for kb in blocks:
+        try:
+            h.update(("KB|%s|%.6f|%.6f|%.6f|%s|%s" % (
+                kb.name, float(kb.value), float(getattr(kb, "slider_min", 0.0)),
+                float(getattr(kb, "slider_max", 1.0)), bool(getattr(kb, "mute", False)),
+                getattr(kb, "vertex_group", ""))).encode("utf-8"))
+        except Exception:
+            pass
+    _hash_drivers(getattr(sk, "animation_data", None), h, "SKD")
+
+
+def _hash_pose(ob, h):
+    if getattr(ob, "type", None) != "ARMATURE":
+        return
+    pose = getattr(ob, "pose", None)
+    if pose is None:
+        return
+    for pb in getattr(pose, "bones", []) or []:
+        try:
+            mb = [round(float(v), 6) for row in pb.matrix_basis for v in row]
+            h.update(("PB|%s|%s" % (pb.name, ",".join(str(v) for v in mb))).encode("utf-8"))
+            for con in getattr(pb, "constraints", []) or []:
+                h.update(("PC|%s|%.5f" % (
+                    getattr(con, "type", ""), float(getattr(con, "influence", 0.0)))).encode("utf-8"))
+        except Exception:
+            pass
+    _hash_drivers(getattr(ob, "animation_data", None), h, "POD")
+
+
+def _hash_object(ob, h, info, domains, budget, seen=None):
+    """对象域：名字/类型/变换（含 matrix_basis，赋值后立刻可见）/材质槽/修改器参数。"""
     info["objects"] += 1
     h.update(("O|%s|%s|%s" % (ob.name, ob.type, getattr(getattr(ob, "data", None), "name", ""))).encode("utf-8"))
     try:
@@ -632,32 +964,156 @@ def _hash_object(ob, h, info, domains, budget):
         h.update(("M|" + ",".join(str(v) for v in mw)).encode("utf-8"))
     except Exception:
         pass
+    # matrix_world is cached and can lag behind an assignment; matrix_basis is the
+    # authoritative user transform (location/rotation/scale), so hash both.
+    try:
+        mw = [round(float(v), 6) for row in ob.matrix_basis for v in row]
+        h.update(("B|" + ",".join(str(v) for v in mw)).encode("utf-8"))
+    except Exception:
+        pass
+    try:
+        h.update(("P|" + str(getattr(getattr(ob, "parent", None), "name", ""))).encode("utf-8"))
+        h.update(("L|" + ",".join(sorted(c.name for c in ob.users_collection))).encode("utf-8"))
+    except Exception:
+        pass
     try:
         mats = [s.material.name if s.material else "" for s in ob.material_slots]
-        if mats and "materials" not in domains:
-            domains.append("materials")
         h.update(("A|" + ",".join(mats)).encode("utf-8"))
     except Exception:
         pass
     try:
-        h.update(("D|" + ",".join(m.type for m in ob.modifiers)).encode("utf-8"))
+        if _hash_modifiers(ob, h, seen):
+            info["truncated"] = True
+    except Exception:
+        pass
+    try:
+        _hash_shape_keys(ob, h)
+    except Exception:
+        pass
+    try:
+        _hash_pose(ob, h)
+    except Exception:
+        pass
+    try:
+        _hash_drivers(getattr(ob, "animation_data", None), h, "OB")
     except Exception:
         pass
     return _hash_mesh(ob, h, info, domains, budget)
 
 
+def _action_fcurves(act):
+    """5.2+ layered action 的 fcurve 入口；旧版回退 Action.fcurves。
+
+    不要用 hasattr(act, "fcurves") 判版本：第三方 shim 可能只暴露第一个
+    channelbag，会把其它 slot 静默漏掉。结构判据是 act.layers。
+    """
+    try:
+        from bpy_extras import anim_utils
+        slots = list(getattr(act, "slots", None) or [])
+        if getattr(act, "layers", None) is not None:
+            curves = []
+            seen = set()
+            for slot in slots:
+                bag = anim_utils.action_get_channelbag_for_slot(act, slot)
+                if bag is None:
+                    continue
+                for fc in getattr(bag, "fcurves", None) or []:
+                    key = (fc.data_path, fc.array_index)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    curves.append(fc)
+            return curves
+    except Exception:
+        pass
+    try:
+        return list(act.fcurves)
+    except Exception:
+        return []
+
+
 def _hash_actions(actions, h, domains):
-    """动作域：action 名 + fcurve 路径/索引/关键帧数。"""
+    """动作域：action 名 + fcurve 路径/索引 + 关键帧值/插值/句柄 + 外推。"""
     if not actions:
         return
     domains.append("actions")
     for act in actions:
         try:
-            h.update(("X|%s|%d" % (act.name, len(act.fcurves))).encode("utf-8"))
-            for fc in act.fcurves:
-                h.update(("Y|%s|%d|%d" % (fc.data_path, fc.array_index, len(fc.keyframe_points))).encode("utf-8"))
+            fcs = _action_fcurves(act)
+            h.update(("X|%s|%d" % (act.name, len(fcs))).encode("utf-8"))
+            for fc in fcs:
+                h.update(("Y|%s|%d|%s|%s" % (
+                    fc.data_path, fc.array_index, getattr(fc, "extrapolation", ""),
+                    bool(getattr(fc, "mute", False)))).encode("utf-8"))
+                for kp in fc.keyframe_points:
+                    co = kp.co
+                    hl = kp.handle_left
+                    hr = kp.handle_right
+                    h.update(("K|%.5f|%.5f|%s|%.5f|%.5f|%.5f|%.5f|%s" % (
+                        co.x, co.y, kp.interpolation,
+                        hl.x, hl.y, hr.x, hr.y,
+                        getattr(kp, "easing", ""))).encode("utf-8"))
+                for mod in getattr(fc, "modifiers", []) or []:
+                    h.update(("FM|%s|%s" % (getattr(mod, "type", ""), getattr(mod, "mute", ""))).encode("utf-8"))
         except Exception:
             pass
+
+
+def _eval_stats(scene_objects):
+    """depsgraph 评估后的 faces/verts + 有修改器的对象清单。
+
+    零分配优先：ob_eval.data.polygons/vertices 直接给评估计数（Array 6→30 实测）；
+    只有 data 不是 Mesh 时才 to_mesh() 兜底，并 finally 清理。对象/面/顶点有上限，
+    触顶返回 limited=True，digest 回执据此标 digest_limited，不冒充全量指纹。
+    """
+    import bpy
+    faces = 0
+    verts = 0
+    mods = []
+    limited = False
+    limits = {"objects": 500, "faces": 2000000, "verts": 2000000}
+    try:
+        dg = bpy.context.evaluated_depsgraph_get()
+    except Exception:
+        return 0, 0, mods, False
+    counted = 0
+    for ob in scene_objects:
+        if getattr(ob, "type", None) != "MESH":
+            continue
+        if counted >= limits["objects"]:
+            limited = True
+            break
+        # 隐藏且无修改器的对象不会贡献 eval 差异，跳过；有修改器的仍要算。
+        if bool(getattr(ob, "hide_viewport", False)) and not getattr(ob, "modifiers", None):
+            continue
+        counted += 1
+        try:
+            ev = ob.evaluated_get(dg)
+            data = getattr(ev, "data", None)
+            if data is not None and hasattr(data, "polygons") and hasattr(data, "vertices"):
+                f = len(data.polygons)
+                v = len(data.vertices)
+            else:
+                me = ev.to_mesh()
+                try:
+                    f = len(me.polygons) if me is not None else 0
+                    v = len(me.vertices) if me is not None else 0
+                finally:
+                    ev.to_mesh_clear()
+            faces += f
+            verts += v
+        except Exception:
+            pass
+        try:
+            names = [str(getattr(m, "type", "")) for m in getattr(ob, "modifiers", []) or []]
+            if names:
+                mods.append({"object": ob.name, "modifiers": names})
+        except Exception:
+            pass
+        if faces >= limits["faces"] or verts >= limits["verts"]:
+            limited = True
+            break
+    return faces, verts, mods, limited
 
 
 def _scene_digest():
@@ -669,22 +1125,57 @@ def _scene_digest():
 
     t0 = time.time()
     h = hashlib.sha256()
-    info = {"objects": 0, "meshes": 0, "verts": 0, "truncated": False}
+    info = {"objects": 0, "meshes": 0, "verts": 0, "faces": 0, "truncated": False}
     domains = ["objects"]
     budget = DIGEST_MAX_FLOATS
+    frame = None
     try:
-        h.update(("F|" + str(bpy.data.filepath or "")).encode("utf-8"))
+        # filepath is deliberately NOT hashed: the same content saved under another
+        # path is the same scene (field 反馈 4). It is reported separately as
+        # filepath_changed by _digest_fields.
         h.update(("S|" + str(getattr(bpy.context.scene, "name", ""))).encode("utf-8"))
-        h.update(("R|" + str(getattr(bpy.context.scene, "frame_current", ""))).encode("utf-8"))
+        # frame is NOT content: frame_set() is a read, and the same scene at 25 vs 1
+        # must not report changed=true. Report it separately as frame/frame_after.
+        frame = int(getattr(bpy.context.scene, "frame_current", 0) or 0)
     except Exception:
         pass
-    for ob in sorted(bpy.data.objects, key=lambda o: o.name):
-        budget = _hash_object(ob, h, info, domains, budget)
+    # Scene content only: bpy.data.* also holds orphan/default datablocks (e.g. the
+    # factory "Dots Stroke" material) that do not survive a save → digest of the same
+    # scene changed after open_mainfile (found by the revert check).
+    try:
+        scene_objects = list(bpy.context.scene.objects)
+    except Exception:
+        scene_objects = list(bpy.data.objects)
+    seen = set()
+    for ob in sorted(scene_objects, key=lambda o: o.name):
+        budget = _hash_object(ob, h, info, domains, budget, seen)
+    try:
+        used = {}
+        for ob in scene_objects:
+            for slot in getattr(ob, "material_slots", []):
+                if slot.material is not None:
+                    used[slot.material.name] = slot.material
+        mats = sorted(used.values(), key=lambda m: m.name)
+    except Exception:
+        mats = []
+    try:
+        _hash_materials(mats, h, domains, seen, info)
+    except Exception:
+        pass
     try:
         acts = sorted(bpy.data.actions, key=lambda a: a.name)
     except Exception:
         acts = []
     _hash_actions(acts, h, domains)
+    try:
+        scene = bpy.context.scene
+        _hash_node_tree(getattr(scene, "compositing_node_group", None) or getattr(scene, "node_tree", None), h, 0, seen, "material")
+    except Exception:
+        pass
+    try:
+        ev_faces, ev_verts, mods, eval_limited = _eval_stats(scene_objects)
+    except Exception:
+        ev_faces, ev_verts, mods, eval_limited = 0, 0, [], False
     return {
         "algo": DIGEST_ALGO,
         "digest": h.hexdigest()[:12],
@@ -694,8 +1185,16 @@ def _scene_digest():
         "objects": info["objects"],
         "meshes": info["meshes"],
         "verts": info["verts"],
+        "faces": info["faces"],
+        "eval_faces": ev_faces,
+        "eval_verts": ev_verts,
+        "modifiers": mods[:200],
+        "frame": frame,
+        "materials": len(mats),
         "truncated": info["truncated"],
+        "limited": bool(info["truncated"] or eval_limited),
         "ms": int((time.time() - t0) * 1000),
+        "digest_ms": int((time.time() - t0) * 1000),
     }
 
 
@@ -704,19 +1203,47 @@ def _digest_fields(before, after, elapsed_ms, kit_source):
 
     auto_restore / restore_applied 恒 False：本插件**从不**自动回滚 —— 改了就是改了。
     """
-    b = (before or {}).get("digest")
-    a = (after or {}).get("digest")
+    b0 = before or {}
+    a0 = after or {}
+    b = b0.get("digest")
+    a = a0.get("digest")
+    fb = int(b0.get("faces") or 0)
+    fa = int(a0.get("faces") or 0)
+    efb = int(b0.get("eval_faces") or 0)
+    efa = int(a0.get("eval_faces") or 0)
+    evb = int(b0.get("eval_verts") or 0)
+    eva = int(a0.get("eval_verts") or 0)
+    file_before = b0.get("file")
+    file_after = a0.get("file")
     return {
         "digest_before": b,
         "digest_after": a,
         "changed": bool(b is not None and a is not None and b != a),
-        "digest_scope": list((after or before or {}).get("domains") or ["objects"]),
-        "digest_algo": (after or before or {}).get("algo") or DIGEST_ALGO,
+        "faces_before": fb,
+        "faces_after": fa,
+        "faces_delta": fa - fb,
+        "eval_faces_before": efb,
+        "eval_faces_after": efa,
+        "eval_faces_delta": efa - efb,
+        "eval_verts_before": evb,
+        "eval_verts_after": eva,
+        "frame_before": b0.get("frame"),
+        "frame_after": a0.get("frame"),
+        "modifiers_after": a0.get("modifiers") or [],
+        "verts_delta": int(a0.get("verts") or 0) - int(b0.get("verts") or 0),
+        "objects_delta": int(a0.get("objects") or 0) - int(b0.get("objects") or 0),
+        "filepath_before": file_before,
+        "filepath_after": file_after,
+        "filepath_changed": file_before != file_after,
+        "digest_scope": list(a0.get("domains") or b0.get("domains") or ["objects"]),
+        "digest_algo": a0.get("algo") or b0.get("algo") or DIGEST_ALGO,
         "restore_applied": False,
         "auto_restore": False,
         "kit_source": kit_source,
         "elapsed_ms": int(elapsed_ms),
-        "digest_truncated": bool((after or before or {}).get("truncated")),
+        "digest_truncated": bool(a0.get("truncated") or b0.get("truncated")),
+        "digest_limited": bool(a0.get("limited") or b0.get("limited") or a0.get("truncated") or b0.get("truncated")),
+        "digest_ms": int(a0.get("digest_ms") or a0.get("ms") or elapsed_ms),
     }
 
 
@@ -732,7 +1259,15 @@ def _digest():
         "objects": d["objects"],
         "meshes": d["meshes"],
         "verts": d["verts"],
+        "faces": d["faces"],
+        "eval_faces": d.get("eval_faces"),
+        "eval_verts": d.get("eval_verts"),
+        "modifiers": d.get("modifiers") or [],
+        "frame": d.get("frame"),
+        "materials": d["materials"],
         "truncated": d["truncated"],
+        "limited": bool(d.get("limited") or d.get("truncated")),
+        "digest_ms": d.get("digest_ms") or d["ms"],
         "kit_source": _kit_source(),
         "auto_restore": False,
         "restore_applied": False,
@@ -857,6 +1392,9 @@ def main():
                     resp = {"id": rid}; resp.update(r)
                 elif op == "revert":
                     r = _revert(req.get("spec") or req.get("revert") or {})
+                    resp = {"id": rid}; resp.update(r)
+                elif op == "relocate":
+                    r = _relocate(req.get("spec") or req.get("relocate") or {})
                     resp = {"id": rid}; resp.update(r)
                 elif op == "checkpoints":
                     r = _checkpoints(req.get("spec") or {})
