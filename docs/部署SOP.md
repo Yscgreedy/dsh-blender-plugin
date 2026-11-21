@@ -43,6 +43,8 @@ dsh --profile <profile> --dump-config | grep -A3 dsh-blender-plugin
 ~~~
 
 只有修改插件源码时才需要 clone + `npm ci --legacy-peer-deps` + `npm run build`，再把 checkout 以 `link:` 方式装进 profile。
+已安装过的机器更新本仓：`npm run dsh:install`（发布形态）/ `npm run dsh:link` + `npm run dsh:reload`（开发形态）；
+只复制变化的文件、**不动 `runtime/ext`**、自动触发 HMR 并自证，细节见 [安装与升级-加速方案.md](安装与升级-加速方案.md)。
 
 ## 3. 连接 Blender addon（人工一步）
 

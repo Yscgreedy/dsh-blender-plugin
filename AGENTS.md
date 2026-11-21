@@ -26,9 +26,9 @@ Every other document links here instead of repeating commands.
 | Python tests only | `npm run test:python` with `PYTHON=/path/to/venv/python` |
 | Lint / format gate | `npm run lint` / `npm run format:check` |
 | Python static gate | `npm run check:python-static` (plain ruff + pure-logic pyright; no allowlist) |
-| Package contents check | `npm pack --dry-run` |
-| Optional external paths | `npm run setup:ext` / `npm run check:ext` (install / probe glTF-Validator + Open3D under `runtime/ext/`) |
+| Package contents / optional external paths | `npm pack --dry-run` · `npm run setup:ext` / `npm run check:ext` (glTF-Validator + Open3D under `runtime/ext/`) |
 | Refresh counts after catalog edits | `node scripts/sync_counts.mjs` then update `tests/fixtures/capability.lock.json` ([tests/MIGRATION.md](tests/MIGRATION.md)) |
+| Install / update this checkout into a DSH profile | `npm run dsh:install` (pack) · `npm run dsh:link` (dev link) · `npm run dsh:reload` · `npm run dsh:verify` ([docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md)) |
 
 Addon typing: install `requirements-typecheck.txt` (fake-bpy stubs + NumPy for legacy imports; type-only; behavior is real-Blender E2E).
 Addon IDE: root `pyrightconfig.json` = whole-addon editor config; it ignores legacy `tests/e2e/blender/native` and `runtime/py` diagnostics. `pyrightconfig.extension.json` = typed-core gate; `pyrightconfig.python.json` = pure-logic runtime scope; `pyproject.toml` = pytest/Ruff configuration.

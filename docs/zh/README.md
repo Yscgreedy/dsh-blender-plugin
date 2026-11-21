@@ -105,9 +105,18 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
         npm run setup:dev
         npm run build
 
-3. 把插件加入 DSH profile。先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
+3. 把插件加入 DSH profile。一条命令即可（自动解析 profile、只复制变化文件、不动 `runtime/ext`、触发 HMR 并自证 `/health` + `/status` + catalog）：
+
+        npm run dsh:link      # 开发模式：profile 依赖切成 link:<repo>；之后更新用 npm run dsh:reload
+        npm run dsh:install   # 发布形态：按 npm 包文件清单覆盖安装目录
+        npm run dsh:verify    # 只验证
+        npm run dsh:install -- --with-addon   # 顺带把 Blender 扩展放进 user_default
+
+   手工方式（等价，排错时用）：先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/dsh-blender-plugin
+
+   实测数据与安全边界见 [安装与升级-加速方案.md](../安装与升级-加速方案.md)。
 
     profile 的 package.json：
 

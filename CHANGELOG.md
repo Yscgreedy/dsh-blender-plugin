@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-11-21 一条命令安装/升级：`scripts/install-dsh.mjs`
+
+> 实测痛点：手工 `npm pack` + `robocopy /MIR` + 恢复 `runtime/ext` + reload + 手工 attach/验证，
+> 一次 ~40–60 s，且镜像会把 `runtime/ext`（16.8k 文件）删掉（忘记恢复 → `ext.*` 静默失效）。
+
+- **`npm run dsh:install`（pack）**：`npm pack --ignore-scripts --json --dry-run` 只取发布清单
+  （不产 tarball、不跑 prepack），按内容 sha256 只复制变化文件；只删除"上次 manifest 里有、这次没有"的
+  文件；`runtime/ext` / `node_modules` / `__pycache__` 永不删除。二次运行复制 0 个文件。
+- **`npm run dsh:link`（开发）**：把 profile 依赖改成 `link:<repo>`（备份 package.json + pnpm install），
+  之后 `npm run dsh:reload` = build + HMR + 自证，秒级。
+- **reload 自动化**：复用 `lib/host/reload/profile.js` 的 `triggerProfileHmr`（与
+  `blender_session action=reload` 同一行注释、原子写），轮询 `/health` 等 Gateway 换 pid。
+- **自证**：`/health`（pid/uptime/provenance）+ `/status`（pluginVersion/verdict）+ `POST /plan`
+  `catalog`（ops/families）一次核对；失败给出 `!` 行与下一步。
+- **`--with-addon`**：把 `extension/dsh_blender_bridge` 复制进 Blender `user_default` 扩展目录
+  （自动挑最高版本，`--blender-version` 可指定），省掉 Install from Disk；代码生效仍需 Reload Scripts。
+- **`--dry-run` / `--json` / `--no-build` / `--no-reload` / `--verify-only`**；profile 解析支持
+  `--profile` / `DSH_PROFILE_DIR` / `DSH_HOME/profiles/$DSH_PROFILE` / 最新 patch 兜底。
+- **文档**：新增 [docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md)（实测表、方案对比、安全边界、
+  已验证结果、后续优化：incremental、清单缓存、tarball、attach 自动化）；README / 操作教程 / 部署SOP /
+  AGENTS 命令表同步。
+- **测试**：`tests/unit/js/install-dsh.test.ts`（依赖解析、merge/protected、profile 解析、Blender 版本
+  目录、CLI dry-run 不落盘）。实测首次安装复制 1338 文件、二次复制 0；addon dry-run 正确识别 5.3 目录。
+
 ### 2026-11-21 缺陷记录批次 4–6：场景指纹 / 归属分桶 / argv / 作业列表边界 / 动画域
 
 > 同一份审核（`tmp/dsh-blender-plugin_缺陷审核与修复计划_20261121.md`）的收尾三批。

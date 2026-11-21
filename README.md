@@ -108,9 +108,18 @@ Install the standalone modeling skill (only needed for hosts that do not load th
         npm run build
         # Optional: DSH_CHECKOUT=/path/to/dsh-harness npm run build links DSH host packages
 
-3. Add the package to your DSH profile as a bundle. Link the checkout into the profile, then add the dependency and bundle entry to the profile package.json.
+3. Add the package to your DSH profile as a bundle. The one-command path (resolves the profile, copies only changed files, never touches `runtime/ext`, triggers HMR and verifies `/health` + `/status` + the catalog):
+
+        npm run dsh:link       # dev: profile dep becomes link:<repo>; later updates: npm run dsh:reload
+        npm run dsh:install    # release-like: overlay the npm package file list onto the installed copy
+        npm run dsh:verify     # check only
+        npm run dsh:install -- --with-addon   # also drop the Blender extension into user_default
+
+   Manual equivalent (link the checkout into the profile, then add the dependency and bundle entry to the profile package.json):
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/dsh-blender-plugin
+
+   Measurements and the safety rules are in [docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md).
 
     Profile package.json:
 
