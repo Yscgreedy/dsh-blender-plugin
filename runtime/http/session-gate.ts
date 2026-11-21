@@ -41,6 +41,9 @@ export function sessionWriteGate(
   const sessionId = body.sessionId === undefined ? undefined : String(body.sessionId)
   const result = registry.authorizeWrite(caller, sessionId, writeScopesFor(body, fallbackScope), {
     py: body.py === true,
+    // A py call with no declared scope is not the same as one that declared
+    // exclusive: the refusal says "declare write_scope" instead of "session in use".
+    scopeDeclared: scopePayload(body) !== undefined,
   })
   if (result.ok) return null
   return result

@@ -454,6 +454,60 @@ describe('3.1 queue executor command shape', () => {
     expect(fs.readFileSync(path.join(dir, 'job.py'), 'utf8')).toContain('HEADLESS')
   })
 
+  it('C-10: 用户 args 排在 -- 之后、outdir 之前（不再被目录名占第 0 位）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-argv-'))
+    const built = buildJobArgs(
+      record('headless', {
+        script: 'print(1)',
+        args: ['--flag', 'a b'],
+        outdir: path.join(dir, 'out'),
+      }),
+      dir,
+    )
+    const sep = built.args.indexOf('--')
+    expect(sep).toBeGreaterThan(0)
+    const tail = built.args.slice(sep + 1)
+    expect(tail[0]).toBe('--flag')
+    expect(tail[1]).toBe('a b')
+    expect(tail[tail.length - 1]).toBe(built.outdir)
+  })
+
+  it('C-13: list 支持 limit/offset/sinceMs，且默认不再一次吐全量', () => {
+    const { queue } = setup()
+    for (let i = 0; i < 5; i++)
+      queue.submit(main(), { kind: 'headless', script: 'print(' + i + ')' })
+    expect(queue.list({}).length).toBe(5)
+    expect(queue.list({ limit: 2 }).length).toBe(2)
+    const page2 = queue.list({ limit: 2, offset: 2 })
+    expect(page2.length).toBe(2)
+    expect(page2[0].id).not.toBe(queue.list({ limit: 1 })[0].id)
+    expect(queue.list({ sinceMs: Date.now() + 60_000 })).toEqual([])
+    expect(queue.list({ owner: 'dsh-other' })).toEqual([])
+  })
+
+  it('C-9: headless 默认带设备前导（device=auto），并接受 device/compute_device_type', () => {
+    const autoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(record('headless', { script: 'print(1)' }), autoDir)
+    const autoCode = fs.readFileSync(path.join(autoDir, 'job.py'), 'utf8')
+    expect(autoCode).toContain('_dsh_headless_device()')
+    expect(autoCode).toContain('"device": "auto"')
+    expect(autoCode).toContain('DSH_RENDER')
+    expect(autoCode).toContain('prefs.get_devices()')
+
+    const gpuDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(
+      record('headless', { script: 'print(1)', device: 'gpu', compute_device_type: 'optix' }),
+      gpuDir,
+    )
+    const gpuCode = fs.readFileSync(path.join(gpuDir, 'job.py'), 'utf8')
+    expect(gpuCode).toContain('"device": "gpu"')
+    expect(gpuCode).toContain('"compute_device_type": "OPTIX"')
+
+    const cpuDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(record('headless', { script: 'print(1)', gpu: false }), cpuDir)
+    expect(fs.readFileSync(path.join(cpuDir, 'job.py'), 'utf8')).toContain('"device": "cpu"')
+  })
+
   it('attributes a missing Blender executable to stage spawn', async () => {
     const missing = path.join(os.tmpdir(), 'missing-blender-' + process.pid)
     const executor = new SpawnJobExecutor({ blenderExe: missing })

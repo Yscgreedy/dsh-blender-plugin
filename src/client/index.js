@@ -833,6 +833,637 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region v3.5 · 运维面（连接 / 通道 / 作业 / 诊断 / 设置）
+    /**
+     * 面板的第二个数据面：三份**只读**快照（`/host/state`、`/health`、`/host/jobs`）拼成一块，
+     * 全部零 Blender 往返；诊断（`/status` + `/doctor`）只在人点按钮时取一次，避免轮询把面板拖慢。
+     *
+     * 边界（面板需求书 §五）：这里没有任何会话写路径 —— 不 attach、不 release、不改 owner/grant，
+     * 也不新增 consent 之外的写接口。设置区只写本机 localStorage（后端地址 / 轮询间隔），
+     * 属于客户端偏好，不是 Gateway 的权限面。
+     */
+    var OPS_POLL_BUSY_MS = 1000
+    var OPS_POLL_IDLE_MS = 2500
+    var OPS_MIN_POLL_MS = 800
+    var OPS_MAX_POLL_MS = 15000
+    var OPS_JOB_LIMIT = 6
+    var OPS_LOG_TAIL = 6000
+    var OPS_RAW_LIMIT = 4000
+    var LS_OPS_POLL_KEY = 'dsh-blender-plugin:panel:ops-poll-ms'
+    var LS_OPS_OPEN_KEY = 'dsh-blender-plugin:panel:ops-open'
+    var LS_SETTINGS_OPEN_KEY = 'dsh-blender-plugin:panel:settings-open'
+    var LS_RAW_KEY = 'dsh-blender-plugin:panel:raw'
+
+    var JOB_STATUS_LABELS = {
+      running: '运行中',
+      completed: '完成',
+      failed: '失败',
+      killed: '已取消',
+      queued: '排队',
+      pending: '待跑',
+      unknown: '未知',
+    }
+    var BACKEND_SOURCE_LABELS = {
+      localStorage: '本地面板覆盖',
+      window: '宿主注入',
+      config: '插件配置',
+      default: '默认',
+    }
+
+    function readStoredFlag(key, fallback) {
+      try {
+        var v = window.localStorage.getItem(key)
+        if (v === null) return fallback
+        return v !== '0'
+      } catch (e) {
+        return fallback
+      }
+    }
+
+    function storeFlag(key, on) {
+      try {
+        window.localStorage.setItem(key, on ? '1' : '0')
+      } catch (e) {
+        /* 隐私模式：只在本组件生命周期内记住 */
+      }
+    }
+
+    function clampInt(v, lo, hi, fallback) {
+      var n = Number(v)
+      if (!isFinite(n)) return fallback
+      return Math.max(lo, Math.min(hi, Math.round(n)))
+    }
+
+    function opsPollMs() {
+      var raw = null
+      try {
+        raw = window.localStorage.getItem(LS_OPS_POLL_KEY)
+      } catch (e) {
+        raw = null
+      }
+      return clampInt(raw, OPS_MIN_POLL_MS, OPS_MAX_POLL_MS, OPS_POLL_IDLE_MS)
+    }
+
+    function storeOpsPollMs(ms) {
+      var v = clampInt(ms, OPS_MIN_POLL_MS, OPS_MAX_POLL_MS, OPS_POLL_IDLE_MS)
+      try {
+        window.localStorage.setItem(LS_OPS_POLL_KEY, String(v))
+      } catch (e) {
+        /* ignore */
+      }
+      return v
+    }
+
+    /** 当前后端地址是谁给的：面板覆盖 > 宿主注入 > 插件配置 > 默认。 */
+    function backendSource() {
+      try {
+        if (window.localStorage.getItem(LS_BACKEND_KEY)) return 'localStorage'
+      } catch (e) {
+        /* ignore */
+      }
+      try {
+        var injected = window.__DSH_BLENDER_BACKEND__
+        if (typeof injected === 'string' && injected) return 'window'
+      } catch (e) {
+        /* ignore */
+      }
+      if (configuredBackend !== DEFAULT_BACKEND) return 'config'
+      return 'default'
+    }
+
+    /** 规范化面板里的后端覆盖值（空 = 清除覆盖）；不碰存储，纯函数，便于测试。 */
+    function normalizeBackendOverride(value) {
+      var s = String(value === null || value === undefined ? '' : value).trim()
+      if (!s) return ''
+      if (!/^https?:\/\//i.test(s)) return ''
+      return stripTrailingSlashes(s)
+    }
+
+    /** 写/清后端覆盖（仅 localStorage）。返回是否落盘。 */
+    function setBackendOverride(value) {
+      var v = normalizeBackendOverride(value)
+      try {
+        if (!v) window.localStorage.removeItem(LS_BACKEND_KEY)
+        else window.localStorage.setItem(LS_BACKEND_KEY, v)
+        return true
+      } catch (e) {
+        return false
+      }
+    }
+
+    /** 复制文本：clipboard API 优先，退回隐藏 textarea（都失败就返回 false，不抛）。 */
+    function copyText(text) {
+      var s = String(text === null || text === undefined ? '' : text)
+      if (!s) return false
+      try {
+        if (
+          navigator &&
+          navigator.clipboard &&
+          typeof navigator.clipboard.writeText === 'function'
+        ) {
+          navigator.clipboard.writeText(s)
+          return true
+        }
+      } catch (e) {
+        /* 没授权 / 非安全上下文 → 走 textarea */
+      }
+      try {
+        var el = document.createElement('textarea')
+        el.value = s
+        document.body.appendChild(el)
+        el.select()
+        document.execCommand('copy')
+        document.body.removeChild(el)
+        return true
+      } catch (e2) {
+        return false
+      }
+    }
+
+    function shortId(id) {
+      var s = String(id === null || id === undefined ? '' : id)
+      if (s.length <= 12) return s
+      return s.slice(0, 8) + '…'
+    }
+
+    function jobStatusLabel(job) {
+      var j = job && typeof job === 'object' ? job : {}
+      var key = String(j.status || 'unknown')
+      var label = JOB_STATUS_LABELS[key] || key
+      if (key === 'running' && j.stageName) label += ' · ' + String(j.stageName)
+      return label
+    }
+
+    function scopeLabel(scope) {
+      if (!Array.isArray(scope)) return ''
+      var out = []
+      for (var i = 0; i < scope.length; i++) {
+        var row = scope[i] && typeof scope[i] === 'object' ? scope[i] : {}
+        var kind = String(row.kind || '')
+        var value = String(row.value || '')
+        if (!kind && !value) continue
+        out.push(kind + (value ? ':' + value : ''))
+      }
+      return out.join(',')
+    }
+
+    /** 通道一行字：最近一次成功的年龄 + 在飞数 + AI 是否暂停。 */
+    function channelLabel(chan) {
+      var c = chan && typeof chan === 'object' ? chan : {}
+      var age = c.lastOkAgeMs === null || c.lastOkAgeMs === undefined ? null : Number(c.lastOkAgeMs)
+      var base = age === null ? '通道无成功记录' : '通道最近 ok ' + msLabel(age) + '前'
+      var inflight = Number(c.inflight) || 0
+      if (inflight > 0) base += ' · 在飞 ' + inflight
+      if (c.aiPaused === true) base += ' · AI 已暂停'
+      return base
+    }
+
+    function leaseLabel(lease) {
+      var l = lease && typeof lease === 'object' ? lease : {}
+      if (l.active !== true) return '无写租约'
+      var text =
+        '写租约 ' +
+        String(l.holder || 'anonymous') +
+        ' · 剩余 ' +
+        msLabel(Number(l.expiresInMs) || 0)
+      if (l.holderAlive === false) text += ' · holder 已退出（下次写自动回收）'
+      var scope = scopeLabel(l.scope)
+      if (scope) text += ' · scope ' + scope
+      return text
+    }
+
+    function renderLabel(render) {
+      var r = render && typeof render === 'object' ? render : {}
+      if (r.busy !== true) return '未在渲染'
+      var text = '渲染中'
+      if (r.ageMs !== null && r.ageMs !== undefined)
+        text += ' · 已 ' + msLabel(Number(r.ageMs) || 0)
+      if (r.scene) text += ' · ' + String(r.scene)
+      return text
+    }
+
+    // ------------------------------------------------------------ 只读 HTTP
+    function opsUrlState() {
+      return backend() + '/host/state'
+    }
+
+    function opsUrlHealth() {
+      return backend() + '/health'
+    }
+
+    function opsUrlJobs(limit) {
+      return backend() + '/host/jobs?limit=' + String(clampInt(limit, 1, 100, OPS_JOB_LIMIT))
+    }
+
+    function opsUrlJobLog(id, tail) {
+      return (
+        backend() +
+        '/host/jobs/log?id=' +
+        encodeURIComponent(String(id || '')) +
+        '&tail=' +
+        String(clampInt(tail, 1, 200000, OPS_LOG_TAIL))
+      )
+    }
+
+    function opsUrlStatus() {
+      return backend() + '/status'
+    }
+
+    function opsUrlDoctor() {
+      return backend() + '/doctor'
+    }
+
+    /** 一次取三份只读快照；单个失败只记进 errors，不拖垮其余两块。 */
+    async function fetchOpsSnapshot() {
+      var out = { ts: Date.now(), state: null, health: null, jobs: null, errors: [] }
+      var results = await Promise.all([
+        fetchJSON(opsUrlState(), { cache: 'no-store' }),
+        fetchJSON(opsUrlHealth(), { cache: 'no-store' }),
+        fetchJSON(opsUrlJobs(OPS_JOB_LIMIT), { cache: 'no-store' }),
+      ])
+      var keys = ['state', 'health', 'jobs']
+      for (var i = 0; i < results.length; i++) {
+        var res = results[i]
+        var body = res && res.body ? res.body : null
+        if (res && res.ok && body && body.ok !== false) out[keys[i]] = body
+        else
+          out.errors.push(
+            keys[i] + '：' + String((res && (res.error || 'HTTP ' + res.status)) || '取不到'),
+          )
+      }
+      return out
+    }
+
+    /** 按需诊断：`/status`（版本 / addon / Blender）+ `/doctor`（verdict / 配置 / 修法）。 */
+    async function fetchDiagnostics() {
+      var results = await Promise.all([
+        fetchJSON(opsUrlStatus(), { cache: 'no-store' }),
+        fetchJSON(opsUrlDoctor(), { cache: 'no-store' }),
+      ])
+      var out = { ts: Date.now(), status: null, doctor: null, error: '' }
+      if (results[0] && results[0].ok && results[0].body) out.status = results[0].body
+      if (results[1] && results[1].ok && results[1].body) out.doctor = results[1].body
+      if (!out.status && !out.doctor)
+        out.error =
+          '诊断取不到：' +
+          String(
+            (results[1] && results[1].error) ||
+              (results[0] && results[0].error) ||
+              'Gateway 未响应',
+          )
+      return out
+    }
+
+    /** 作业日志尾部（stdout + stderr）。失败给 error 文本，不抛。 */
+    async function fetchJobLog(id) {
+      var jobId = String(id || '')
+      var res = await fetchJSON(opsUrlJobLog(jobId, OPS_LOG_TAIL), { cache: 'no-store' })
+      if (!res || !res.body)
+        return {
+          id: jobId,
+          text: '',
+          error: '日志取不到：' + String((res && res.error) || 'unknown'),
+        }
+      if (res.body.ok === false)
+        return {
+          id: jobId,
+          text: '',
+          error: '作业不存在或已清理：' + String(res.body.error || 'unknown_job'),
+        }
+      var text =
+        res.body.stdout === null || res.body.stdout === undefined ? '' : String(res.body.stdout)
+      var err =
+        res.body.stderr === null || res.body.stderr === undefined ? '' : String(res.body.stderr)
+      if (err) text += (text ? '\n' : '') + '--- stderr ---\n' + err
+      if (!text) text = '（这个作业还没有输出）'
+      return { id: jobId, text: text, error: '' }
+    }
+
+    // ------------------------------------------------------------ 轮询（多个面板位共享）
+    var OPS_FEED = { payload: null, error: '', subscribers: [], timer: 0, started: false }
+
+    function notifyOps() {
+      for (var i = 0; i < OPS_FEED.subscribers.length; i++) {
+        try {
+          OPS_FEED.subscribers[i](OPS_FEED)
+        } catch (e) {
+          /* 单个订阅者出错不影响别的面板位 */
+        }
+      }
+    }
+
+    /** 把新一轮快照并进旧 payload：诊断结果与已打开的日志跨轮询保留。 */
+    function mergeOps(prev, snap) {
+      var base = prev && typeof prev === 'object' ? prev : {}
+      return {
+        ts: snap.ts,
+        state: snap.state,
+        health: snap.health,
+        jobs: snap.jobs,
+        errors: snap.errors,
+        diagnostics: base.diagnostics || null,
+        log: base.log || null,
+      }
+    }
+
+    function opsBusyNow() {
+      var p = OPS_FEED.payload
+      if (!p) return false
+      var st = p.state && typeof p.state === 'object' ? p.state : {}
+      var running = st.jobs && typeof st.jobs === 'object' ? Number(st.jobs.running) || 0 : 0
+      var render = st.render && typeof st.render === 'object' && st.render.busy === true
+      return running > 0 || render
+    }
+
+    function scheduleOpsPoll() {
+      var ms = opsBusyNow() ? OPS_POLL_BUSY_MS : opsPollMs()
+      OPS_FEED.timer = window.setTimeout(function () {
+        pollOps()
+      }, ms)
+    }
+
+    function pollOps() {
+      if (!OPS_FEED.started) return
+      fetchOpsSnapshot().then(
+        function (snap) {
+          if (!OPS_FEED.started) return
+          OPS_FEED.payload = mergeOps(OPS_FEED.payload, snap)
+          OPS_FEED.error = ''
+          notifyOps()
+          scheduleOpsPoll()
+        },
+        function () {
+          if (!OPS_FEED.started) return
+          OPS_FEED.error = '运维面取不到：Gateway 未响应'
+          notifyOps()
+          scheduleOpsPoll()
+        },
+      )
+    }
+
+    function subscribeOps(listener) {
+      OPS_FEED.subscribers.push(listener)
+      if (!OPS_FEED.started) {
+        OPS_FEED.started = true
+        pollOps()
+      }
+      listener(OPS_FEED)
+      return function () {
+        OPS_FEED.subscribers = OPS_FEED.subscribers.filter(function (x) {
+          return x !== listener
+        })
+        if (OPS_FEED.subscribers.length) return
+        OPS_FEED.started = false
+        if (OPS_FEED.timer) window.clearTimeout(OPS_FEED.timer)
+        OPS_FEED.timer = 0
+      }
+    }
+
+    async function refreshOpsFeed() {
+      var snap = await fetchOpsSnapshot()
+      OPS_FEED.payload = mergeOps(OPS_FEED.payload, snap)
+      OPS_FEED.error = ''
+      notifyOps()
+      return OPS_FEED
+    }
+
+    async function refreshOpsDiagnostics() {
+      var d = await fetchDiagnostics()
+      var base = OPS_FEED.payload && typeof OPS_FEED.payload === 'object' ? OPS_FEED.payload : {}
+      OPS_FEED.payload = {
+        ts: base.ts || Date.now(),
+        state: base.state || null,
+        health: base.health || null,
+        jobs: base.jobs || null,
+        errors: base.errors || [],
+        diagnostics: d,
+        log: base.log || null,
+      }
+      notifyOps()
+      return d
+    }
+
+    async function openOpsJobLog(id) {
+      var log = await fetchJobLog(id)
+      var base = OPS_FEED.payload && typeof OPS_FEED.payload === 'object' ? OPS_FEED.payload : {}
+      OPS_FEED.payload = {
+        ts: base.ts || Date.now(),
+        state: base.state || null,
+        health: base.health || null,
+        jobs: base.jobs || null,
+        errors: base.errors || [],
+        diagnostics: base.diagnostics || null,
+        log: log,
+      }
+      notifyOps()
+      return log
+    }
+
+    function closeOpsJobLog() {
+      if (!OPS_FEED.payload || typeof OPS_FEED.payload !== 'object') return
+      OPS_FEED.payload = {
+        ts: OPS_FEED.payload.ts,
+        state: OPS_FEED.payload.state || null,
+        health: OPS_FEED.payload.health || null,
+        jobs: OPS_FEED.payload.jobs || null,
+        errors: OPS_FEED.payload.errors || [],
+        diagnostics: OPS_FEED.payload.diagnostics || null,
+        log: null,
+      }
+      notifyOps()
+    }
+
+    // ------------------------------------------------------------ 投影（纯函数，不抛）
+    /**
+     * 运维面的全部显示字段。入参是三份快照（可为 null），出参只含字符串/数字/数组，
+     * 缺失一律降级成 `''` / `null`，绝不让面板因为一个缺字段整块消失。
+     */
+    function panelOpsModel(ops, now) {
+      var o = ops && typeof ops === 'object' ? ops : {}
+      var st = o.state && typeof o.state === 'object' ? o.state : {}
+      var hl = o.health && typeof o.health === 'object' ? o.health : {}
+      var jb = o.jobs && typeof o.jobs === 'object' ? o.jobs : {}
+      var diag = o.diagnostics && typeof o.diagnostics === 'object' ? o.diagnostics : null
+      var chan = st.channel && typeof st.channel === 'object' ? st.channel : {}
+      // /host/state 只给 pid+uptime，/health 还多一个 rssMB：逐字段合并，别整块二选一。
+      var bkState = st.backend && typeof st.backend === 'object' ? st.backend : {}
+      var bkHealth = hl.backend && typeof hl.backend === 'object' ? hl.backend : {}
+      var bk = {
+        pid: bkState.pid || bkHealth.pid || null,
+        uptimeMs: bkState.uptimeMs || bkHealth.uptimeMs || 0,
+        rssMB: bkState.rssMB || bkHealth.rssMB || 0,
+      }
+      var prov = hl.provenance && typeof hl.provenance === 'object' ? hl.provenance : {}
+      var gw = hl.gateway && typeof hl.gateway === 'object' ? hl.gateway : {}
+      var lease =
+        st.lease && typeof st.lease === 'object'
+          ? st.lease
+          : hl.lease && typeof hl.lease === 'object'
+            ? hl.lease
+            : {}
+      var render = st.render && typeof st.render === 'object' ? st.render : {}
+      var errors = Array.isArray(o.errors) ? o.errors : []
+      var problems = []
+      for (var e = 0; e < errors.length && problems.length < 3; e++)
+        problems.push(String(errors[e]))
+      if (chan.lastError) problems.push('通道最后错误：' + String(chan.lastError).slice(0, 160))
+      if (chan.diagnosis) problems.push('诊断：' + String(chan.diagnosis))
+
+      var rawJobs = Array.isArray(jb.jobs) ? jb.jobs : []
+      var jobRows = []
+      for (var i = 0; i < rawJobs.length; i++) {
+        var job = rawJobs[i] && typeof rawJobs[i] === 'object' ? rawJobs[i] : {}
+        jobRows.push({
+          id: String(job.id || ''),
+          short: shortId(job.id),
+          kind: String(job.kind || 'job'),
+          status: String(job.status || 'unknown'),
+          statusLabel: jobStatusLabel(job),
+          msLabel: msLabel(Number(job.ms) || 0),
+          pid: job.pid === null || job.pid === undefined ? null : Number(job.pid),
+        })
+      }
+
+      var source = backendSource()
+      var dg = null
+      if (diag) {
+        var doc = diag.doctor && typeof diag.doctor === 'object' ? diag.doctor : {}
+        var stt = diag.status && typeof diag.status === 'object' ? diag.status : {}
+        var cfg = doc.config && typeof doc.config === 'object' ? doc.config : {}
+        var readiness =
+          doc.readiness && typeof doc.readiness === 'object'
+            ? doc.readiness
+            : stt.readiness && typeof stt.readiness === 'object'
+              ? stt.readiness
+              : {}
+        var addon = readiness.addon && typeof readiness.addon === 'object' ? readiness.addon : {}
+        var blender = stt.blender && typeof stt.blender === 'object' ? stt.blender : {}
+        var next = Array.isArray(doc.next_actions)
+          ? doc.next_actions
+          : Array.isArray(stt.next_actions)
+            ? stt.next_actions
+            : []
+        var diagnosis = doc.diagnosis && typeof doc.diagnosis === 'object' ? doc.diagnosis : null
+        var workDir = cfg.workDir && typeof cfg.workDir === 'object' ? cfg.workDir : {}
+        var pairs = [
+          ['HTTP', String(cfg.http || '')],
+          ['Gateway', String(cfg.gateway || '')],
+          ['工作目录', String(workDir.win || workDir.wsl || '')],
+          ['Blender', cfg.blenderExe ? shortPath(String(cfg.blenderExe)) : ''],
+          ['配置文件', cfg.configFile ? shortPath(String(cfg.configFile)) : '（默认）'],
+          ['租约 TTL', cfg.leaseTtlMs ? msLabel(Number(cfg.leaseTtlMs)) : ''],
+          ['平台', String(cfg.platform || '') + (cfg.distro ? '/' + String(cfg.distro) : '')],
+        ]
+        var configRows = []
+        for (var c = 0; c < pairs.length; c++) {
+          if (pairs[c][1]) configRows.push({ label: pairs[c][0], value: pairs[c][1] })
+        }
+        dg = {
+          verdict: String(doc.verdict || 'unknown'),
+          ok: doc.ok === true,
+          error: String(diag.error || ''),
+          summary: String((diagnosis && diagnosis.summary) || stt.addonError || '').slice(0, 300),
+          fix: String((diagnosis && diagnosis.fix) || '').slice(0, 240),
+          readyInstances:
+            addon.ready_instances === null || addon.ready_instances === undefined
+              ? null
+              : Number(addon.ready_instances),
+          instanceId: addon.instanceId ? String(addon.instanceId) : '',
+          pluginVersion: String(stt.pluginVersion || (stt.plugin && stt.plugin.version) || ''),
+          provenance: String(
+            (stt.plugin && stt.plugin.provenance && stt.plugin.provenance.verdict) ||
+              prov.verdict ||
+              '',
+          ),
+          blenderVersion: blender.version ? String(blender.version) : '',
+          blenderExe: blender.exe ? String(blender.exe) : '',
+          nextActions: next.slice(0, 3).map(function (x) {
+            return String(x)
+          }),
+          configRows: configRows,
+          ageLabel: diag.ts
+            ? msLabel(Math.max(0, (Number(now) || Date.now()) - Number(diag.ts))) + '前'
+            : '',
+        }
+      }
+
+      var rawText = ''
+      try {
+        rawText = JSON.stringify(
+          {
+            ts: o.ts || null,
+            state: o.state || null,
+            health: o.health || null,
+            jobs: o.jobs || null,
+          },
+          null,
+          1,
+        ).slice(0, OPS_RAW_LIMIT)
+      } catch (e) {
+        rawText = '（原始快照无法序列化）'
+      }
+
+      var log = null
+      if (o.log && typeof o.log === 'object') {
+        log = {
+          id: String(o.log.id || ''),
+          short: shortId(o.log.id),
+          text: String(o.log.text || ''),
+          error: String(o.log.error || ''),
+        }
+      }
+
+      return {
+        ready: !!(o.state || o.health),
+        ts: Number(o.ts) || 0,
+        errors: errors,
+        problems: problems,
+        problemLabel: problems.length ? problems[0] : '',
+        connection: {
+          backendLabel: backend(),
+          backendSource: source,
+          backendSourceLabel: BACKEND_SOURCE_LABELS[source] || source,
+          gatewayPid: Number(gw.pid) || Number(bk.pid) || null,
+          uptimeLabel: bk.uptimeMs ? msLabel(Number(bk.uptimeMs)) : '',
+          rssLabel: bk.rssMB ? String(Math.round(Number(bk.rssMB))) + ' MB' : '',
+          pluginVersion: String(prov.pluginVersion || ''),
+          provenance: String(prov.verdict || ''),
+          channelLabel: channelLabel(chan),
+          inflight: Number(chan.inflight) || 0,
+          lastCmd: String(chan.lastCmd || ''),
+          aiPaused: chan.aiPaused === true,
+          channelError: String(chan.lastError || ''),
+          leaseLabel: leaseLabel(lease),
+          leaseActive: lease && lease.active === true,
+          renderLabel: renderLabel(render),
+          renderBusy: !!(render && render.busy === true),
+        },
+        jobs: {
+          running: Number(jb.running) || 0,
+          total: Number(jb.total) || jobRows.length,
+          rows: jobRows,
+          shown: jobRows.length,
+          log: log,
+          label:
+            '运行中 ' +
+            (Number(jb.running) || 0) +
+            ' ｜ 共 ' +
+            (Number(jb.total) || jobRows.length),
+        },
+        diagnostics: dg,
+        settings: {
+          backend: backend(),
+          backendSource: source,
+          backendSourceLabel: BACKEND_SOURCE_LABELS[source] || source,
+          pollMs: opsPollMs(),
+        },
+        rawText: rawText,
+        opsLabel: channelLabel(chan),
+      }
+    }
+
+    //#endregion
+
     //#region 抽屉（右侧栏不可用时的兜底入口）
     var OVERLAY = { open: false, sessionId: '', subscribers: [] }
     function notifyOverlay() {
@@ -928,6 +1559,14 @@ window.__ModuleLoader__.load({
       if (model.autoBanner)
         children.push(h('div', { key: 'auto', style: PANEL_STYLE.auto }, '● ' + model.autoBanner))
       if (error) children.push(h('div', { key: 'err', style: PANEL_STYLE.err }, error))
+      if (!model.ok && view.ops)
+        children.push(
+          h(
+            'div',
+            { key: 'no-feed', style: PANEL_STYLE.err },
+            '会话面板取不到：待批准与认领表暂不可用（检查 Gateway 端口 / addon 是否已连接）',
+          ),
+        )
       if (!collapsed) {
         // 策略区：manual / auto / deny
         var radios = []
@@ -1051,7 +1690,12 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { key: 'row-' + row.id, style: PANEL_STYLE.row },
-              h('span', { style: PANEL_STYLE.cell }, row.instanceId || row.id),
+              h('span', { style: PANEL_STYLE.cellStrong }, row.instanceId || row.id),
+              h(
+                'span',
+                { style: PANEL_STYLE.cell },
+                String(row.kind || '') + (row.status ? ' · ' + row.status : ''),
+              ),
               h(
                 'span',
                 { style: PANEL_STYLE.cell },
@@ -1077,11 +1721,432 @@ window.__ModuleLoader__.load({
                 { style: PANEL_STYLE.cell },
                 row.grantCount ? 'grant ×' + row.grantCount : '无 grant',
               ),
+              h(
+                'button',
+                {
+                  key: 'copy-' + row.id,
+                  type: 'button',
+                  'data-copy': row.instanceId || row.id,
+                  style: PANEL_STYLE.small,
+                  onClick: (function (inst) {
+                    return function () {
+                      if (view.onCopy)
+                        view.onCopy('blender_session action=attach instance_id=' + inst)
+                    }
+                  })(row.instanceId || row.id),
+                },
+                '复制 attach',
+              ),
             ),
           )
         }
+        var opsBlocks = opsTree(h, view, view.ops)
+        for (var b = 0; b < opsBlocks.length; b++) children.push(opsBlocks[b])
       }
       return h('div', { style: PANEL_STYLE.root }, children)
+    }
+
+    /** 连接行：后端 + 来源 + Gateway 进程 + 版本。 */
+    function connectionLine(conn) {
+      var c = conn && typeof conn === 'object' ? conn : {}
+      var parts = []
+      if (c.backendLabel)
+        parts.push(String(c.backendLabel) + '（' + String(c.backendSourceLabel || '') + '）')
+      if (c.gatewayPid) parts.push('pid ' + c.gatewayPid)
+      if (c.uptimeLabel) parts.push('运行 ' + c.uptimeLabel)
+      if (c.rssLabel) parts.push('RSS ' + c.rssLabel)
+      if (c.pluginVersion) parts.push('插件 ' + c.pluginVersion)
+      if (c.provenance) parts.push(String(c.provenance))
+      return parts.join(' · ')
+    }
+
+    /** 一条作业行：短 id · kind · 状态 · 耗时 · 日志按钮。 */
+    function jobRowTree(h, view, row) {
+      var r = row && typeof row === 'object' ? row : {}
+      var failed = String(r.status || '') === 'failed'
+      return h(
+        'div',
+        { key: 'job-' + String(r.id || r.short), style: PANEL_STYLE.row },
+        h('span', { style: PANEL_STYLE.cellStrong }, r.short),
+        h('span', { style: PANEL_STYLE.cell }, r.kind),
+        h('span', { style: failed ? PANEL_STYLE.err : PANEL_STYLE.cell }, r.statusLabel),
+        h('span', { style: PANEL_STYLE.cell }, r.msLabel),
+        h(
+          'button',
+          {
+            key: 'job-log-' + String(r.id || r.short),
+            type: 'button',
+            'data-job': String(r.id || ''),
+            style: PANEL_STYLE.small,
+            onClick: function () {
+              if (view.onJobLog) view.onJobLog(String(r.id || ''))
+            },
+          },
+          '日志',
+        ),
+      )
+    }
+
+    /** 作业日志尾部（stdout + stderr）。 */
+    function jobLogTree(h, view, log) {
+      var l = log && typeof log === 'object' ? log : {}
+      var kids = [
+        h(
+          'div',
+          { key: 'job-log-title', style: PANEL_STYLE.cardTitle },
+          '作业日志 ' + String(l.short || l.id || ''),
+        ),
+      ]
+      if (l.error) kids.push(h('div', { key: 'job-log-err', style: PANEL_STYLE.err }, l.error))
+      kids.push(h('pre', { key: 'job-log-pre', style: PANEL_STYLE.pre }, String(l.text || '')))
+      kids.push(
+        h(
+          'button',
+          {
+            key: 'job-log-close',
+            type: 'button',
+            'data-action': 'job-log-close',
+            style: PANEL_STYLE.small,
+            onClick: function () {
+              if (view.onJobLogClose) view.onJobLogClose()
+            },
+          },
+          '关闭日志',
+        ),
+      )
+      return h('div', { key: 'job-log', style: PANEL_STYLE.card }, kids)
+    }
+
+    /** 诊断结果：版本 + 缺口 + 修法 + 配置摘要（/doctor 的 config）。 */
+    function diagnosticsTree(h, view, om) {
+      var dg = om.diagnostics
+      var kids = []
+      if (!dg) {
+        kids.push(
+          h(
+            'div',
+            { key: 'diag-hint', style: PANEL_STYLE.meta },
+            '点「运行诊断」取 /status + /doctor：版本自证、addon 就绪、缺失前提、配置与修法（只读，不 spawn 任何进程）',
+          ),
+        )
+        return kids
+      }
+      kids.push(
+        h(
+          'div',
+          { key: 'diag-line', style: PANEL_STYLE.meta },
+          '插件 ' +
+            String(dg.pluginVersion || '-') +
+            ' · provenance ' +
+            String(dg.provenance || '-') +
+            ' · addon 就绪 ' +
+            (dg.readyInstances === null ? '-' : String(dg.readyInstances)) +
+            (dg.instanceId ? ' · ' + String(dg.instanceId) : '') +
+            (dg.ageLabel ? ' · ' + dg.ageLabel : ''),
+        ),
+      )
+      if (dg.blenderVersion || dg.blenderExe)
+        kids.push(
+          h(
+            'div',
+            { key: 'diag-blender', style: PANEL_STYLE.meta },
+            'Blender ' +
+              String(dg.blenderVersion || '-') +
+              (dg.blenderExe ? ' · ' + shortPath(dg.blenderExe) : ''),
+          ),
+        )
+      if (dg.error) kids.push(h('div', { key: 'diag-err', style: PANEL_STYLE.err }, dg.error))
+      if (dg.summary)
+        kids.push(h('div', { key: 'diag-summary', style: PANEL_STYLE.warn }, dg.summary))
+      if (dg.fix)
+        kids.push(h('div', { key: 'diag-fix', style: PANEL_STYLE.meta }, '修法：' + dg.fix))
+      for (var i = 0; i < dg.nextActions.length; i++)
+        kids.push(
+          h(
+            'div',
+            { key: 'diag-next-' + i, style: PANEL_STYLE.meta },
+            '下一步 ' + (i + 1) + '：' + String(dg.nextActions[i]).slice(0, 160),
+          ),
+        )
+      for (var k = 0; k < dg.configRows.length; k++)
+        kids.push(
+          h(
+            'div',
+            { key: 'diag-cfg-' + k, style: PANEL_STYLE.kv },
+            h('span', { style: PANEL_STYLE.kvKey }, dg.configRows[k].label),
+            h('span', { style: PANEL_STYLE.kvValue }, dg.configRows[k].value),
+          ),
+        )
+      return kids
+    }
+
+    /**
+     * 运维区（连接 / 通道 · 作业 · 诊断 · 设置）。只读，动作只有：刷新、看日志、跑诊断、
+     * 改本机后端地址/轮询间隔。没有 attach / release / grant 这类会动会话所有权的按钮。
+     */
+    function opsTree(h, view, opsModel) {
+      var om = opsModel && typeof opsModel === 'object' ? opsModel : panelOpsModel(null, Date.now())
+      var busy = view.busy || ''
+      var conn = om.connection || {}
+      var out = []
+
+      var connKids = [
+        h(
+          'div',
+          { key: 'ops-conn-head', style: PANEL_STYLE.sectionHead },
+          h('span', { style: PANEL_STYLE.sectionTitle }, '连接 / 通道'),
+          h(
+            'span',
+            { style: om.ready ? PANEL_STYLE.meta : PANEL_STYLE.err },
+            om.ready ? '实时' : '取不到',
+          ),
+          h(
+            'button',
+            {
+              key: 'ops-refresh',
+              type: 'button',
+              'data-action': 'ops-refresh',
+              disabled: busy === 'ops',
+              style: PANEL_STYLE.small,
+              onClick: function () {
+                if (view.onRefresh) view.onRefresh()
+              },
+            },
+            busy === 'ops' ? '刷新中…' : '刷新',
+          ),
+        ),
+        h('div', { key: 'ops-gw', style: PANEL_STYLE.meta }, connectionLine(conn)),
+        h(
+          'div',
+          { key: 'ops-chan', style: PANEL_STYLE.meta },
+          String(conn.channelLabel || '') + (conn.lastCmd ? ' · 最后命令 ' + conn.lastCmd : ''),
+        ),
+        h(
+          'div',
+          { key: 'ops-lease', style: conn.leaseActive ? PANEL_STYLE.warn : PANEL_STYLE.meta },
+          String(conn.leaseLabel || '') + ' ｜ ' + String(conn.renderLabel || ''),
+        ),
+      ]
+      for (var p = 0; p < (om.problems || []).length; p++)
+        connKids.push(h('div', { key: 'ops-prob-' + p, style: PANEL_STYLE.err }, om.problems[p]))
+      out.push(h('div', { key: 'ops-conn', style: PANEL_STYLE.section }, connKids))
+
+      var jobKids = [
+        h(
+          'div',
+          { key: 'ops-jobs-head', style: PANEL_STYLE.sectionHead },
+          h('span', { style: PANEL_STYLE.sectionTitle }, '作业'),
+          h('span', { style: PANEL_STYLE.meta }, String((om.jobs && om.jobs.label) || '')),
+          h(
+            'button',
+            {
+              key: 'ops-jobs-toggle',
+              type: 'button',
+              'data-action': 'ops-jobs-toggle',
+              style: PANEL_STYLE.small,
+              onClick: function () {
+                if (view.onToggleOps) view.onToggleOps()
+              },
+            },
+            view.opsOpen ? '收起' : '展开',
+          ),
+        ),
+      ]
+      if (view.opsOpen) {
+        var rows = (om.jobs && om.jobs.rows) || []
+        if (!rows.length)
+          jobKids.push(
+            h(
+              'div',
+              { key: 'ops-jobs-empty', style: PANEL_STYLE.meta },
+              '还没有作业（blender_run 提交后出现在这里）',
+            ),
+          )
+        for (var i = 0; i < rows.length; i++) jobKids.push(jobRowTree(h, view, rows[i]))
+        if (om.jobs && om.jobs.log) jobKids.push(jobLogTree(h, view, om.jobs.log))
+      }
+      out.push(h('div', { key: 'ops-jobs', style: PANEL_STYLE.section }, jobKids))
+
+      var diagHead = h(
+        'div',
+        { key: 'ops-diag-head', style: PANEL_STYLE.sectionHead },
+        h('span', { style: PANEL_STYLE.sectionTitle }, '诊断'),
+        h(
+          'span',
+          {
+            style: om.diagnostics
+              ? om.diagnostics.ok
+                ? PANEL_STYLE.okText
+                : PANEL_STYLE.warn
+              : PANEL_STYLE.meta,
+          },
+          om.diagnostics
+            ? om.diagnostics.ok
+              ? 'verdict ' + om.diagnostics.verdict
+              : '有缺口 · ' + om.diagnostics.verdict
+            : '未诊断',
+        ),
+        h(
+          'button',
+          {
+            key: 'ops-diag-run',
+            type: 'button',
+            'data-action': 'ops-diagnose',
+            disabled: busy === 'diagnose',
+            style: PANEL_STYLE.small,
+            onClick: function () {
+              if (view.onDiagnose) view.onDiagnose()
+            },
+          },
+          busy === 'diagnose' ? '诊断中…' : '运行诊断',
+        ),
+      )
+      var diagKids = [diagHead]
+      if (view.opsOpen) diagKids = diagKids.concat(diagnosticsTree(h, view, om))
+      out.push(h('div', { key: 'ops-diag', style: PANEL_STYLE.section }, diagKids))
+
+      var setKids = [
+        h(
+          'div',
+          { key: 'ops-set-head', style: PANEL_STYLE.sectionHead },
+          h('span', { style: PANEL_STYLE.sectionTitle }, '设置（本机）'),
+          h(
+            'span',
+            { style: PANEL_STYLE.meta },
+            '前端缓存 ' + String(om.settings && om.settings.pollMs) + 'ms',
+          ),
+          h(
+            'button',
+            {
+              key: 'ops-set-toggle',
+              type: 'button',
+              'data-action': 'settings-toggle',
+              style: PANEL_STYLE.small,
+              onClick: function () {
+                if (view.onToggleSettings) view.onToggleSettings()
+              },
+            },
+            view.settingsOpen ? '收起' : '展开',
+          ),
+        ),
+      ]
+      if (view.settingsOpen) {
+        setKids.push(
+          h(
+            'div',
+            { key: 'ops-set-backend', style: PANEL_STYLE.inputRow },
+            h('span', { style: PANEL_STYLE.meta }, '后端地址'),
+            h('input', {
+              key: 'ops-set-backend-input',
+              type: 'text',
+              spellCheck: false,
+              value:
+                view.backendDraft === undefined
+                  ? String(conn.backendLabel || '')
+                  : view.backendDraft,
+              placeholder: DEFAULT_BACKEND,
+              style: PANEL_STYLE.input,
+              onChange: function (ev) {
+                if (view.onBackendDraft) view.onBackendDraft(ev && ev.target ? ev.target.value : '')
+              },
+            }),
+            h(
+              'button',
+              {
+                key: 'ops-set-save',
+                type: 'button',
+                'data-action': 'backend-save',
+                style: PANEL_STYLE.small,
+                onClick: function () {
+                  if (view.onBackendSave) view.onBackendSave()
+                },
+              },
+              '保存',
+            ),
+            h(
+              'button',
+              {
+                key: 'ops-set-reset',
+                type: 'button',
+                'data-action': 'backend-reset',
+                style: PANEL_STYLE.small,
+                onClick: function () {
+                  if (view.onBackendReset) view.onBackendReset()
+                },
+              },
+              '恢复默认',
+            ),
+          ),
+          h(
+            'div',
+            { key: 'ops-set-note', style: PANEL_STYLE.meta },
+            '当前 ' +
+              String(conn.backendLabel || '') +
+              ' · 来源 ' +
+              String(conn.backendSourceLabel || '') +
+              '（只写本机 localStorage）',
+          ),
+          h(
+            'div',
+            { key: 'ops-set-poll', style: PANEL_STYLE.inputRow },
+            h(
+              'span',
+              { style: PANEL_STYLE.meta },
+              '轮询间隔 ' + String(om.settings && om.settings.pollMs) + 'ms',
+            ),
+            h(
+              'button',
+              {
+                key: 'ops-set-poll-slow',
+                type: 'button',
+                'data-action': 'poll-slow',
+                style: PANEL_STYLE.small,
+                onClick: function () {
+                  if (view.onPollSlow) view.onPollSlow()
+                },
+              },
+              '慢一点',
+            ),
+            h(
+              'button',
+              {
+                key: 'ops-set-poll-fast',
+                type: 'button',
+                'data-action': 'poll-fast',
+                style: PANEL_STYLE.small,
+                onClick: function () {
+                  if (view.onPollFast) view.onPollFast()
+                },
+              },
+              '快一点',
+            ),
+          ),
+          h(
+            'div',
+            { key: 'ops-set-raw', style: PANEL_STYLE.inputRow },
+            h('span', { style: PANEL_STYLE.meta }, '原始快照（排错用）'),
+            h(
+              'button',
+              {
+                key: 'ops-set-raw-toggle',
+                type: 'button',
+                'data-action': 'raw-toggle',
+                style: PANEL_STYLE.small,
+                onClick: function () {
+                  if (view.onRawToggle) view.onRawToggle()
+                },
+              },
+              view.rawOpen ? '隐藏' : '显示',
+            ),
+          ),
+        )
+        if (view.rawOpen)
+          setKids.push(
+            h('pre', { key: 'ops-set-raw-pre', style: PANEL_STYLE.pre }, String(om.rawText || '')),
+          )
+      }
+      out.push(h('div', { key: 'ops-set', style: PANEL_STYLE.section }, setKids))
+      return out
     }
 
     var PANEL_STYLE = {
@@ -1181,6 +2246,51 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       headerButton: { padding: '2px 8px', fontSize: '12px', cursor: 'pointer' },
+      section: {
+        marginTop: '10px',
+        paddingTop: '6px',
+        borderTop: '1px solid rgba(127,127,127,.25)',
+      },
+      sectionHead: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        flexWrap: 'wrap',
+        marginBottom: '4px',
+      },
+      sectionTitle: { fontWeight: 600 },
+      small: { padding: '1px 6px', fontSize: '11px', cursor: 'pointer' },
+      cellStrong: { whiteSpace: 'nowrap', fontWeight: 600 },
+      okText: { color: '#2f7d32' },
+      warn: { color: '#b26a00' },
+      kv: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+      kvKey: { opacity: 0.6, minWidth: '64px' },
+      kvValue: { wordBreak: 'break-all' },
+      pre: {
+        marginTop: '4px',
+        maxHeight: '220px',
+        overflow: 'auto',
+        padding: '6px',
+        fontSize: '11px',
+        lineHeight: '1.35',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+        background: 'rgba(127,127,127,.12)',
+        borderRadius: '4px',
+      },
+      inputRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        flexWrap: 'wrap',
+        marginTop: '4px',
+      },
+      input: {
+        flex: '1 1 200px',
+        minWidth: '160px',
+        padding: '2px 6px',
+        fontSize: '12px',
+      },
     }
     //#endregion
 
@@ -1220,6 +2330,27 @@ window.__ModuleLoader__.load({
         var confirmTuple = React.useState('')
         var confirmAuto = confirmTuple[0]
         var setConfirmAuto = confirmTuple[1]
+        var opsTuple = React.useState(OPS_FEED.payload)
+        var ops = opsTuple[0]
+        var setOps = opsTuple[1]
+        var opsErrTuple = React.useState(OPS_FEED.error)
+        var opsError = opsErrTuple[0]
+        var setOpsError = opsErrTuple[1]
+        var opsOpenTuple = React.useState(readStoredFlag(LS_OPS_OPEN_KEY, false))
+        var opsOpen = opsOpenTuple[0]
+        var setOpsOpen = opsOpenTuple[1]
+        var settingsOpenTuple = React.useState(readStoredFlag(LS_SETTINGS_OPEN_KEY, false))
+        var settingsOpen = settingsOpenTuple[0]
+        var setSettingsOpen = settingsOpenTuple[1]
+        var rawOpenTuple = React.useState(readStoredFlag(LS_RAW_KEY, false))
+        var rawOpen = rawOpenTuple[0]
+        var setRawOpen = rawOpenTuple[1]
+        var draftTuple = React.useState(backend())
+        var draft = draftTuple[0]
+        var setDraft = draftTuple[1]
+        var pollTuple = React.useState(0)
+        var pollTick = pollTuple[0]
+        var setPollTick = pollTuple[1]
 
         var model = React.useMemo
           ? React.useMemo(
@@ -1229,6 +2360,15 @@ window.__ModuleLoader__.load({
               [payload, nowTs],
             )
           : panelModel(payload, nowTs)
+
+        var opsModel = React.useMemo
+          ? React.useMemo(
+              function () {
+                return panelOpsModel(ops, nowTs)
+              },
+              [ops, nowTs, pollTick],
+            )
+          : panelOpsModel(ops, nowTs)
 
         React.useEffect(
           function () {
@@ -1240,6 +2380,14 @@ window.__ModuleLoader__.load({
           },
           [sessionId],
         )
+
+        // 运维面只有一条轮询（多面板位共享），与 sessionId 无关。
+        React.useEffect(function () {
+          return subscribeOps(function (feed) {
+            setOps(feed.payload)
+            setOpsError(feed.error || '')
+          })
+        }, [])
 
         React.useEffect(function () {
           var t = window.setInterval(function () {
@@ -1293,16 +2441,140 @@ window.__ModuleLoader__.load({
           writeOpen(next)
         }
 
-        if (!model.ok && !error) return null
+        async function refreshOps() {
+          if (busy) return
+          setBusy('ops')
+          try {
+            await refreshOpsFeed()
+            setOpsError('')
+          } catch (e) {
+            setOpsError('刷新失败：' + errText(e))
+          }
+          setBusy('')
+        }
+
+        async function runDiagnose() {
+          if (busy) return
+          setBusy('diagnose')
+          if (!opsOpen) {
+            setOpsOpen(true)
+            storeFlag(LS_OPS_OPEN_KEY, true)
+          }
+          try {
+            var d = await refreshOpsDiagnostics()
+            setOpsError(d && d.error ? d.error : '')
+          } catch (e) {
+            setOpsError('诊断失败：' + errText(e))
+          }
+          setBusy('')
+        }
+
+        async function showJobLog(id) {
+          if (busy) return
+          setBusy('log')
+          try {
+            var log = await openOpsJobLog(id)
+            setOpsError(log && log.error ? log.error : '')
+          } catch (e) {
+            setOpsError('日志取不到：' + errText(e))
+          }
+          setBusy('')
+        }
+
+        function closeJobLog() {
+          closeOpsJobLog()
+        }
+
+        function toggleOps() {
+          var next = !opsOpen
+          setOpsOpen(next)
+          storeFlag(LS_OPS_OPEN_KEY, next)
+        }
+
+        function toggleSettings() {
+          var next = !settingsOpen
+          setSettingsOpen(next)
+          storeFlag(LS_SETTINGS_OPEN_KEY, next)
+        }
+
+        function toggleRaw() {
+          var next = !rawOpen
+          setRawOpen(next)
+          storeFlag(LS_RAW_KEY, next)
+        }
+
+        function draftChanged(value) {
+          setDraft(String(value === null || value === undefined ? '' : value))
+        }
+
+        function saveBackend() {
+          var raw = String(draft || '').trim()
+          var v = normalizeBackendOverride(raw)
+          if (raw && !v) {
+            setOpsError('后端地址要以 http:// 或 https:// 开头')
+            return
+          }
+          if (!setBackendOverride(v)) {
+            setOpsError('浏览器拒绝写入 localStorage')
+            return
+          }
+          setDraft(v || '')
+          setOpsError('')
+          refreshOpsFeed()
+        }
+
+        function resetBackend() {
+          if (!setBackendOverride('')) {
+            setOpsError('浏览器拒绝写入 localStorage')
+            return
+          }
+          setDraft('')
+          setOpsError('')
+          refreshOpsFeed()
+        }
+
+        function pollSlower() {
+          storeOpsPollMs(opsPollMs() * 2)
+          setPollTick(Date.now())
+        }
+
+        function pollFaster() {
+          storeOpsPollMs(opsPollMs() / 2)
+          setPollTick(Date.now())
+        }
+
+        function copySomething(text) {
+          if (!copyText(text)) setOpsError('复制失败：浏览器不允许访问剪贴板')
+        }
+
+        if (!sessionId && !model.ok && !error && !opsError) return null
         return panelTree(React.createElement, {
           model: model,
-          error: error,
+          ops: opsModel,
+          error: error || opsError,
           busy: busy,
           collapsed: collapsed,
           confirmAuto: confirmAuto,
+          opsOpen: opsOpen,
+          settingsOpen: settingsOpen,
+          rawOpen: rawOpen,
+          backendDraft: draft,
           onDecide: decide,
           onPolicy: onPolicy,
           onToggle: toggle,
+          onToggleOps: toggleOps,
+          onToggleSettings: toggleSettings,
+          onRefresh: refreshOps,
+          onDiagnose: runDiagnose,
+          onJobLog: showJobLog,
+          onJobLogClose: closeJobLog,
+          onBackendDraft: draftChanged,
+          onBackendSave: saveBackend,
+          onBackendReset: resetBackend,
+          onPollSlow: pollSlower,
+          onPollFast: pollFaster,
+          onRawToggle: toggleRaw,
+          onCopy: copySomething,
         })
       }
       return BlenderSessionPanel
@@ -1750,6 +3022,35 @@ window.__ModuleLoader__.load({
       PANEL_TAB_ID: PANEL_TAB_ID,
       PANEL_TAB_KIND: PANEL_TAB_KIND,
       PANEL_OPEN_KEY: PANEL_OPEN_KEY,
+      // v3.5（面板运维面：连接 / 通道 · 作业 · 诊断 · 设置）
+      panelOpsModel: panelOpsModel,
+      opsTree: opsTree,
+      connectionLine: connectionLine,
+      jobRowTree: jobRowTree,
+      jobLogTree: jobLogTree,
+      diagnosticsTree: diagnosticsTree,
+      fetchOpsSnapshot: fetchOpsSnapshot,
+      fetchDiagnostics: fetchDiagnostics,
+      fetchJobLog: fetchJobLog,
+      opsUrlState: opsUrlState,
+      opsUrlHealth: opsUrlHealth,
+      opsUrlJobs: opsUrlJobs,
+      opsUrlJobLog: opsUrlJobLog,
+      opsUrlStatus: opsUrlStatus,
+      opsUrlDoctor: opsUrlDoctor,
+      normalizeBackendOverride: normalizeBackendOverride,
+      backendSource: backendSource,
+      shortId: shortId,
+      jobStatusLabel: jobStatusLabel,
+      channelLabel: channelLabel,
+      leaseLabel: leaseLabel,
+      renderLabel: renderLabel,
+      scopeLabel: scopeLabel,
+      OPS_POLL_BUSY_MS: OPS_POLL_BUSY_MS,
+      OPS_POLL_IDLE_MS: OPS_POLL_IDLE_MS,
+      OPS_JOB_LIMIT: OPS_JOB_LIMIT,
+      OPS_FEED: OPS_FEED,
+      LS_OPS_POLL_KEY: LS_OPS_POLL_KEY,
     }
     return module.exports
   },

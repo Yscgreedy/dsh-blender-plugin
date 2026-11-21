@@ -974,7 +974,7 @@ export class SessionRegistry {
     c: CallerIdentity,
     sessionId: string | undefined,
     scopes: unknown,
-    opts: { py?: boolean; waitMs?: number } = {},
+    opts: { py?: boolean; waitMs?: number; scopeDeclared?: boolean } = {},
   ): SessionResult<{ sessionId: string; mode: 'main' | 'grant'; grantId?: string }> {
     this.prune()
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
@@ -1023,19 +1023,46 @@ export class SessionRegistry {
       grant.expiresAt = grant.heartbeatAt + ttl
       return { ok: true, sessionId: session.id, mode: 'grant', grantId: grant.id }
     }
+    return this.writeScopeFailure(session, c, effective, opts)
+  }
+
+  /**
+   * 「没有覆盖 grant」的拒绝回执。py + 未声明 scope 单独说清：viewer 收到的
+   * "another DSH session owns this" 听起来像整条通道被占，实际只差一个 write_scope
+   * （py 是唯一没有静态 scope 的写通道；读用 blender_see / blender_inspect）。
+   */
+  private writeScopeFailure(
+    session: SessionRecord,
+    c: CallerIdentity,
+    effective: unknown,
+    opts: { py?: boolean; scopeDeclared?: boolean },
+  ): SessionResult<{ sessionId: string; mode: 'main' | 'grant'; grantId?: string }> {
     const otherSession = !!session.owner && !ownerMatches(session.owner, c)
-    return fail(
-      otherSession ? 'session_in_use' : 'scope_required',
-      'session',
-      otherSession
+    // 只有 HTTP 门明确说"没有声明 scope"（scopeDeclared=false）才改口径；
+    // 直接调 registry 的调用方（测试/内部）传了 scopes 就算已声明。
+    const pyNeedsScope = opts.py === true && opts.scopeDeclared === false
+    const code = pyNeedsScope ? 'scope_required' : otherSession ? 'session_in_use' : 'scope_required'
+    const rootCause = pyNeedsScope
+      ? 'Python writes are authorized by a declared write_scope; this call declared none (is_mine=' +
+        String(!otherSession) +
+        ')'
+      : otherSession
         ? 'another DSH session owns this GUI session (is_mine=false)'
-        : 'the write scope was not granted to this agent',
-      otherSession
+        : 'the write scope was not granted to this agent'
+    const fix = pyNeedsScope
+      ? 'declare write_scope=collection:COL / prefix:P_ (matching a grant) for a Python write; ' +
+        'for reads use blender_see / blender_inspect, or ask the owner for a grant'
+      : otherSession
         ? "writes into someone else's scene are refused: ask the owner for " +
-            "blender_session action=grant scopes=['collection:…'] (targetAgentId=…) and declare the same " +
-            'write_scope on this call; read-only ops are allowed and carry owner/is_mine=false'
-        : 'ask the main agent to grant the declared scope',
-      this.writeFailureEvidence(session, c, effective, otherSession),
+          "blender_session action=grant scopes=['collection:…'] (targetAgentId=…) and declare the same " +
+          'write_scope on this call; read-only ops are allowed and carry owner/is_mine=false'
+        : 'ask the main agent to grant the declared scope'
+    return fail(
+      code,
+      'session',
+      rootCause,
+      fix,
+      this.writeFailureEvidence(session, c, effective),
     )
   }
 
@@ -1044,13 +1071,15 @@ export class SessionRegistry {
     session: SessionRecord,
     c: CallerIdentity,
     effective: unknown,
-    otherSession: boolean,
   ): Record<string, unknown> {
+    // 附加②：写失败证据曾用 otherSession 推 is_mine，对 owner 家族的子代理会与
+    // status/list 的 is_mine 相反（那边按 owner 家族判）。两处用同一判据。
+    const mine = !session.owner || ownerMatches(session.owner, c)
     return {
       sessionId: session.id,
       owner: session.owner,
-      is_mine: !otherSession,
-      borrowed: otherSession && sameHost(session.owner, c),
+      is_mine: mine,
+      borrowed: !mine && sameHost(session.owner, c),
       requested: effective,
       required_scope: effective,
       caller: callerView(c),

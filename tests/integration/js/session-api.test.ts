@@ -303,6 +303,56 @@ describe('Gateway session API', () => {
     expect(after.json.code).toBe('scope_required')
   })
 
+  it('4.8b C-4: wait_ms 真的等 py 锁，而不是 6ms 就回 py_busy', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const backend = await startBackend()
+    closers.push(() => backend.stop())
+    const addon = await startFakeWsAddon({
+      gatewayPort: backend.port,
+      instanceId: 'inst-1',
+      behavior: async (type: string, params: Record<string, unknown>) => {
+        if (type === 'execute_code' && String(params.code || '').includes('print(1)')) {
+          await gate
+          return { status: 'success', result: { ok: true, ms: 1, stdout: 'done', executed: true } }
+        }
+        return { status: 'success', result: { type } }
+      },
+    })
+    await addon.ready
+    closers.push(() => addon.close())
+    const attached = await backend.post('/lease', { action: 'attach' }, main)
+    const sessionId = String(attached.json.session.id)
+    const granted = await backend.post(
+      '/lease',
+      { action: 'grant', sessionId, targetAgentId: 'agent-sub', scopes: ['prefix:P_'] },
+      main,
+    )
+    expect(granted.status).toBe(200)
+
+    const first = backend.post('/act', { code: 'print(1)', py: true }, main)
+    await waitFor(async () =>
+      (addon.requests as Array<{ type: string }>).some((r) => r.type === 'execute_code'),
+    )
+
+    const t0 = Date.now()
+    const waiting = backend.post(
+      '/act',
+      { code: 'print(2)', py: true, waitMs: 2000, write_scope: 'prefix:P_' },
+      sub,
+    )
+    // 300ms 后释放 holder：等锁的那次调用应当拿到 200，而不是立刻 409 py_busy
+    setTimeout(release, 300)
+    const done = await waiting
+    const waited = Date.now() - t0
+    expect(done.status).toBe(200)
+    expect(done.json.ok).toBe(true)
+    expect(waited).toBeGreaterThanOrEqual(250)
+    expect((await first).status).toBe(200)
+  })
+
   it('4.8 gates txn restore behind the exclusive scope and a human pause', async () => {
     const { backend, addons } = await setup()
     const attached = await backend.post('/lease', { action: 'attach' }, main)

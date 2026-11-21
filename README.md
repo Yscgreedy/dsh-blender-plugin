@@ -149,12 +149,12 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ## Tools
 
-The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (38 families / 269 ops), so the surface stays small.
+The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (38 families / 270 ops), so the surface stays small.
 
 | Tool | What it gives you |
 |---|---|
 | blender_session | GUI session lifecycle and ownership: list/status/doctor, attach, claim/release, grant/revoke write scopes, pause state, presence, and `action=txn` snapshots/marks for rollback. Blender and the Gateway are host-managed. |
-| blender_op | The capability catalog (`op="catalog"`, 38 families / 269 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
+| blender_op | The capability catalog (`op="catalog"`, 38 families / 270 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
 | blender_py | Runs Python in the attached GUI session with a persistent kernel; `see=true` returns a frame. GUI-only: there is no headless fallback. |
 | blender_see | GUI capture only: `viewpoint=viewport|camera|custom`, `mode=frame|sequence`, fixed aspect/size tiers. Camera animation and batch renders go to `blender_run(kind="render")`. |
 | blender_run | The only job entry point: `action=submit` with `kind=render|headless` returns a job id immediately; `status/wait/collect/cancel/list` manage it; `action=tune` covers render performance. |

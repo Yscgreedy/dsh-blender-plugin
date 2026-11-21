@@ -10,6 +10,7 @@ import { BACKEND_HINT } from '../../constants.js'
 import type { AvailabilityStage } from '../../contracts/availability.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
+import { execCaller } from '../../host/exec-context.js'
 import { backendPost, jsonPayload } from '../../host/http.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { workspaceNote, workspacePayload, workspaceRoots } from '../../host/workspace.js'
@@ -104,6 +105,9 @@ const HEADLESS_KEYS = [
   'outdir',
   'timeout_ms',
   'engine',
+  // C-9：headless 也接受设备参数（以前被白名单静默丢弃）
+  'device',
+  'compute_device_type',
   'preload',
   'factory_startup',
   'bootstrap',
@@ -374,14 +378,30 @@ export async function executeRun(
   if (action === 'submit') return submitRun(ctx, port, args, exec)
   if (action === 'list') {
     const payload: Record<string, unknown> = { op: 'list' }
-    for (const k of ['state', 'kind', 'owner']) if (present(args[k])) payload[k] = args[k]
+    for (const k of ['state', 'kind']) if (present(args[k])) payload[k] = args[k]
+    // C-13：默认只看**本会话**，`owner=all` 才放开；默认 20 条，`limit=0` = 不分页。
+    const ownerArg = text(args.owner).trim()
+    const callerSession = String(execCaller()?.dshSessionId || '')
+    const owner = ownerArg === 'all' ? '' : ownerArg && ownerArg !== 'me' ? ownerArg : callerSession
+    if (owner) payload.owner = owner
+    const limitRaw = args.limit === undefined ? 20 : Number(args.limit)
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(0, Math.trunc(limitRaw))) : 20
+    if (limit > 0) payload.limit = limit
+    const offset = Math.max(0, Math.trunc(Number(args.offset) || 0))
+    if (offset > 0) payload.offset = offset
+    if (Number(args.since_ms) > 0) payload.since_ms = Number(args.since_ms)
     const body = await postQueue(port, payload, 60000)
     if (body.ok !== true) return failureOf(body, action)
     const jobs = Array.isArray(body.jobs) ? (body.jobs as Array<Record<string, unknown>>) : []
+    const total = Number(body.total) || jobs.length
+    const pageOffset = Number(body.offset) || 0
     return {
-      text: formatList(jobs),
+      text: formatList(jobs, { total, offset: pageOffset }),
       jobs: listRows(jobs),
       count: jobs.length,
+      total,
+      offset: pageOffset,
+      owner: owner || 'all',
       envelope: listEnvelope(jobs),
     }
   }

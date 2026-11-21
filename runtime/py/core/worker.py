@@ -1007,12 +1007,15 @@ def _action_fcurves(act):
     不要用 hasattr(act, "fcurves") 判版本：第三方 shim 可能只暴露第一个
     channelbag，会把其它 slot 静默漏掉。结构判据是 act.layers。
     """
-    try:
-        from bpy_extras import anim_utils
+    layered = getattr(act, "layers", None) is not None
+    if layered:
         slots = list(getattr(act, "slots", None) or [])
-        if getattr(act, "layers", None) is not None:
-            curves = []
-            seen = set()
+        curves = []
+        seen = set()
+        # 首选 bpy_extras；拿不到就退回 Action API（strip.channelbag），不再掉进
+        # act.fcurves（layered action 上它不存在，旧写法会静默返回 []）。
+        try:
+            from bpy_extras import anim_utils
             for slot in slots:
                 bag = anim_utils.action_get_channelbag_for_slot(act, slot)
                 if bag is None:
@@ -1024,8 +1027,28 @@ def _action_fcurves(act):
                     seen.add(key)
                     curves.append(fc)
             return curves
-    except Exception:
-        pass
+        except Exception:
+            pass
+        try:
+            for layer in getattr(act, "layers", None) or []:
+                for strip in getattr(layer, "strips", None) or []:
+                    for slot in slots:
+                        try:
+                            bag = strip.channelbag(slot)
+                        except Exception:
+                            bag = None
+                        if bag is None:
+                            continue
+                        for fc in getattr(bag, "fcurves", None) or []:
+                            key = (fc.data_path, fc.array_index)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            curves.append(fc)
+            return curves
+        except Exception as exc:
+            # 两条路都失败：交给调用方记进 domains，不要假装"没有动画"
+            raise RuntimeError("layered action fcurves unreadable: %s" % exc)
     try:
         return list(act.fcurves)
     except Exception:
@@ -1056,7 +1079,8 @@ def _hash_actions(actions, h, domains):
                 for mod in getattr(fc, "modifiers", []) or []:
                     h.update(("FM|%s|%s" % (getattr(mod, "type", ""), getattr(mod, "mute", ""))).encode("utf-8"))
         except Exception:
-            pass
+            # 动画域读失败必须可见：旧写法 pass，digest 假装稳定。
+            domains.append("actions_unreadable")
 
 
 def _eval_stats(scene_objects):

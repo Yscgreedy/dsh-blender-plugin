@@ -12,7 +12,7 @@ function buildOpTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_op',
     description:
-      '【算子】执行 catalog 的 plan 算子（38 family / 269 op；op=catalog 看目录），以及参数搜索 loop、对象精简 opt、配方库 preset。' +
+      '【算子】执行 catalog 的 plan 算子（38 family / 270 op；op=catalog 看目录），以及参数搜索 loop、对象精简 opt、配方库 preset。' +
       '执行型 op 需要 ready 的 GUI 会话；catalog / 只读 op / args.dry_run=true 不需要会话，也不会启动 Blender。' +
       '无会话 + file：转本地作业；headless=true 强制无头（有 GUI 也不抢）。' +
       '写文件/改场景的算子按 write scope 申请 grant；写类操作需要人类未暂停。',

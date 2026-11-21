@@ -49,6 +49,11 @@ function actResponseBody(
     file: o.file || null,
     marker_missing: !!o.marker_missing,
     sceneEpoch: o.sceneEpoch || null,
+    scene_before: o.sceneBefore || null,
+    scene_after: o.sceneAfter || null,
+    artifacts: Array.isArray(o.artifacts) ? o.artifacts : [],
+    changed_objects_mine: Array.isArray(o.changedObjectsMine) ? o.changedObjectsMine : [],
+    changed_objects_other: Array.isArray(o.changedObjectsOther) ? o.changedObjectsOther : [],
     errorKind: o.errorKind || (o.error ? 'execution' : null),
     // 反馈 4: one receipt for 'did it change': content delta + counts.
     changed: typeof o.changed === 'boolean' ? o.changed : null,
@@ -67,6 +72,7 @@ function actResponseBody(
     warnings: Array.isArray(o.warnings) ? o.warnings : [],
     no_scene_change: o.noSceneChange === true,
     has_ops: o.hasOps === true,
+    file_ops: o.fileOps === true,
     // 反馈 1: outside the grant = visible refusal, not a silent write.
     scope_violations: scopeViolations,
     rolled_back: Array.isArray(o.rolledBack) ? o.rolledBack : [],
@@ -134,12 +140,17 @@ export function createActRoutes(E: HttpRouteDeps) {
       } catch (e) {
         payload = { code: raw }
       }
-      const gate = leaseGate(payload)
+      // C-4: py 的授权与排队必须**一次**在 beginPy 里完成（它带 waitForPyLock）。
+      // 若先过 leaseGate，evaluateWriteGate 会在等待之前就回 py_busy（或被
+      // scope 检查抢先回 scope_required），wait_ms 永远失效（实测 6–12 ms 返回）。
+      // 没有调用方身份的老客户端仍走 leaseGate 的 legacy 路径。
+      const isPy = payload.py === true
+      const caller = isPy ? currentCaller() : null
+      const gate = isPy && caller ? null : leaseGate(payload)
       if (gate) {
         json(res, 409, gate)
         return
       }
-      const caller = payload.py === true ? currentCaller() : null
       const registry = caller ? E.sessionRegistry : null
       let pyHeld = false
       // 反馈 1: a grant-holder runs Python under its declared scope; the objects

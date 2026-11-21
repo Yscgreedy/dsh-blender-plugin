@@ -533,6 +533,43 @@ def _state_material_sig(mat):
     return h.hexdigest()[:8]
 
 
+def _state_anim_sig(ob, h):
+    """动画域签名（C-14）：action 名 + slot id + fcurve 数 + 每条前 8 个关键帧。
+
+    以前 state_probe 完全不看动画：只改 fcurve 时回执说 changed=false（假阴性）。
+    """
+    try:
+        ad = getattr(ob, "animation_data", None)
+        act = getattr(ad, "action", None) if ad is not None else None
+        if act is None:
+            _state_text(h, "N", "none")
+            return
+        slot = getattr(ad, "action_slot", None)
+        slot_id = ""
+        try:
+            slot_id = str(getattr(slot, "identifier", "") or getattr(slot, "name_display", ""))
+        except Exception:
+            slot_id = ""
+        _state_text(h, "N", "%s|%s" % (str(getattr(act, "name", "")), slot_id))
+        try:
+            curves = action_fcurves(act, slot)
+        except Exception:
+            curves = []
+        _state_text(h, "n", str(len(curves)))
+        for fcurve in curves[:64]:
+            try:
+                points = getattr(fcurve, "keyframe_points", None)
+                count = len(points) if points is not None else 0
+                _state_text(h, "C", "%s|%d" % (str(getattr(fcurve, "data_path", "")), count))
+                for index in range(0, min(8, count)):
+                    point = points[index]
+                    _state_text(h, "c", "%.5f,%.5f" % (float(point.co[0]), float(point.co[1])))
+            except Exception:
+                continue
+    except Exception:
+        _state_text(h, "N", "unreadable")
+
+
 def _state_object_sig(ob, budget):
     """单个对象签名 + 计数；返回 (sig, counts, remaining_budget)。"""
     import hashlib
@@ -576,6 +613,7 @@ def _state_object_sig(ob, budget):
         _state_text(h, "D", "|".join(mods))
     except Exception:
         pass
+    _state_anim_sig(ob, h)
     counts, budget = _state_mesh_sig(ob, h, budget)
     return h.hexdigest()[:8], counts, budget
 
@@ -655,11 +693,18 @@ def state_probe(budget=None):
         objects = sorted(bpy.data.objects, key=lambda o: o.name)
     except Exception:
         objects = []
+    # 坐标预算按**每对象固定上限**分（C-7）：以前是跨对象共享的递减预算，增删一个对象会让
+    # 后面一批对象在 "有坐标 / truncated" 之间翻转，制造出没人动过的 changed_objects 假阳性。
+    per_object = max(0, int(budget) // max(1, len(objects))) if len(objects) else 0
+    coord_truncated = False
     for ob in objects:
         try:
-            sig, counts, budget = _state_object_sig(ob, budget)
+            sig, counts, _ = _state_object_sig(ob, per_object)
+            if int(counts.get("verts") or 0) * 3 > per_object:
+                coord_truncated = True
         except Exception:
             sig, counts = "unreadable", {"verts": 0, "faces": 0, "edges": 0}
+            coord_truncated = True
         sigs[ob.name] = sig
         h.update(sig.encode("utf-8"))
         info["objects"] += 1
@@ -685,7 +730,7 @@ def state_probe(budget=None):
         "material_sigs": material_sigs,
         "object_collections": object_collections,
         "edit_mode": edit_mode,
-        "truncated": bool(budget <= 0),
+        "truncated": bool(coord_truncated),
         "ms": int((_time.time() - t0) * 1000),
     }
 

@@ -1,6 +1,6 @@
 {
   "families_count": 38,
-  "ops_count": 269,
+  "ops_count": 270,
   "tools_count": 6,
   "tools": [
     "blender_inspect",
@@ -41,7 +41,7 @@
     },
     {
       "f": "contract",
-      "ops": 19
+      "ops": 20
     },
     {
       "f": "deliver",

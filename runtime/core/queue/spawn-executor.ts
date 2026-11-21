@@ -223,10 +223,17 @@ export class SpawnJobExecutor implements JobExecutor {
           }
         }
         const render = channelReceiptFor(job.params, logs.stdout)
-        const device = job.kind === 'render' ? parseRenderDeviceMarker(logs.stdout) : null
+        // C-9：headless 的前导也打 DSH_RENDER（设备枚举结果），与 render 同一解析器。
+        const device = parseRenderDeviceMarker(logs.stdout)
+        const headless = job.kind === 'headless' ? parseHeadless(logs.stdout) : null
         const parsed =
           job.kind === 'headless'
-            ? parseHeadless(logs.stdout)
+            ? headless === null && device === null
+              ? undefined
+              : {
+                  ...((headless as Record<string, unknown> | null) || {}),
+                  ...(device ? { applied: device } : {}),
+                }
             : render || device
               ? { ...(render || {}), ...(device ? { applied: device } : {}) }
               : undefined

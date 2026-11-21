@@ -1,6 +1,6 @@
 {
   "schema": "dsh-behavior-matrix/1",
-  "generatedAt": "2026-11-19T08:23:23.788Z",
+  "generatedAt": "2026-11-21T14:11:10.568Z",
   "node": "v26.13.1",
   "pluginVersion": "3.3.0",
   "generatedBy": "node scripts/check-behavior-matrix.mjs --generate",
@@ -45,14 +45,14 @@
       {
         "id": "sessionFallback",
         "title": "session 门",
-        "description": "需要 GUI 会话的工具在没有 ready 会话时给出决策请求，不启动 Blender、不转 headless"
+        "description": "需要 GUI 会话的工具在没有 ready 会话时给出决策请求，不启动 Blender、不转 headless（唯一显式例外：blender_op 带 args.file 的本地无 GUI 车道）"
       }
     ],
     "cells": 42,
     "summary": {
       "total": 42,
-      "pass": 38,
-      "notApplicable": 4
+      "pass": 39,
+      "notApplicable": 3
     },
     "rows": [
       {
@@ -77,7 +77,7 @@
         "tool": "blender_see",
         "aspect": "success",
         "status": "PASS",
-        "evidence": "SEE viewport · 1024x576 · 2ms · 70B · hash 3766854d · 场景与用户视口均未改动"
+        "evidence": "SEE viewport · 1024x576 · 0ms · 70B · hash 3766854d · 场景与用户视口均未改动"
       },
       {
         "tool": "blender_run",
@@ -131,13 +131,13 @@
         "tool": "blender_session",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: 后端不可用（127.0.0.1:64514）"
+        "evidence": "resolve: 后端不可用（127.0.0.1:60919）"
       },
       {
         "tool": "blender_op",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:64516）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:60921）"
       },
       {
         "tool": "blender_py",
@@ -155,13 +155,13 @@
         "tool": "blender_run",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:64522）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:60927）"
       },
       {
         "tool": "blender_inspect",
         "aspect": "backendUnreachable",
         "status": "PASS",
-        "evidence": "resolve: Gateway 不可用（127.0.0.1:64524）"
+        "evidence": "resolve: Gateway 不可用（127.0.0.1:60929）"
       },
       {
         "tool": "blender_session",
@@ -239,7 +239,7 @@
         "tool": "blender_session",
         "aspect": "lossless",
         "status": "PASS",
-        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；text"
+        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；addon,evidence,text"
       },
       {
         "tool": "blender_op",
@@ -251,7 +251,7 @@
         "tool": "blender_py",
         "aspect": "lossless",
         "status": "PASS",
-        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；text"
+        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；artifacts,changed,changed_objects,changed_objects_mine,changed_objects_other,edit_mode,faces_after,faces_before,faces_delta,file_ops,has_ops,materials_changed,no_scene_change,objects_delta,purged_materials,purged_meshes,rollback_complete,rolled_back,scene_fingerprint,scope_violations,text,unrolled,verts_delta,warnings"
       },
       {
         "tool": "blender_see",
@@ -263,7 +263,7 @@
         "tool": "blender_run",
         "aspect": "lossless",
         "status": "PASS",
-        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；text"
+        "evidence": "snapshotJsonValue 通过；JSON round-trip 等价；count,envelope,jobs,offset,owner,text,total"
       },
       {
         "tool": "blender_inspect",
@@ -291,13 +291,6 @@
         "reason": "3.1 没有 GUI→headless 自动降级：session 是会话面，op=catalog/dry_run 与 inspect 是只读面，run 直接提交队列"
       },
       {
-        "tool": "blender_op",
-        "aspect": "sessionFallback",
-        "status": "N/A",
-        "evidence": "工具的失败路径已由 backendUnreachable / paramError 覆盖",
-        "reason": "3.1 没有 GUI→headless 自动降级：session 是会话面，op=catalog/dry_run 与 inspect 是只读面，run 直接提交队列"
-      },
-      {
         "tool": "blender_run",
         "aspect": "sessionFallback",
         "status": "N/A",
@@ -310,6 +303,12 @@
         "status": "N/A",
         "evidence": "工具的失败路径已由 backendUnreachable / paramError 覆盖",
         "reason": "3.1 没有 GUI→headless 自动降级：session 是会话面，op=catalog/dry_run 与 inspect 是只读面，run 直接提交队列"
+      },
+      {
+        "tool": "blender_op",
+        "aspect": "sessionFallback",
+        "status": "PASS",
+        "evidence": "file+audit_mesh → /job submit(catalog_op) job=headless；无 file 的 qc_render_views → Blender 未附着：没有 ready 的 GUI 会话（不会自动启动 Blender 或转 headless）"
       }
     ]
   },
@@ -386,7 +385,7 @@
         "route": "/health",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true lease.active=false backend.pid=41496"
+        "evidence": "200 application/json · ok=true lease.active=false backend.pid=37736"
       },
       {
         "route": "/status",
@@ -398,7 +397,7 @@
         "route": "/doctor",
         "aspect": "normal",
         "status": "PASS",
-        "evidence": "200 application/json · ok=true config.http=127.0.0.1:64534"
+        "evidence": "200 application/json · ok=true config.http=127.0.0.1:60937"
       },
       {
         "route": "/launch",
@@ -1603,8 +1602,8 @@
     ]
   },
   "behaviorMatrix": {
-    "total": 365,
-    "covered": 363,
+    "total": 366,
+    "covered": 364,
     "planned": 0,
     "exempt": 2
   }

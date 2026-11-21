@@ -1,11 +1,11 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-21T02:54:06.665Z",
+  "generatedAt": "2026-11-21T14:11:36.468Z",
   "mode": "warn",
   "totals": {
-    "all": 1516,
-    "exempt": 1516,
+    "all": 1517,
+    "exempt": 1517,
     "residual": 0
   },
   "byPrefix": {},
@@ -302,8 +302,8 @@
       "residual": 0
     },
     "tests/BEHAVIOR_MATRIX.md": {
-      "count": 314,
-      "exempt": 314,
+      "count": 315,
+      "exempt": 315,
       "residual": 0
     },
     "tests/MIGRATION.md": {

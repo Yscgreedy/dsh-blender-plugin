@@ -82,17 +82,17 @@ beforeAll(() => {
   process.env.DSH_BLENDER_CONSENT_POLICY_FILE = policyFile
   // 验收用例会在几十毫秒里连续 start；节流单独一条用例验。
   process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS = '0'
+  // 锚定策略文件：文件不存在时 resolveConsentPolicy 会继续找 ~/.dsh/dsh-blender.config.json，
+  // 操作者本机若写着 auto，manual 语义的用例会全部假红（本次审核的附加③）。
+  fs.writeFileSync(policyFile, JSON.stringify({ virtualGuiConsent: 'manual' }), 'utf8')
 })
 
 afterEach(() => {
   resetConsentRequests()
   resetConsentPolicyCache()
   delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
-  try {
-    fs.rmSync(policyFile, { force: true })
-  } catch {
-    /* fine */
-  }
+  // 不是删除：删掉就又会落回操作者真实配置。恢复成 manual 锚点。
+  fs.writeFileSync(policyFile, JSON.stringify({ virtualGuiConsent: 'manual' }), 'utf8')
   for (const name of fs.existsSync(consentDir) ? fs.readdirSync(consentDir) : []) {
     if (name.endsWith('.json') && name !== 'policy.json') {
       try {

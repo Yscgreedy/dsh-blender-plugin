@@ -120,6 +120,31 @@ describe('blender_py receipt truth (feedback 4)', () => {
     expect(String(r.error)).toContain('boom')
   })
 
+  it('C-6/C-7/C-16: carries the cross-call fingerprint, mine/other split and artifacts', async () => {
+    const r = await apiWith({
+      ...base,
+      changed: true,
+      state_before: 'aaaabbbbcccc',
+      state_after: 'ddddeeeeffff',
+      faces_before: 6,
+      faces_after: 10,
+      faces_delta: 4,
+      artifacts: [{ kind: 'blend', path: 'C:/tmp/x.blend', bytes: 2048 }],
+      diagnostics: {
+        cancelled_ops: 0,
+        no_effect: false,
+        has_ops: true,
+        changed_objects_mine: ['Cube'],
+        changed_objects_other: ['_outside'],
+      },
+    })
+    expect(r.sceneBefore).toBe('aaaabbbbcccc')
+    expect(r.sceneAfter).toBe('ddddeeeeffff')
+    expect(r.changedObjectsMine).toEqual(['Cube'])
+    expect(r.changedObjectsOther).toEqual(['_outside'])
+    expect((r.artifacts as Record<string, unknown>[])[0]).toMatchObject({ kind: 'blend' })
+  })
+
   it('flags a failed unwrap even when the operator returned FINISHED', async () => {
     const r = await apiWith({
       ...base,

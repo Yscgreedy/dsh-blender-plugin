@@ -350,7 +350,33 @@ describe('blender_session start pre-spawn gate', () => {
     if (result.ok) return
     expect(result.code).toBe('session_already_available')
     expect(result.evidence.sessionId).toBe(attached.session.id)
+    // C-1: 自己的会话说 is_mine=true，且 fix 不再把人指向别人的窗口
+    expect(result.evidence.is_mine).toBe(true)
+    expect(result.evidence.viewer).toBe(false)
+    expect(String(result.fix)).toContain('you already own it')
     expect(reg.listFor(caller)).toHaveLength(1)
+  })
+
+  it('C-1: 借读别人的会话时回执写清 viewer，而不是让人去 attach 一个只读会话', async () => {
+    const reg = new SessionRegistry(() => [{ instanceId: 'gui-1', ready: true }], {
+      display: readyCap,
+      selectProvider: () => null,
+      waitForInstance: async () => false,
+    })
+    expect(reg.attach(caller).ok).toBe(true)
+    const other = {
+      hostId: 'h',
+      dshSessionId: 'dsh-other',
+      agentId: 'other',
+      role: 'main' as const,
+    }
+    const blocked = await reg.start(other, { waitMs: 0 })
+    expect(blocked.ok).toBe(false)
+    if (blocked.ok) return
+    expect(blocked.code).toBe('session_already_available')
+    expect(blocked.evidence.is_mine).toBe(false)
+    expect(blocked.evidence.viewer).toBe(true)
+    expect(String(blocked.fix)).toContain('read-only viewer')
   })
 
   it('binds consent tokens to the caller', async () => {

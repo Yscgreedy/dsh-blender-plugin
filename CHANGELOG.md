@@ -2,6 +2,100 @@
 
 ## Unreleased
 
+### 2026-11-21 缺陷记录批次 4–6：场景指纹 / 归属分桶 / argv / 作业列表边界 / 动画域
+
+> 同一份审核（`tmp/dsh-blender-plugin_缺陷审核与修复计划_20261121.md`）的收尾三批。
+
+- **C-6（跨调用指纹）**：act 回执透出 `scene_fingerprint:{before,after}`（包装层早已算出
+  `state_before/state_after`，以前被丢掉）；宿主按 **DSH 会话**记住上一次收工时的指纹
+  （`src/tools/py/scene-baseline.ts`，进程内、64 会话上限），下次调用若 `before` 与基线不同，
+  回执加「⚠ 场景自上次调用后已变（sig a→b）」并给 `scene_drift:{from,to,facesBefore,at}`。
+  超时 / 老后端没有 `state_after` 时不更新基线，不编造 drift。
+- **C-7（变更归属 + 假阳性）**：`changed_objects_mine` / `changed_objects_other` 按本次
+  `write_scope` 分桶（owner / 未声明 scope 全算 mine；other 与 `scope_violations` 同源）。
+  `state_probe` 的坐标签名从**跨对象共享递减预算**改成**每对象固定上限**——增删一个对象不再让
+  后面一批对象在 "有坐标 / truncated" 之间翻转，消掉没人动过却出现在 `changed_objects` 里的假阳性。
+- **C-16（产物）**：包装层新增 `_dsh_artifacts()`，回执带 `artifacts[]`（`.blend` 与
+  `Render Result` 的真实路径/字节数）与「产物：…」文本行；与 `file_ops` / 场景变更分开陈述。
+- **C-10（sys.argv）**：三处 argv 拼装改成「调用方 args 在前、注入的 outdir 固定在 `--` 之后的
+  最后一位」(`core/queue/job-args.ts`、`execution/headless/script.ts`、`execution/jobs/script/preload.ts`)，
+  脚本按 `sys.argv[sys.argv.index('--')+1:]` 取参数不会再先吃到目录名。
+- **C-13（作业列表边界）**：`list` 默认 `owner=me`（`all` / 具体 session id 可放开）、默认 20 条、
+  支持 `limit/offset/since_ms`；回执给 `total/offset`，文本最多列 20 行并提示剩余；
+  `JobQueue.list` 支持切片与时间窗；ledger 超过 4 MB 时裁到最近 2000 行（原子写）。
+- **C-14（动画域）**：`state_probe` 的对象签名新增 `_state_anim_sig`（action 名 + slot id +
+  fcurve 数 + 每条前 8 个关键帧），只改 fcurve 不再 `changed=false`；`world_snapshot` 的
+  `animation` 与 `anim_rig_report` 的 action 行补 `fcurve_count`；`worker.py` 的 layered
+  action 读取改成 `bpy_extras` → `strip.channelbag` 双通道，两条都失败时把
+  `actions_unreadable` 写进 digest 域，不再静默 `[]`。
+- **测试**：新增 `act-wrapper-contract`、`render-device-headless`、panel-ops 用例；job-queue 增
+  argc 顺序 + list 分页；py-outcome 增 drift；session 增 owner 过期 grant / viewer 借读。
+  全量 `vitest` 157 files / 1435 passed；`pytest tests/unit/python` 389 passed；生成脚本
+  （act wrapper / headless job.py）均过 `py_compile`。
+
+### 2026-11-21 缺陷记录批次 0–3：wait_ms / checkpoint / 归属 / 作业 / headless 设备
+
+> 来源：`tmp/dsh-blender-plugin_缺陷记录_20261121.md` 审核后的修复（审核结论见
+> `tmp/dsh-blender-plugin_缺陷审核与修复计划_20261121.md`）。批次 0–3 已落地，批次 4–6 待做。
+
+- **C-4（py 排队）**：`/act` 对带调用方身份的 py 调用不再先过 `leaseGate`（那会在等待逻辑
+  之前就回 `py_busy`，实测 6–12 ms），授权与排队统一走 `beginPy/waitForPyLock`；`wait_ms` 现在
+  真的等锁，等满才回 `py_busy`。新增集成用例（等 300 ms 的 holder 释放后 200 成功）。
+- **C-3（scoped checkpoint）**：窄 scope 下不再先发一次必然 `scope_required` 的 `/txn` 快照；
+  回执写 `checkpoint=none` + "**没有发起快照请求**"。同时修掉"快照成功却被抹成 null"的覆盖。
+  对象级 `txn mark/revert` 仍是 scoped 场景的回退路径。
+- **C-11（失败回执）**：`py_error` 文案改为"脚本内部抛异常（通道正常；异常前的写可能已留下）"；
+  失败回执新增 `stderr / traceback / script_error / executed_before_error`，stdout 上限 1200 → 8000。
+  `traceback` 保留 `File "…"` 行（专用脱敏），stdout/stderr 仍是行级过滤口径。
+- **C-16（产物型执行）**：act 前导识别 `render.render` / `wm.save_mainfile` / `export_*` /
+  `object.export_*`，回执给 `file_ops=true` 并改说"场景不变是预期"；长任务告警降级为旁注。
+- **C-5（共享视口）**：`SEE` 行注明"共享用户视口，不是调用方机位"；帧去重键按调用方
+  （agentId/dshSessionId）分键，别人的画面不会再让本次静默少图。
+- **C-12（缺参）**：`presence / grants / heartbeat / detach` 移出"必须 session_id"，按调用方
+  自己的会话解析；schema 描述同步。
+- **C-15（scopes）**：工具描述写明"多个用英文逗号分隔"（工具契约仍是字符串；数组只在网关直连时可用）。
+- **C-1（start 指错方向）**：`session_already_available` 区分 mine / 借读：非 owner 回执明说
+  "attach 只能拿只读 viewer，要自己的窗口先请 owner release"，evidence 带 `is_mine/viewer/owner`。
+- **C-2（归属）**：owner 心跳过期（`owner=null`）时主控 `grant` 会先重新认领再授权，
+  不再永远 `scope_forbidden`；错误按 `owner_expired` 分开说。`callerFromExec` 不再用
+  "缺 parentAgentId" 覆盖显式 `role=subagent`。
+- **附加②（borrowed）**：写失败证据的 `is_mine / borrowed` 与 `status/list` 用同一判据。
+- **C-8（作业归属）**：`canManageJob` 先按 host / owner / parent / 同会话 main 判定，最后才用
+  `dshSessionId` 区分；子代理独立 sessionId 时父 agent 终于能 `collect` 它的作业。
+- **C-9（headless 设备）**：headless 作业前导新增设备枚举（默认 `device=auto`），
+  `device / compute_device_type` 进入 `HEADLESS_KEYS`，结果按 render 同一解析器写进
+  `parsed.applied`（`devices_used / fell_back_to_cpu / warnings`）。生成脚本通过 `py_compile`。
+- **附加③（测试隔离）**：consent 测试固定落一个 manual 策略锚点，不再读操作者真实的
+  `~/.dsh/dsh-blender.config.json`（本机 `virtualGuiConsent:auto` 曾让 9 条用例假红）。
+- **测试**：新增 `render-device-headless`、`panel-ops`、job-owner/py/consent 回归用例；
+  全量 `vitest` 1421+ 通过（隔离 HOME/workDir）。
+
+### 2026-11-21 「Blender 会话」面板补运维面：连接 / 通道 · 作业 · 诊断 · 设置
+
+> 来源：面板实测反馈「tab 太简陋，很多 DSH 设置与状态看不到」。这次把已经现成、零 Blender 往返的
+> 只读数据面接进面板，**不新增任何会话写路径**（仍然只有 `consent_approve|deny` 与 `consent_policy_set`）。
+
+- **连接 / 通道（常显）**：后端地址 + 来源（默认 / 宿主注入 / 插件配置 / 本地面板覆盖）、Gateway
+  `pid`、uptime、RSS、插件版本与 `provenance` verdict、通道「最近 ok 多久前 + 在飞数 + 最后命令」、
+  AI 暂停、写租约（holder / 剩余 / scope / holder 是否已退出）、渲染是否在跑（已多久 + 场景名）、
+  以及三份快照里任何一份失败时的原文（不吞错）。数据源：`/host/state` + `/health`。
+- **作业（可折叠）**：`运行中 N ｜ 共 M` + 最近 6 条作业（短 id / kind / 中文状态 / 耗时），
+  每行「日志」读 `/host/jobs/log?id=…&tail=6000` 并把 stdout+stderr 尾部渲染在面板里。
+- **诊断（按需，不轮询）**：点「运行诊断」才取 `/status` + `/doctor`，显示 verdict、插件版本、
+  `provenance`、addon 就绪实例、Blender 版本/exe、缺口摘要与修法、`next_actions`，以及
+  `/doctor.config` 的配置摘要（HTTP / Gateway / 工作目录 / Blender exe / 配置文件 / 租约 TTL / 平台）。
+  诊断不 spawn 任何进程。
+- **设置（本机）**：后端地址覆盖（校验 `http(s)://`、去尾斜杠、空 = 清除；只写 localStorage
+  `dsh-blender-plugin:backend`）、轮询间隔（`dsh-blender-plugin:panel:ops-poll-ms`，800–15000 ms，
+  有作业/渲染时自动 1000 ms）、原始快照开关（排错用，截断 4 KB）。**这些都不碰 Gateway 的
+  权限面**：不改 owner / grant / 策略文件。
+- **认领表**：每行补 kind / status 与「复制 attach」命令（`blender_session action=attach
+  instance_id=…`），并把 instanceId 加粗 —— 多 agent 共机时先看清"这个窗口是谁的"。
+- **轮询策略**：三条只读快照走同一条共享轮询（多面板位复用），空闲 2500 ms、忙时 1000 ms，
+  单个请求失败只进 `problems` 行，其余块照常显示。
+- **测试**：`tests/unit/js/blender-session-panel-ops.test.ts`（14 条：投影合并、缺数据降级、
+  诊断投影、四块渲染、作业日志、折叠、设置写入、认领表复制、URL/覆盖规范化、全失败不抛）。
+
 ### 2026-11-21 面板迁到会话视图右侧栏 + 策略可在面板里切换
 
 - **容器迁移（用户实拍：折叠条贴在输入框上方、跟对话流无关）**：主体改成右侧栏的 tab 类型

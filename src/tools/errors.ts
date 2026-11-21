@@ -33,7 +33,7 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 ]
 
 /** Strip stack frames, API keys and bearer/token values from a diagnostic. */
-export function redactSecrets(input: unknown): string {
+export function redactSecrets(input: unknown, limit = 600): string {
   let text = String(input === undefined || input === null ? '' : input)
   text = text
     .split(/\r?\n/)
@@ -43,7 +43,20 @@ export function redactSecrets(input: unknown): string {
     )
     .join('\n')
   for (const [pattern, replacement] of SECRET_PATTERNS) text = text.replace(pattern, replacement)
-  return text.slice(0, 600)
+  return text.slice(0, Math.max(200, limit))
+}
+
+/**
+ * Diagnostics (stderr / Python traceback) keep their stack frames and their length.
+ *
+ * `redactSecrets` is tuned for one-line error messages: it drops "File ..." lines
+ * (exactly the lines that make a traceback useful) and cuts at 600 chars. A failing
+ * script needs the opposite trade-off — secrets removed, frames and context kept.
+ */
+export function redactDiagnostic(input: unknown, limit = 4000): string {
+  let body = String(input === undefined || input === null ? '' : input)
+  for (const [pattern, replacement] of SECRET_PATTERNS) body = body.replace(pattern, replacement)
+  return body.slice(-Math.max(200, limit))
 }
 
 /** Host-side cancellation (exec.signal abort) must keep propagating, not become a tool result. */

@@ -158,7 +158,8 @@ describe('headless run: success and process contract', () => {
     expect(args).not.toContain('--factory-startup')
     expect(args).toContain('--python')
     expect(args).toContain(H.script.win)
-    expect(args.slice(args.indexOf('--'))).toEqual(['--', tmp, '--a', 'b'])
+    // C-10：调用方 args 先占位，注入的 outdir 固定在最后一位（旧顺序 outdir 在第 0 位）
+    expect(args.slice(args.indexOf('--'))).toEqual(['--', '--a', 'b', tmp])
     const code = H.captured
     expect(code).toContain('print("hello")')
     expect(code).toContain('_dsh_stage_emit("preload-done")')

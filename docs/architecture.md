@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 38 planning families, 269 operations, 25 addon commands
+blender_run, blender_inspect), 38 planning families, 270 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -166,6 +166,12 @@ The terminal command (`requestId=`) stays as an equivalent channel; `/lease` acc
 `consent_*` actions. Requests persist under `<workDir>/consent/`, so a Gateway restart (HMR) restores
 the panel's cards instead of losing them. The panel is read-only plus approve/deny: it never spawns
 anything, and the decision only releases a request the agent itself filed.
+Since 3.5 the same tab also carries a read-only ops surface: one shared poll of `GET /host/state` +
+`GET /health` + `GET /host/jobs` (idle 2.5 s, 1 s while a job or render is live), an on-demand
+`GET /status` + `GET /doctor` (verdict, readiness, `next_actions`, `config` summary) and a per-job
+`GET /host/jobs/log` tail. Those routes are memory-only on the Gateway; the panel adds no session
+write path. Its two settings — backend override and poll interval — live in browser localStorage and
+never touch ownership, grants or `virtualGuiConsent`.
 
 ### Subagents, read-only borrowing, and stale owners
 
@@ -321,7 +327,7 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 38 families / 269 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 38 families / 270 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by

@@ -1,3 +1,4 @@
+import { claimFreeSession } from './attach.js'
 import type { CallerIdentity, SessionRecord, SessionResult } from './types.js'
 import { callerMatchesHolder, fail, grantView, isMain } from './types.js'
 import { anyOverlap, parseScopes } from './scopes.js'
@@ -12,13 +13,24 @@ export function resolveGrantContext(
   force = false,
 ): SessionResult<{ parsed: ScopeSpec[]; holder: CallerIdentity }> {
   if (!isMain(session, c)) {
-    return fail(
-      'scope_forbidden',
-      'session',
-      'only the main agent recorded at owner claim may grant scopes',
-      'ask the main agent to grant the scope',
-      { sessionId: session.id },
-    )
+    // C-2: owner TTL 到期会把 owner 清空，isMain 随之变 false —— 原主控连授予权都
+    // 没了，而回执只说"只有 owner claim 记的 main 能授权"，可现场根本没有 owner。
+    // 无主会话由 main 先认领，与 authorizeWrite 的既有规则一致（同一 caller 家族）。
+    if (!session.owner && c.role === 'main') claimFreeSession(session, c)
+    if (!isMain(session, c)) {
+      const expired = !session.owner
+      return fail(
+        'scope_forbidden',
+        'session',
+        expired
+          ? 'the owner record expired (no owner right now), so no caller is the main agent'
+          : 'only the main agent recorded at owner claim may grant scopes',
+        expired
+          ? 're-claim the session first: action=attach (or action=release force=true then attach), then retry grant'
+          : 'ask the main agent to grant the scope',
+        { sessionId: session.id, owner: session.owner, owner_expired: expired },
+      )
+    }
   }
   const parsed = parseScopes(scopes)
   if (!parsed.length) {

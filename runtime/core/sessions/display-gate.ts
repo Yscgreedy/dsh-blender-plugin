@@ -12,7 +12,7 @@ import {
   takeApprovedToken,
   waitForConsentDecision,
 } from './consent-requests.js'
-import { fail } from './types.js'
+import { fail, ownerMatches } from './types.js'
 import type { CallerIdentity, SessionRecord, SessionResult } from './types.js'
 import type { DisplayCapabilities } from '../../display/types.js'
 
@@ -52,14 +52,31 @@ function capabilityGate(input: VirtualGuiStartInput): SessionResult<never> | nul
       'use attach for a user-started Blender',
       { kind: input.kind },
     )
-  if (existing && existing.kind === 'user-gui' && existing.status === 'ready')
+  if (existing && existing.kind === 'user-gui' && existing.status === 'ready') {
+    // C-1: findForCaller 命中的是"能读到的会话"，不一定是"我拥有的"。原回执对所有
+    // 人都说"去 attach"，而非 owner 的 attach 只能拿 viewer（is_mine=false）——
+    // 文案与动作互相矛盾。这里把 mine / 借读分开说。
+    const mine = !existing.owner || ownerMatches(existing.owner, input.caller)
     return fail(
       'session_already_available',
       'session',
-      'a ready user-gui session already exists for this caller',
-      'attach the running Blender window instead of starting a virtual one',
-      { sessionId: existing.id, kind: existing.kind },
+      mine
+        ? 'a ready user-gui session already exists for this caller'
+        : 'another DSH caller holds the ready user-gui session (you can read it as a viewer, not own it)',
+      mine
+        ? 'attach it (you already own it; attach refreshes the heartbeat) or release it before starting a virtual one'
+        : 'attach it for read-only viewer access (owner/is_mine=false, writes need a grant); ' +
+            'to get your own window, ask the owner to release it, then start',
+      {
+        sessionId: existing.id,
+        kind: existing.kind,
+        is_mine: mine,
+        viewer: !mine,
+        owner: existing.owner,
+        owner_agent: existing.owner ? String(existing.owner.agentId || '') : null,
+      },
     )
+  }
   const evidence = {
     feature: 'virtualGui',
     provider: capability.provider,

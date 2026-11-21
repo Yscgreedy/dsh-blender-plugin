@@ -342,11 +342,35 @@ export function formatCancel(body: Record<string, unknown>): string {
   return 'RUN cancel ok · ' + text(job.id) + ' → ' + text(job.state) + '（进程树已清理）'
 }
 
-export function formatList(jobs: Array<Record<string, unknown>>): string {
+/** 文本里最多列多少行（rows 本身由 limit/offset 控制，这里只防一次刷屏）。 */
+const LIST_ROWS_SHOWN = 20
+
+export function formatList(
+  jobs: Array<Record<string, unknown>>,
+  paging: { total?: number; offset?: number } = {},
+): string {
+  const total = typeof paging.total === 'number' ? paging.total : jobs.length
+  const offset = Number(paging.offset) || 0
   if (!jobs.length)
-    return 'RUN list · 0 个作业（Blender 作业队列为空；DSH 宿主的 job_list 不含本队列）'
-  const lines = ['RUN list · ' + String(jobs.length) + ' 个作业']
-  for (const j of jobs)
+    return (
+      'RUN list · 0 个作业' +
+      (total
+        ? '（total=' + String(total) + '，用 offset 翻页）'
+        : '（Blender 作业队列为空；DSH 宿主的 job_list 不含本队列）')
+    )
+  const shown = jobs.slice(0, LIST_ROWS_SHOWN)
+  const paged = offset > 0 || total > shown.length
+  const lines = [
+    paged
+      ? 'RUN list · 显示 ' +
+        String(shown.length) +
+        ' / ' +
+        String(total) +
+        ' 个作业' +
+        (offset ? '（offset=' + String(offset) + '）' : '')
+      : 'RUN list · ' + String(shown.length) + ' 个作业',
+  ]
+  for (const j of shown)
     lines.push(
       '· ' +
         text(j.id) +
@@ -360,6 +384,12 @@ export function formatList(jobs: Array<Record<string, unknown>>): string {
         text(j.priority) +
         ' · created=' +
         iso(j.createdAt),
+    )
+  if (total > offset + shown.length)
+    lines.push(
+      '… 另有 ' +
+        String(total - offset - shown.length) +
+        ' 条：limit/offset 翻页；owner=all 看全部会话，owner=<session id> 看指定会话',
     )
   return lines.join(LF)
 }

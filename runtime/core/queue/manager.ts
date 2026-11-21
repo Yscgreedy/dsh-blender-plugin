@@ -298,12 +298,26 @@ export class JobQueue {
     return dropped
   }
 
-  list(filter: { state?: string; kind?: string; owner?: string } = {}): JobRecord[] {
-    return this.jobs
+  list(
+    filter: {
+      state?: string
+      kind?: string
+      owner?: string
+      sinceMs?: number
+      limit?: number
+      offset?: number
+    } = {},
+  ): JobRecord[] {
+    const rows = this.jobs
       .filter((job) => !filter.state || job.state === filter.state)
       .filter((job) => !filter.kind || job.kind === filter.kind)
       .filter((job) => !filter.owner || job.owner.dshSessionId === filter.owner)
-      .map((job) => this.snapshot(job))
+      .filter((job) => !filter.sinceMs || Number(job.createdAt || 0) >= Number(filter.sinceMs))
+    // C-13：历史队列可达数百条，list 必须有边界（offset/limit），否则一次回执 602 行。
+    const offset = Math.max(0, Math.trunc(Number(filter.offset) || 0))
+    const limit = Math.trunc(Number(filter.limit) || 0)
+    const page = limit > 0 ? rows.slice(offset, offset + limit) : rows.slice(offset)
+    return page.map((job) => this.snapshot(job))
   }
 
   perf(): Record<string, unknown> {

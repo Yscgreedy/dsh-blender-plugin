@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Function-level budget registry (two-level exception model): every 80-120 line function is registered with a real classification, reason, class owner and future reviewBy; unregistered, unclassified, expired and stale entries fail. Functions over 120 lines always fail. Path-level file-budget exceptions live in config/exceptions.json.",
-  "generatedAt": "2026-11-20T01:29:26.599Z",
+  "generatedAt": "2026-11-21T13:55:24.419Z",
   "functions": [
     {
       "file": "extension/dsh_blender_bridge/commands/core/describe.py",
@@ -123,7 +123,7 @@
     {
       "file": "runtime/core/queue/job-args.ts",
       "name": "buildJobArgs",
-      "lines": 115,
+      "lines": 117,
       "classification": "parsing",
       "reason": "Headless job prelude + argv assembly: POSIX-style args splitting, env merge, KERNEL_BOOTSTRAP inline and the -- separator; the length is the string surgery, not nested branching.",
       "owner": "host",
@@ -132,7 +132,7 @@
     {
       "file": "runtime/core/queue/spawn-executor.ts",
       "name": "start",
-      "lines": 85,
+      "lines": 99,
       "classification": "orchestration",
       "reason": "Job start orchestration: resolve exe (runtime re-probe), build prelude/script files, spawn the child, then record job state and provenance in one readable sequence.",
       "owner": "runtime",
@@ -159,7 +159,7 @@
     {
       "file": "runtime/execution/headless/script.ts",
       "name": "buildHeadlessScript",
-      "lines": 83,
+      "lines": 84,
       "classification": "formatting",
       "reason": "Python script assembly: ordered prelude/body/completion sections where order is the contract.",
       "owner": "host",
@@ -186,7 +186,7 @@
     {
       "file": "runtime/execution/ledger/state.ts",
       "name": "createLedgerStore",
-      "lines": 87,
+      "lines": 109,
       "classification": "orchestration",
       "reason": "Ledger store factory: JSONL IO, writable-workdir probing and metrics state in one closure.",
       "owner": "runtime",
@@ -204,7 +204,7 @@
     {
       "file": "runtime/http/routes/session/api.ts",
       "name": "runSessionAction",
-      "lines": 115,
+      "lines": 97,
       "classification": "dispatch-table",
       "reason": "Session action dispatcher: one case per wire action (attach, grant, presence, human-edit readback, consent, virtual-gui start).",
       "owner": "runtime",
@@ -375,7 +375,7 @@
     {
       "file": "runtime/py/core/audit_impl/conn_helpers.py",
       "name": "__load_file_objects_p2",
-      "lines": 90,
+      "lines": 91,
       "classification": "integration-io",
       "reason": "Temporary .blend load adapter phase 2 with object accounting.",
       "owner": "addon",
@@ -384,7 +384,7 @@
     {
       "file": "runtime/py/core/audit_impl/conn_helpers.py",
       "name": "cleanup",
-      "lines": 82,
+      "lines": 83,
       "classification": "integration-io",
       "reason": "Idempotent cleanup of temporarily loaded objects (bpy lifecycle).",
       "owner": "addon",
@@ -617,19 +617,19 @@
     },
     {
       "file": "runtime/py/core/worker.py",
-      "name": "_see",
-      "lines": 111,
+      "name": "_hash_node_tree",
+      "lines": 81,
       "classification": "linear-pipeline",
-      "reason": "Headless see op: ordered camera/render/restore stages.",
+      "reason": "Digest pass over GN/material/compositor node trees: one ordered walk of node identity, socket values and links, with per-tree node/link budgets that report digest_limited.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
     {
       "file": "runtime/py/core/worker.py",
-      "name": "_hash_node_tree",
-      "lines": 81,
+      "name": "_see",
+      "lines": 111,
       "classification": "linear-pipeline",
-      "reason": "Digest pass over GN/material/compositor node trees: one ordered walk of node identity, socket values and links, with per-tree node/link budgets that report digest_limited.",
+      "reason": "Headless see op: ordered camera/render/restore stages.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
@@ -645,7 +645,7 @@
     {
       "file": "runtime/py/core/worker.py",
       "name": "main",
-      "lines": 93,
+      "lines": 96,
       "classification": "dispatch-table",
       "owner": "runtime",
       "reason": "Worker accept loop and op dispatch (ping/status/exec/see/watch/reset/checkpoint/revert/checkpoints/shutdown) inside one blocking main thread.",
@@ -906,7 +906,7 @@
     {
       "file": "runtime/py/render/view.py",
       "name": "capture",
-      "lines": 90,
+      "lines": 108,
       "classification": "dispatch-table",
       "reason": "View capture entry: one branch per mode (viewport/current/camera/render) around a shared PNG/diagnostics tail.",
       "owner": "runtime",
@@ -969,19 +969,10 @@
     {
       "file": "src/tools/run/execute.ts",
       "name": "executeRun",
-      "lines": 95,
+      "lines": 119,
       "classification": "dispatch-table",
       "owner": "runtime",
       "reason": "blender_run action dispatcher: one branch per action (submit/status/wait/collect/cancel/list/perf/tune/worker) whose length tracks the tool surface.",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "src/tools/run/index.ts",
-      "name": "buildRunTool",
-      "lines": 115,
-      "classification": "dispatch-table",
-      "owner": "runtime",
-      "reason": "Tool schema declaration for blender_run: the length is the documented parameter surface the model reads, not branching logic.",
       "reviewBy": "2027-06-30"
     },
     {

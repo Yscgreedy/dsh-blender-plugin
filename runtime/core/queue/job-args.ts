@@ -12,7 +12,7 @@ import { envPrelude, scriptFileBlock, workdirBlock } from '../scripts.js'
 import { inputPathBaseList, resolveExistingInput } from '../../execution/input-paths.js'
 import { buildLocalOpJob } from '../../execution/local-op/index.js'
 import { channelsPostlude } from '../../execution/render-channels.js'
-import { renderDevicePrelude } from '../../execution/render-device.js'
+import { headlessDevicePrelude, renderDevicePrelude } from '../../execution/render-device.js'
 import type { JobRecord } from './types.js'
 
 /** The Gateway workDir is probed writable at startup; never rely on %TEMP% for job files. */
@@ -125,6 +125,9 @@ function headlessPrelude(
   envPairs: Record<string, string>,
 ): { code: string; preloads: string[]; bootstrap: boolean } {
   const parts: string[] = [envPrelude(envPairs)]
+  // C-9：headless 以前不初始化 Cycles 设备，--factory-startup 下只会绑 CPU。
+  // 每次 headless 都跑一遍设备前导（device=auto），回执里能看到 devices_used。
+  parts.push(headlessDevicePrelude(params))
   const bootstrap = params.bootstrap !== false
   if (bootstrap) parts.push(KERNEL_BOOTSTRAP)
   const raw = params.preload
@@ -391,9 +394,11 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
     fs.writeFileSync(scriptPath, lines.join('\n') + '\n', 'utf8')
     args.push('--python', scriptPath)
   }
+  // C-10：调用方的 args 先占位（文档说的就是"进 -- 之后"），outdir 放最后 ——
+  // 以前 outdir 是第 0 位，脚本按 isdigit 取参数会先吃到目录名。
   args.push('--')
-  if (outdir) args.push(outdir)
   args.push(...argsTail)
+  if (outdir) args.push(outdir)
   return {
     args,
     outdir,

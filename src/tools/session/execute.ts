@@ -125,19 +125,13 @@ function startTimeout(args: Record<string, unknown>): number {
   return Math.min(120000, wait) + 20000
 }
 
-const NEED_SESSION = [
-  'detach',
-  'release',
-  'stop',
-  'pause',
-  'resume',
-  'mark_read',
-  'presence',
-  'heartbeat',
-  'grants',
-  'grant',
-  'revoke',
-]
+/**
+ * Actions that must name a session. presence / grants / heartbeat / detach are
+ * intentionally absent: the registry resolves the caller's own session
+ * (`findForCaller`) and the old guard only produced "需要 session_id" with no
+ * candidate id even when the caller had exactly one session (field report C-12).
+ */
+const NEED_SESSION = ['release', 'stop', 'pause', 'resume', 'mark_read', 'grant', 'revoke']
 
 function validate(action: string, args: Record<string, unknown>): string | null {
   if (action === 'start') {

@@ -48,11 +48,11 @@ function opsLine(family: string): string[] {
 }
 
 describe('plan op catalog contract', () => {
-  it('keeps 38 families and 269 op entries with one documented duplicate', () => {
+  it('keeps 38 families and 270 op entries with one documented duplicate', () => {
     expect(PLAN_CATALOG).toHaveLength(38)
     const names = planOpNames()
-    expect(names).toHaveLength(269)
-    expect(new Set(names).size).toBe(268)
+    expect(names).toHaveLength(270)
+    expect(new Set(names).size).toBe(269)
     const dup = names.filter((n: any) => n === 'help')
     expect(dup).toHaveLength(2)
     expect(
@@ -103,11 +103,11 @@ describe('plan op catalog contract', () => {
     }
   })
 
-  it('freezes the 103-name read-only whitelist and gates 173 write entries', () => {
+  it('freezes the 104-name read-only whitelist and gates 173 write entries', () => {
     expect([...PLAN_READ_ONLY_OPS].sort()).toEqual([...baseline].sort())
-    expect(PLAN_READ_ONLY_OPS).toHaveLength(103)
+    expect(PLAN_READ_ONLY_OPS).toHaveLength(104)
     const names = planOpNames()
-    expect(names.filter((name: any) => PLAN_READ_ONLY.has(name))).toHaveLength(96)
+    expect(names.filter((name: any) => PLAN_READ_ONLY.has(name))).toHaveLength(97)
     const writes = names.filter((name: any) => !PLAN_READ_ONLY.has(name))
     expect(writes).toHaveLength(173)
     expect(PLAN_READ_ONLY.has('catalog')).toBe(true)
@@ -131,7 +131,7 @@ describe('plan op catalog contract', () => {
   it('reports one coherent fingerprint for the same catalog', () => {
     const fp = catalogFingerprint()
     expect(fp.families).toBe(38)
-    expect(fp.opsCount).toBe(269)
+    expect(fp.opsCount).toBe(270)
     expect(fp.commandCatalogKeys).toBe(25)
     expect(fp.catalogHash).toMatch(/^[0-9a-f]{12}$/)
   })

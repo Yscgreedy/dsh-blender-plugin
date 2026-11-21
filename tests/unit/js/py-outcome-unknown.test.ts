@@ -53,6 +53,7 @@ vi.mock('../../../src/utils/image.js', () => ({
 }))
 
 import { executePy } from '../../../src/tools/py/execute.js'
+import { resetSceneBaselines } from '../../../src/utils/scene-baseline.js'
 
 const fakeCtx = { get: () => undefined } as unknown as Parameters<typeof executePy>[0]
 const SESSION = { id: 'sess-1' }
@@ -109,6 +110,7 @@ function sentNote(index: number): string {
 beforeEach(() => {
   h.replies.length = 0
   h.calls.length = 0
+  resetSceneBaselines()
 })
 
 describe('outcome_unknown：客户端等待结束 ≠ 脚本失败', () => {
@@ -253,8 +255,34 @@ describe('既有行为不回退', () => {
     })
     const out = await executePy(fakeCtx, 1, { code: 'boom()', see: false }, SESSION)
     expect(failCode(out)).toBe('py_error')
-    expect(receipt(out)).toContain('PY 执行失败')
+    // C-11：文案要说清"通道正常、写可能已落地"，别再让人以为整件事没发生
+    expect(receipt(out)).toContain('脚本内部抛异常')
     expect(receipt(out)).not.toContain('outcome_unknown')
+    // 失败通道也带证据：traceback 保留 File 行，stdout 不再被截到 1200 字符
+    expect(String((out as { traceback?: unknown }).traceback)).toContain('File "x.py"')
+    expect((out as { script_error?: unknown }).script_error).toBe(true)
+  })
+
+  it('C-11：失败回执带 traceback / stderr / 完整 stdout，而不是只有一句话', async () => {
+    const longStdout = 'BODYINFO ok ' + 'x'.repeat(3000) + '\nTAIL'
+    reply(snapshotReply, {
+      ok: false,
+      error: 'ValueError: boom',
+      traceback: 'Traceback (most recent call last):\n  File "y.py", line 7\nValueError: boom',
+      stderr: 'warning: something\n',
+      stdout: longStdout,
+    })
+    const out = (await executePy(fakeCtx, 1, { code: 'boom()', see: false }, SESSION)) as Record<
+      string,
+      unknown
+    >
+    expect(failCode(out)).toBe('py_error')
+    expect(String(out.traceback)).toContain('File "y.py"')
+    expect(String(out.stderr)).toContain('warning: something')
+    expect(String(out.stdout)).toContain('BODYINFO ok')
+    expect(String(out.stdout)).toContain('TAIL')
+    expect(String(out.stdout).length).toBeGreaterThan(2000)
+    expect(out.executed_before_error).toBe(true)
   })
 
   it('/act 回 409 leased 时保持原来的文案（不改成 outcome_unknown）', async () => {
@@ -270,6 +298,55 @@ describe('既有行为不回退', () => {
     expect((out as { image?: { attachmentId?: string } }).image?.attachmentId).toBe('att-py-1')
     expect(receipt(out)).toContain('SEE 560px')
     expect(receipt(out)).toContain('outcome=complete')
+  })
+
+  it('C-6：两次调用之间场景被人改了 ⇒ 回执给 scene_drift，而不是各说各话', async () => {
+    reply(snapshotReply, actOk({ state_before: 'sig-aaaa', state_after: 'sig-aaaa' }))
+    await executePy(fakeCtx, 1, { code: 'x = 1', see: false }, SESSION)
+    reply(snapshotReply, actOk({ state_before: 'sig-bbbb', state_after: 'sig-bbbb' }))
+    const out = (await executePy(fakeCtx, 1, { code: 'x = 2', see: false }, SESSION)) as Record<
+      string,
+      unknown
+    >
+    expect(String(out.text)).toContain('场景自上次调用后已变')
+    expect((out.scene_drift as Record<string, unknown>).from).toBe('sig-aaaa')
+    expect((out.scene_drift as Record<string, unknown>).to).toBe('sig-bbbb')
+    // 同一指纹的连续调用不报 drift
+    reply(snapshotReply, actOk({ state_before: 'sig-bbbb', state_after: 'sig-bbbb' }))
+    const again = (await executePy(fakeCtx, 1, { code: 'x = 3', see: false }, SESSION)) as Record<
+      string,
+      unknown
+    >
+    expect(String(again.text)).not.toContain('场景自上次调用后已变')
+    expect(again.scene_drift).toBeUndefined()
+  })
+
+  it('C-3：窄 scope 不再先发一次必失败的快照；回执写清"没有发起快照请求"', async () => {
+    reply(actOk())
+    const out = await executePy(
+      fakeCtx,
+      1,
+      { code: 'x = 1', see: false, write_scope: 'collection:COL_Lights' },
+      SESSION,
+    )
+    // 唯一一次请求就是 /act —— 不再用一个必然 scope_required 的 /txn 污染回执
+    expect(h.calls.map((c) => c.path)).toEqual(['/act'])
+    const text = receipt(out)
+    expect(text).toContain('checkpoint=none')
+    expect(text).toContain('没有发起快照请求')
+    expect(text).toContain('collection:COL_Lights')
+  })
+
+  it('C-3：显式 exclusive 仍然照常留回退点', async () => {
+    reply(snapshotReply, actOk())
+    const out = await executePy(
+      fakeCtx,
+      1,
+      { code: 'x = 1', see: false, write_scope: 'exclusive' },
+      SESSION,
+    )
+    expect(h.calls.map((c) => c.path)).toEqual(['/txn', '/act'])
+    expect(receipt(out)).toContain('checkpoint=' + sentLabel(0))
   })
 
   it('wait_ms 原样进 /act（py 锁的等待语义不变）', async () => {

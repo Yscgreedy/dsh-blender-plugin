@@ -43,13 +43,40 @@ export function checkpointMode(value: unknown): CheckpointMode | null {
   return null
 }
 
+/**
+ * A declared scope that cannot cover an exclusive write makes the file-level
+ * snapshot fail with scope_required — every time. Sending that request anyway
+ * burned a round trip and produced a misleading "已跳过" note even when the
+ * snapshot had actually succeeded (field report C-3).
+ */
+export function exclusiveScopeMissing(scopeText: string): boolean {
+  const declared = String(scopeText || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (!declared.length) return false
+  return !declared.some((item) => item === 'exclusive' || item === 'object:*')
+}
+
 /** 取执行前回退点。任何失败都只降级成告警（note），绝不拦下这次编辑。 */
 export async function takePreExecCheckpoint(
   port: number,
   mode: CheckpointMode,
+  options: { scopeText?: string } = {},
 ): Promise<PreExecCheckpoint> {
   const requestId = randomUUID()
   if (mode === 'off') return { mode, requestId, label: null, note: '' }
+  if (exclusiveScopeMissing(options.scopeText || ''))
+    return {
+      mode,
+      requestId,
+      label: null,
+      note:
+        'scoped grant（本次声明 ' +
+        String(options.scopeText) +
+        '）：文件级快照要 exclusive，**没有发起快照请求**；' +
+        '回退用对象级 txn mark/revert，或让 main agent 先 txn snapshot',
+    }
   const label = 'py-' + requestId.slice(0, 8)
   try {
     const r = await backendPost(

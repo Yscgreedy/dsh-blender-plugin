@@ -9,7 +9,7 @@ export function evaluateWriteGate(
   session: SessionRecord,
   c: CallerIdentity,
   scopes: unknown,
-  opts: { py?: boolean },
+  opts: { py?: boolean; scopeDeclared?: boolean },
 ): SessionResult<{ effective: ScopeSpec[] }> {
   if (session.paused) {
     return fail(

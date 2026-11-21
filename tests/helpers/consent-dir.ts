@@ -19,8 +19,13 @@ export function isolateConsentDir(prefix = 'dsh-consent-test-'): ConsentSandbox 
   const previousFile = process.env.DSH_BLENDER_CONSENT_POLICY_FILE
   const previousInterval = process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS
   process.env.DSH_BLENDER_CONSENT_DIR = dir
-  process.env.DSH_BLENDER_CONSENT_POLICY_FILE = path.join(dir, 'policy.json')
+  const policyFile = path.join(dir, 'policy.json')
+  process.env.DSH_BLENDER_CONSENT_POLICY_FILE = policyFile
   process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS = '0'
+  // 只设路径还不够：文件不存在时 resolveConsentPolicy 会继续往下找，最终读到
+  // 操作者真实的 ~/.dsh/dsh-blender.config.json（本机是 virtualGuiConsent:auto），
+  // manual 语义的用例就会假红。落一个 manual 锚点，让候选链在沙箱里就停住。
+  fs.writeFileSync(policyFile, JSON.stringify({ virtualGuiConsent: 'manual' }), 'utf8')
   return {
     dir,
     dispose: () => {

@@ -196,7 +196,10 @@ class WorldSnapshotCommands:
                 total_keyframes = 0
                 frame_min, frame_max = None, None
                 slot = getattr(anim_data, "action_slot", None)
-                for fcurve in action_fcurves(action, slot):
+                curves = action_fcurves(action, slot)
+                # C-14：回执要能看出动作到底挂了几条 fcurve（只给 name/frame_range 判不了）
+                animation["fcurve_count"] = len(curves)
+                for fcurve in curves:
                     keyframe_points = fcurve.keyframe_points
                     count = len(keyframe_points)
                     total_keyframes += count

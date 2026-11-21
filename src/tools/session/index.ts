@@ -35,14 +35,18 @@ function buildSessionTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_session',
     description:
-      '【会话 / 归属 / 权限】管理 GUI 会话：list/status/doctor 看状态；attach 附着到已打开的 Blender（多实例给 instance_id）；grant/revoke 把写 scope（exclusive | collection:名 | prefix:名 | object:名）授予子 agent；pause/resume 只有人类能操作；mark_read 清 human_modified 冲突。' +
-      'start/stop 只作用 virtual-gui：manual 下 start 落待批准请求，人在会话面板点批准即让这次 start 成功（consent_source=approved_request，默认等 20 s、wait_ms 可调）；超时回 state=pending，再 start 一次即消费。无人值守设 DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow。' +
-      'txn：snapshot/restore/list/prune/mark/revert/marks/drop（写操作需 exclusive grant）。' +
+      '【会话 / 归属 / 权限】管理 GUI 会话：list/status/doctor 看状态；attach 附着到已打开的 Blender；grant/revoke 把写 scope（exclusive | collection:名 | prefix:名）授予子 agent；pause/resume 只有人类能操作。' +
+      'start/stop 只作用 virtual-gui：manual 下 start 落待批准请求，人在会话面板点批准即让这次 start 成功（默认等 20 s、wait_ms 可调）；超时回 state=pending，再 start 一次即消费。无人值守设 DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow。' +
+      'txn：snapshot/restore/list/prune/mark/revert/marks/drop（写要 exclusive）。' +
       'reload：一步式热更（宿主层写 profile patch 触发 HMR，运行时层重拉 Gateway），回执 mode/pid/verdict/needsRestart（dry_run 只诊断）。' +
       '旧 blender_viewport 动作用这里。',
     parameters: {
       action: { type: 'string', required: true, description: ACTIONS.join(' | ') },
-      session_id: { type: 'string', description: '会话 id（大多数会话级动作必填）' },
+      session_id: {
+        type: 'string',
+        description:
+          '会话 id；status/doctor/presence/grants/heartbeat/detach 可省略（按调用方自己的会话解析）',
+      },
       instance_id: { type: 'string', description: 'attach/claim 的实例 id（多实例必填）' },
       kind: { type: 'string', description: 'start 的会话类型，只接受 virtual-gui' },
       wait_ms: {
@@ -51,7 +55,8 @@ function buildSessionTool(ctx: HostContext, port: number) {
       },
       scopes: {
         type: 'string',
-        description: 'exclusive | collection:COL | prefix:OBJ_ | object:Cube',
+        description:
+          '写作用域：exclusive | collection:COL | prefix:OBJ_ | object:Cube；多个用英文逗号分隔',
       },
       target_agent_id: {
         type: 'string',

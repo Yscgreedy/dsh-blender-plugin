@@ -116,6 +116,7 @@ export function finalizeJobArgs(
   opts: Record<string, unknown>,
 ): void {
   a.args.push('--python', built.sp.win, '--')
-  if (opts.outdir) a.args.push(a.outdirWin)
+  // C-10：与 queue/headless 同一口径 —— 用户 args 先，outdir 最后。
   if (Array.isArray(opts.args)) for (const v of opts.args) a.args.push(String(v))
+  if (opts.outdir) a.args.push(a.outdirWin)
 }

@@ -101,7 +101,8 @@ export function buildHeadlessScript(p: PreparedHeadless): BuiltHeadlessScript {
     args.push('--python', sp.win)
   }
   args.push('--')
-  if (opts.outdir) args.push(p.outdirWin)
+  // C-10：用户 args 在前，outdir 固定在最后一位（旧顺序把目录名顶到 sys.argv[0]）
   if (Array.isArray(opts.args)) args.push(...opts.args.map(String))
+  if (opts.outdir) args.push(p.outdirWin)
   return { body, args, sp }
 }

@@ -52,6 +52,27 @@ export function createLedgerStore() {
     return out
   }
 
+  /** C-13：台账只增不减（consent 有 7 天/200、txn 有档位，作业区没有上限）。 */
+  const LEDGER_MAX_BYTES = 4 * 1024 * 1024
+  const LEDGER_KEEP_LINES = 2000
+
+  /** 超过阈值就把台账裁到最近 N 行（原子写；失败只当本轮没裁）。 */
+  function rotateLedger(): void {
+    try {
+      if (fs.statSync(LEDGER).size <= LEDGER_MAX_BYTES) return
+      const lines = fs
+        .readFileSync(LEDGER, 'utf8')
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+      const kept = lines.slice(-LEDGER_KEEP_LINES)
+      const tmp = LEDGER + '.tmp-' + String(process.pid)
+      fs.writeFileSync(tmp, kept.join('\n') + '\n', 'utf8')
+      fs.renameSync(tmp, LEDGER)
+    } catch (e) {
+      /* 轮转是 best effort：写不进去不挡住本行台账 */
+    }
+  }
+
   function ledgerAppend(rec: Record<string, unknown>): void {
     try {
       fs.mkdirSync(path.dirname(LEDGER), { recursive: true })
@@ -61,6 +82,7 @@ export function createLedgerStore() {
           String.fromCharCode(10),
         'utf8',
       )
+      rotateLedger()
       ledgerWarn = null
     } catch (e) {
       // 静默失败是这一版要消灭的东西：记下来，让 /status 与 op=list 能说出来
