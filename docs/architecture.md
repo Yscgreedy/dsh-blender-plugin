@@ -150,10 +150,17 @@ a session record and a live addon. `attach` checks the live instance list and, o
 the addon (`attachChecked`), so a record whose Blender went away answers `addon_disconnected` /
 `addon_unresponsive` instead of `ok`/`ready`; `status` reports `live:{instanceReady, readyInstances}` and
 the registry remembers the last instance per caller (30 min) so a released record can still explain
-itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-time caller-bound tokens)
-and `consent-requests.ts` (persisted, human-approvable requests); `start` files a request, the human
-approves it over `/lease?action=consent_approve&requestId=…` (any terminal, no DSH identity headers) or
-pre-approves the host with `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow`, and the next `start` consumes it.
+itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-time caller-bound tokens),
+`consent-requests.ts` (persisted, human-approvable requests with a panel handle and in-process waiters)
+and `consent-policy.ts` (auto / manual / deny, read per call from env, the profile key
+`virtualGuiConsent`, then the config file, so an edit lands in ≤250 ms without a restart). Since
+3.3.1 `start` files a request and **waits** (`wait_ms`, default 20 s) for the human: the Blender session
+panel in the conversation view (`conversation.input.dock`, `src/client/index.js`) shows the card and
+`GET /lease?action=consent_approve&handle=…` releases that same call (`consent_source=approved_request`).
+The terminal command (`requestId=`) stays as an equivalent channel; `/lease` accepts GET only for the
+`consent_*` actions. Requests persist under `<workDir>/consent/`, so a Gateway restart (HMR) restores
+the panel's cards instead of losing them. The panel is read-only plus approve/deny: it never spawns
+anything, and the decision only releases a request the agent itself filed.
 
 ### Subagents, read-only borrowing, and stale owners
 

@@ -34,6 +34,8 @@ export type ProviderSelector = (capabilities: DisplayCapabilities) => DisplayPro
 export interface VirtualGuiStartOptions {
   kind?: string
   consentToken?: string
+  /** Manual consent: how long this start waits for the human's decision. */
+  waitMs?: number
 }
 
 function stageOf(value: unknown): AvailabilityStage {
@@ -139,12 +141,13 @@ export class VirtualGuiLifecycle {
     opts: VirtualGuiStartOptions = {},
   ): Promise<SessionResult<{ session: Record<string, unknown> }>> {
     const capability = this.host.display()
-    const gated = startVirtualGuiGate({
+    const gated = await startVirtualGuiGate({
       caller,
       kind: opts.kind,
       consentToken: opts.consentToken,
       capability,
       existing: this.host.findForCaller(caller),
+      waitMs: opts.waitMs,
     })
     if (!gated.ok) return gated
     const limits = this.host.limits()

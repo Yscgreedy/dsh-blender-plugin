@@ -200,7 +200,7 @@ try {
     'provider=' + String(capability.provider) + ' missing=' + JSON.stringify(capability.missing),
   )
 
-  const noConsent = await registry.start(caller)
+  const noConsent = await registry.start(caller, { waitMs: 0 })
   record(
     'start without a consent token is refused before spawning',
     noConsent.ok === false && noConsent.code === 'consent_required',

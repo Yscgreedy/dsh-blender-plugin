@@ -13,15 +13,21 @@ export const TOOL_DETAIL: Record<string, string> = {
     LF +
     '  pause | resume | mark_read | presence | heartbeat | start | stop | consent_request | consent_status |' +
     LF +
-    '  consent_approve | consent_deny | txn | help' +
+    '  txn | help' +
+    LF +
+    'consent 的决定（批准/拒绝）是人类动作：agent 只能 consent_request / consent_status；' +
+    LF +
+    '  人点会话面板的按钮或执行回执里的终端命令，agent 调 consent_approve/deny 会被拒 consent_human_only。' +
     LF +
     'attach：用户已打开 Blender 后在 N 面板点 Connect；多实例必须给 instance_id（status 里能看到）。' +
     LF +
     'attach 会做一次 live ping：addon 掉线回 addon_disconnected / addon_unresponsive，不再回 ok/ready。' +
     LF +
-    'start/stop 只作用 virtual-gui；第一次 start 返回 consent_required，回执带 request_id 与人类要跑的一行' +
+    'start/stop 只作用 virtual-gui；manual 策略下 start 落待批准请求并在会话「Blender 会话」面板弹卡片，' +
     LF +
-    '  approve/deny 命令（批准只消费一次），或在 Gateway 主机设 DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow 预批准。' +
+    '  人点批准即让这次 start 成功（consent_source=approved_request；默认等 20 s，wait_ms 可调）；' +
+    LF +
+    '  超时回 state=pending，再 start 一次即消费（批准只消费一次）。策略 auto/deny 见 virtualGuiConsent。' +
     LF +
     '写到别的 agent 的场景区域需要 grant scope：exclusive | collection:名 | prefix:名 | object:名；' +
     LF +

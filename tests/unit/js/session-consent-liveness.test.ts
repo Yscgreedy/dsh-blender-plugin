@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
 import type { CallerIdentity, InstanceRef } from '../../../runtime/core/sessions/types.js'
 import { resetConsentRequests } from '../../../runtime/core/sessions/consent-requests.js'
@@ -19,9 +22,35 @@ function setup(instances: InstanceRef[] = [{ instanceId: 'inst-1', ready: true }
   return { registry, state }
 }
 
+/**
+ * Requests are persisted (that is how the panel survives an HMR restart), so the
+ * suite must not share the real workDir's consent folder between runs.
+ */
+let consentDir = ''
+beforeAll(() => {
+  consentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-consent-liveness-'))
+  process.env.DSH_BLENDER_CONSENT_DIR = consentDir
+})
+afterAll(() => {
+  delete process.env.DSH_BLENDER_CONSENT_DIR
+  try {
+    fs.rmSync(consentDir, { recursive: true, force: true })
+  } catch {
+    /* fine */
+  }
+})
+
 afterEach(() => {
   resetConsentRequests()
   delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+  for (const name of fs.existsSync(consentDir) ? fs.readdirSync(consentDir) : []) {
+    if (!name.endsWith('.json')) continue
+    try {
+      fs.rmSync(path.join(consentDir, name), { force: true })
+    } catch {
+      /* fine */
+    }
+  }
 })
 
 /**
@@ -128,7 +157,7 @@ describe('virtual-gui consent requests (痛点1b)', () => {
 
   it('files a request and answers consent_required with its id', async () => {
     const registry = consentRegistry()
-    const r = await registry.start(main(), { kind: 'virtual-gui' })
+    const r = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.code).toBe('consent_required')
@@ -139,7 +168,7 @@ describe('virtual-gui consent requests (痛点1b)', () => {
 
   it('start succeeds after the human approves the filed request, and only once', async () => {
     const registry = consentRegistry()
-    const first = await registry.start(main(), { kind: 'virtual-gui' })
+    const first = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
     if (first.ok) throw new Error('expected consent_required')
     const requestId = String(first.evidence.request_id)
     const view = registry.consentStatus(main())
@@ -228,7 +257,7 @@ describe('virtual-gui consent requests (痛点1b)', () => {
 
   it('a stale or foreign request id cannot be approved', async () => {
     const registry = consentRegistry()
-    const r = await registry.start(main(), { kind: 'virtual-gui' })
+    const r = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
     if (r.ok) throw new Error('expected consent_required')
     const approved = registry.approveConsent('00000000-0000-0000-0000-000000000000', 'human')
     expect(approved.ok).toBe(false)

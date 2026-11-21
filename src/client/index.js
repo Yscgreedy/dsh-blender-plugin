@@ -542,6 +542,464 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region v3.3.1 · 「Blender 会话」面板（会话视图常驻；只读展示 + 批准/拒绝）
+    /**
+     * 面板轮询：有 pending 卡片时快一点（人点完立刻消失），空闲时慢一点。
+     * 现场（3.3.0）：consent_required 只给一行 curl，人得离开对话去终端 —— 这个面板
+     * 就是把那一步搬回对话里；批准只会释放 agent 自己刚发的那次 start。
+     */
+    var PANEL_POLL_BUSY_MS = 500
+    var PANEL_POLL_IDLE_MS = 2000
+    var PANEL_COLLAPSE_KEY = 'dsh-blender-plugin:panel:collapsed'
+    /** 卡片/表格里最多显示多少条（其它折叠成 +N）。 */
+    var PANEL_CARD_LIMIT = 3
+
+    function msLabel(ms) {
+      var n = Number(ms)
+      if (!isFinite(n) || n < 0) return '-'
+      if (n < 1000) return '<1s'
+      var s = Math.round(n / 1000)
+      if (s < 60) return s + 's'
+      var m = Math.floor(s / 60)
+      return m + 'm' + (s % 60 < 10 ? '0' : '') + (s % 60)
+    }
+
+    /** 一张待批准卡片：人不需要看见 request_id，按钮自带 handle。 */
+    function panelCard(row, now) {
+      var r = row && typeof row === 'object' ? row : {}
+      var caller = r.caller && typeof r.caller === 'object' ? r.caller : {}
+      var expiresAt = Number(r.expires_at) || 0
+      var remaining = expiresAt ? Math.max(0, expiresAt - now) : Number(r.expires_in_ms) || 0
+      var state = String(r.state || 'pending')
+      return {
+        handle: String(r.handle || ''),
+        state: state,
+        who:
+          String(caller.agentId || '?') +
+          ' · 会话 ' +
+          String(caller.dshSessionId || '?') +
+          ' · ' +
+          String(caller.role || 'subagent'),
+        action: '启动一个可见的 virtual-gui Blender 窗口',
+        reason: String(r.reason || 'start_virtual_gui'),
+        expiresAt: expiresAt,
+        remainingMs: remaining,
+        remainingLabel: msLabel(remaining),
+        singleWindow: state === 'pending' || state === 'approved',
+      }
+    }
+
+    /** 认领表一行：与 blender_session status 同源字段（owner / is_mine / expiresInMs / grants）。 */
+    function panelRow(row) {
+      var r = row && typeof row === 'object' ? row : {}
+      var owner = r.owner && typeof r.owner === 'object' ? r.owner : null
+      var grants = Array.isArray(r.grants) ? r.grants : []
+      var grantText = grants
+        .map(function (g) {
+          var scopes = Array.isArray(g && g.scopes) ? g.scopes : []
+          return scopes
+            .map(function (s) {
+              return String((s && s.kind) || '') + (s && s.value ? ':' + String(s.value) : '')
+            })
+            .join(',')
+        })
+        .filter(Boolean)
+      return {
+        id: String(r.id || ''),
+        kind: String(r.kind || ''),
+        instanceId: String(r.instanceId || ''),
+        status: String(r.status || ''),
+        ownerSession: owner ? String(owner.dshSessionId || '') : null,
+        ownerAgent: owner ? String(owner.agentId || '') : null,
+        ownerRole: owner ? String(owner.role || '') : null,
+        isMine: r.is_mine === true,
+        viewer: r.viewer === true,
+        borrowed: r.borrowed === true,
+        heartbeatAgeMs: owner ? Number(owner.heartbeat_age_ms) || 0 : null,
+        expiresInMs: owner ? Number(owner.expiresInMs) || 0 : null,
+        grants: grantText,
+        grantCount: grants.length,
+      }
+    }
+
+    /** 面板的纯投影（测试直接对拍；不碰 DOM、不抛）。 */
+    function panelModel(payload, now) {
+      var p = payload && typeof payload === 'object' ? payload : {}
+      var policy = p.policy && typeof p.policy === 'object' ? p.policy : {}
+      var res = p.resources && typeof p.resources === 'object' ? p.resources : {}
+      var requests = Array.isArray(p.requests) ? p.requests : []
+      var sessions = Array.isArray(p.sessions) ? p.sessions : []
+      var ts = Number(p.ts) || now || Date.now()
+      var pending = []
+      var decided = []
+      for (var i = 0; i < requests.length; i++) {
+        var card = panelCard(requests[i], ts)
+        if (card.state === 'pending') pending.push(card)
+        else decided.push(card)
+      }
+      var rows = []
+      for (var j = 0; j < sessions.length; j++) rows.push(panelRow(sessions[j]))
+      var auto = policy.auto === true
+      var limit = Number(res.limit) || 0
+      var instances = Number(res.instances) || 0
+      return {
+        ok: p.ok === true,
+        ts: ts,
+        auto: auto,
+        autoBanner: auto
+          ? '自动批准已开：virtual-gui 的每次 start 都直接放行（consent_source=policy:allow），不再弹卡片'
+          : null,
+        policyLabel:
+          String(policy.mode || 'manual') +
+          ' · ' +
+          String(policy.source || 'default') +
+          (policy.file ? ' · ' + shortPath(String(policy.file)) : ''),
+        pending: pending,
+        pendingShown: pending.slice(0, PANEL_CARD_LIMIT),
+        decidedShown: decided.slice(0, PANEL_CARD_LIMIT),
+        decidedCount: decided.length,
+        rows: rows,
+        resourceLabel:
+          '实例 ' +
+          instances +
+          '/' +
+          limit +
+          (res.low_resource === true ? '（低内存，已降到 ' + limit + '）' : ''),
+        title:
+          'Blender 会话' +
+          (pending.length ? ' · ' + pending.length + ' 待批准' : '') +
+          (auto ? ' · 自动批准已开' : ''),
+      }
+    }
+
+    function panelUrl(sessionId) {
+      return (
+        backend() +
+        '/lease?action=consent_panel&dshSessionId=' +
+        encodeURIComponent(String(sessionId || ''))
+      )
+    }
+
+    function decideUrl(handle, action) {
+      return (
+        backend() +
+        '/lease?action=' +
+        (action === 'deny' ? 'consent_deny' : 'consent_approve') +
+        '&handle=' +
+        encodeURIComponent(String(handle || '')) +
+        '&source=panel'
+      )
+    }
+
+    function readCollapsed() {
+      try {
+        return window.localStorage.getItem(PANEL_COLLAPSE_KEY) === '1'
+      } catch (e) {
+        return false
+      }
+    }
+
+    function writeCollapsed(v) {
+      try {
+        window.localStorage.setItem(PANEL_COLLAPSE_KEY, v ? '1' : '0')
+      } catch (e) {
+        /* 隐私模式：只在本组件生命周期内记住 */
+      }
+    }
+
+    /**
+     * 面板的渲染树：纯函数（入参是 createElement），所以测试不需要 DOM、也不需要 React。
+     * auto 时的「自动批准已开」在收起状态下也照常渲染 —— 那是硬要求，不允许只在配置里体现。
+     */
+    function panelTree(h, view) {
+      var model = view.model
+      var error = view.error
+      var busy = view.busy
+      var collapsed = view.collapsed
+      var decide = view.onDecide
+      var toggle = view.onToggle
+      var children = []
+      children.push(
+        h(
+          'div',
+          { key: 'head', style: PANEL_STYLE.head, onClick: toggle },
+          h('span', { style: PANEL_STYLE.title }, model.title),
+          h('span', { style: PANEL_STYLE.meta }, model.resourceLabel),
+          h('span', { style: PANEL_STYLE.meta }, '策略 ' + model.policyLabel),
+          h('span', { style: PANEL_STYLE.toggle }, collapsed ? '展开' : '收起'),
+        ),
+      )
+      if (model.autoBanner)
+        children.push(h('div', { key: 'auto', style: PANEL_STYLE.auto }, '● ' + model.autoBanner))
+      if (error) children.push(h('div', { key: 'err', style: PANEL_STYLE.err }, error))
+      if (!collapsed) {
+        for (var i = 0; i < model.pendingShown.length; i++) {
+          var c = model.pendingShown[i]
+          children.push(
+            h(
+              'div',
+              { key: 'card-' + c.handle, style: PANEL_STYLE.card },
+              h('div', { style: PANEL_STYLE.cardTitle }, '待批准 · ' + c.action),
+              h('div', { style: PANEL_STYLE.meta }, '请求方 ' + c.who),
+              h(
+                'div',
+                { style: PANEL_STYLE.meta },
+                '影响：再起一个 Blender 进程 · ' + model.resourceLabel,
+              ),
+              h('div', { style: PANEL_STYLE.meta }, '有效期剩余 ' + c.remainingLabel),
+              h(
+                'div',
+                { style: PANEL_STYLE.actions },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'data-request': c.handle,
+                    disabled: busy !== '',
+                    style: PANEL_STYLE.approve,
+                    onClick: (function (handle) {
+                      return function () {
+                        decide(handle, 'approve')
+                      }
+                    })(c.handle),
+                  },
+                  busy === c.handle + ':approve' ? '批准中…' : '批准',
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'data-request': c.handle,
+                    disabled: busy !== '',
+                    style: PANEL_STYLE.deny,
+                    onClick: (function (handle) {
+                      return function () {
+                        decide(handle, 'deny')
+                      }
+                    })(c.handle),
+                  },
+                  busy === c.handle + ':deny' ? '拒绝中…' : '拒绝',
+                ),
+              ),
+            ),
+          )
+        }
+        if (model.pending.length > model.pendingShown.length)
+          children.push(
+            h(
+              'div',
+              { key: 'more-pending', style: PANEL_STYLE.meta },
+              '另有 ' + (model.pending.length - model.pendingShown.length) + ' 条待批准',
+            ),
+          )
+        if (!model.pending.length && !model.rows.length)
+          children.push(
+            h('div', { key: 'empty', style: PANEL_STYLE.meta }, '没有待批准请求，也没有会话'),
+          )
+        for (var k = 0; k < model.rows.length; k++) {
+          var row = model.rows[k]
+          children.push(
+            h(
+              'div',
+              { key: 'row-' + row.id, style: PANEL_STYLE.row },
+              h('span', { style: PANEL_STYLE.cell }, row.instanceId || row.id),
+              h(
+                'span',
+                { style: PANEL_STYLE.cell },
+                row.ownerSession
+                  ? row.ownerSession + '/' + (row.ownerAgent || '?')
+                  : '（无主，可 attach 认领）',
+              ),
+              h('span', { style: PANEL_STYLE.cell }, row.isMine ? 'is_mine ✓' : 'is_mine ✗'),
+              h('span', { style: PANEL_STYLE.cell }, row.viewer ? 'viewer' : '—'),
+              h('span', { style: PANEL_STYLE.cell }, row.borrowed ? 'borrowed' : '—'),
+              h(
+                'span',
+                { style: PANEL_STYLE.cell },
+                row.heartbeatAgeMs === null ? '心跳 -' : '心跳 ' + msLabel(row.heartbeatAgeMs),
+              ),
+              h(
+                'span',
+                { style: PANEL_STYLE.cell },
+                row.expiresInMs === null ? '归属 -' : '归属剩 ' + msLabel(row.expiresInMs),
+              ),
+              h(
+                'span',
+                { style: PANEL_STYLE.cell },
+                row.grantCount ? 'grant ×' + row.grantCount : '无 grant',
+              ),
+            ),
+          )
+        }
+      }
+      return h('div', { style: PANEL_STYLE.root }, children)
+    }
+
+    /**
+     * 「Blender 会话」面板：挂在 conversation.input.dock（会话视图、常驻、入参带 sessionId）。
+     * 只做三件事：展示 policy / 待批准卡片 / 认领表；两个动作是 批准 / 拒绝。
+     * auto 策略下必须常显一条「自动批准已开」——不允许只在配置文件里体现。
+     */
+    function makeSessionPanel() {
+      function BlenderSessionPanel(props) {
+        var p = props || {}
+        var sessionId =
+          p.sessionId !== undefined && p.sessionId !== null ? p.sessionId : p.blenderSessionId
+        var stateTuple = React.useState(null)
+        var payload = stateTuple[0]
+        var setPayload = stateTuple[1]
+        var tickTuple = React.useState(Date.now())
+        var nowTs = tickTuple[0]
+        var setNow = tickTuple[1]
+        var collapseTuple = React.useState(readCollapsed)
+        var collapsed = collapseTuple[0]
+        var setCollapsed = collapseTuple[1]
+        var busyTuple = React.useState('')
+        var busy = busyTuple[0]
+        var setBusy = busyTuple[1]
+        var errorTuple = React.useState('')
+        var error = errorTuple[0]
+        var setError = errorTuple[1]
+        var sessionRef = React.useRef(sessionId)
+        sessionRef.current = sessionId
+
+        var model = React.useMemo
+          ? React.useMemo(
+              function () {
+                return panelModel(payload, nowTs)
+              },
+              [payload, nowTs],
+            )
+          : panelModel(payload, nowTs)
+
+        React.useEffect(function () {
+          var alive = true
+          var timer = 0
+          function schedule(ms) {
+            if (!alive) return
+            timer = window.setTimeout(poll, ms)
+          }
+          async function poll() {
+            try {
+              if (!sessionRef.current) {
+                schedule(PANEL_POLL_IDLE_MS)
+                return
+              }
+              var r = await fetchJSON(panelUrl(sessionRef.current), { cache: 'no-store' })
+              if (!alive) return
+              if (r && r.ok && r.body) {
+                setPayload(r.body)
+                setError('')
+              } else if (r && r.body && r.body.code === 'origin_not_allowed') {
+                setError('面板来源不被允许：请从 DSH 应用里打开')
+              }
+              var busyNow =
+                r && r.ok && r.body && Array.isArray(r.body.requests)
+                  ? r.body.requests.some(function (x) {
+                      return x && x.state === 'pending'
+                    })
+                  : false
+              schedule(busyNow ? PANEL_POLL_BUSY_MS : PANEL_POLL_IDLE_MS)
+            } catch (e) {
+              schedule(PANEL_POLL_IDLE_MS)
+            }
+          }
+          poll()
+          return function () {
+            alive = false
+            if (timer) window.clearTimeout(timer)
+          }
+        }, [])
+
+        React.useEffect(function () {
+          var t = window.setInterval(function () {
+            setNow(Date.now())
+          }, 500)
+          return function () {
+            window.clearInterval(t)
+          }
+        }, [])
+
+        async function decide(handle, action) {
+          if (!handle || busy) return
+          setBusy(handle + ':' + action)
+          try {
+            var r = await fetchJSON(decideUrl(handle, action), { cache: 'no-store' })
+            var body = r && r.body ? r.body : {}
+            if (!r.ok || body.ok !== true)
+              setError(String(body.root_cause || body.code || '决定未生效'))
+            else setError('')
+            var refresh = await fetchJSON(panelUrl(sessionRef.current), { cache: 'no-store' })
+            if (refresh && refresh.ok && refresh.body) setPayload(refresh.body)
+          } catch (e) {
+            setError('决定未生效：' + errText(e))
+          }
+          setBusy('')
+        }
+
+        function toggle() {
+          var next = !collapsed
+          setCollapsed(next)
+          writeCollapsed(next)
+        }
+
+        if (!model.ok && !error) return null
+        return panelTree(React.createElement, {
+          model: model,
+          error: error,
+          busy: busy,
+          collapsed: collapsed,
+          onDecide: decide,
+          onToggle: toggle,
+        })
+      }
+      return BlenderSessionPanel
+    }
+
+    var PANEL_STYLE = {
+      root: {
+        margin: '4px 0 0',
+        padding: '6px 8px',
+        border: '1px solid rgba(127,127,127,.35)',
+        borderRadius: '8px',
+        fontSize: '12px',
+        lineHeight: '1.45',
+        maxHeight: '46vh',
+        overflowY: 'auto',
+      },
+      head: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        cursor: 'pointer',
+        flexWrap: 'wrap',
+      },
+      title: { fontWeight: 600 },
+      meta: { opacity: 0.75 },
+      toggle: { marginLeft: 'auto', opacity: 0.6 },
+      auto: { marginTop: '4px', color: '#b26a00', fontWeight: 600 },
+      err: { marginTop: '4px', color: '#c0392b' },
+      card: {
+        marginTop: '6px',
+        padding: '6px 8px',
+        border: '1px solid rgba(127,127,127,.35)',
+        borderRadius: '6px',
+      },
+      cardTitle: { fontWeight: 600 },
+      actions: { marginTop: '4px', display: 'flex', gap: '8px' },
+      approve: { padding: '2px 10px', cursor: 'pointer' },
+      deny: { padding: '2px 10px', cursor: 'pointer' },
+      row: {
+        display: 'flex',
+        gap: '8px',
+        flexWrap: 'wrap',
+        paddingTop: '4px',
+        borderTop: '1px dashed rgba(127,127,127,.3)',
+      },
+      cell: { whiteSpace: 'nowrap' },
+    }
+    //#endregion
+
     //#region @ 提及源（契约 §2.5）
     /** ref 前缀 → 允许的种类（`object:<name>` / `material:<name>` / `collection:<name>`）。 */
     var REF_KINDS = { object: true, material: true, collection: true }
@@ -675,6 +1133,7 @@ window.__ModuleLoader__.load({
       configuredBackend = resolveConfiguredBackend(ctx)
 
       var SelectionBridge = makeSelectionBridge()
+      var SessionPanel = makeSessionPanel()
 
       // ① @ 提及源（契约 §2.5）。inputTriggers 服务名见
       //    dsh-client-ui-input-trigger/lib/client.js:1526
@@ -709,7 +1168,23 @@ window.__ModuleLoader__.load({
         )
       })
 
-      // ③ 卸载时复位守卫（便于热重载 / 重新 apply）
+      // ③ v3.3.1：「Blender 会话」面板（会话视图常驻）。virtual-gui 的人工确认原先只能
+      //    离开对话去终端跑 curl —— 这里把它搬回对话：待批准卡片 + 认领表 + auto 常显。
+      ctx.slots.inject('conversation.input.dock', function () {
+        return ctx.slots.register(
+          {
+            name: 'conversation.input.dock',
+            id: 'blender-session-panel',
+            order: 80,
+            inject: function (sessionId) {
+              return sessionFallback(ctx, sessionId)
+            },
+          },
+          SessionPanel,
+        )
+      })
+
+      // ④ 卸载时复位守卫（便于热重载 / 重新 apply）
       ctx.effect(function () {
         return function () {
           started = false
@@ -739,6 +1214,17 @@ window.__ModuleLoader__.load({
       applySelectionToDraft: applySelectionToDraft,
       notifyError: notifyError,
       makeSelectionBridge: makeSelectionBridge,
+      // v3.3.1（Blender 会话面板）
+      PANEL_POLL_BUSY_MS: PANEL_POLL_BUSY_MS,
+      PANEL_POLL_IDLE_MS: PANEL_POLL_IDLE_MS,
+      panelModel: panelModel,
+      panelCard: panelCard,
+      panelRow: panelRow,
+      panelUrl: panelUrl,
+      decideUrl: decideUrl,
+      msLabel: msLabel,
+      makeSessionPanel: makeSessionPanel,
+      panelTree: panelTree,
     }
     return module.exports
   },

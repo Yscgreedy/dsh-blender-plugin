@@ -8,7 +8,14 @@ import { callerHeaders, execSignal } from '../exec-context.js'
 import { decideStart, probeHttp } from '../runtime-bridge.js'
 import { childAlive, killStaleChild, spawnChild } from './spawn.js'
 
-export { childAlive, getChild, killChildHandle, spawnChild } from './spawn.js'
+export {
+  childAlive,
+  getChild,
+  killChildHandle,
+  spawnChild,
+  setGatewayConsentMode,
+  gatewayConsentMode,
+} from './spawn.js'
 export { killBackendByCmd } from './process-scan.js'
 
 /**

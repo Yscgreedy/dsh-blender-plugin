@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### 2026-11-21 virtual-gui 人工确认面板：从"复制 uuid 去终端"变成"在对话里点一下"
+
+> 来源：BlenderProject 实测（插件 3.3.0）。`start kind=virtual-gui` 首次回 `consent_required`，回执要人
+> 复制 request_id → 开终端 → 粘贴 curl → 回对话催 agent 再调一次；第一步就卡住，virtual-gui 的真能力
+> （有 GL 的真窗口、撤销栈、`screen.screenshot`、`render.opengl`）对使用者等于不存在。
+
+- **会话视图常驻「Blender 会话」面板**（`src/client/index.js`，挂在 `conversation.input.dock`，`order=80`）：
+  待批准卡片（请求方 agent/session/role、动作、资源影响「当前实例数 / 上限 / 低内存降到 2」、有效期倒计时、
+  批准/拒绝两个按钮，按钮自带 `handle`）；认领表（主 GUI 与每个 virtual-gui 一行：instance id、owner 会话、
+  `is_mine`、viewer、borrowed、heartbeat 年龄、归属剩余有效期、当前 grant）；顶部常显策略与来源。
+  **auto 时常显「自动批准已开」**，不允许只在配置文件里体现。面板只读 + 两个动作，没有任何写路径。
+- **审批策略可配、热生效**（`runtime/core/sessions/consent-policy.ts`）：`auto` / `manual`（默认）/ `deny`。
+  来源优先级 env `DSH_BLENDER_VIRTUAL_GUI_CONSENT` → profile 插件配置键 `virtualGuiConsent`（宿主在
+  拉起 Gateway 时注入）→ 配置文件 / `DSH_BLENDER_CONSENT_POLICY_FILE`（**每次调用重读，≤250 ms 生效**）。
+  旧名 `ask` / `allow` 继续认；回执里的 `policy:allow` / `reason:policy_denied` 语义不变。
+- **批准即续跑**：`start` 新增 `wait_ms`（默认 20000，上限 120000，0=立刻回 `state=pending`）。
+  manual 下 `start` 落请求后等待人类决定，面板点批准 → **同一次调用** 继续（实测 14 ms），
+  回执 `consent_source=approved_request`；超时回 `state=pending`，再 start 一次即消费（仍然只消费一次）。
+- **面板数据面（只读）**：`GET /lease?action=consent_panel&dshSessionId=<会话 id>` → `policy` /
+  `resources` / `requests[]` / `sessions[]`（与 `blender_session status` 同一份 `sessionView`：
+  owner / `is_mine` / `borrowed` / `heartbeat_age_ms` / `expiresInMs` / grants）。只答回环来源
+  （`127.0.0.1` / `localhost` / `dsh-app://`）或无 `Origin` 的终端请求，其它来源 403 `origin_not_allowed`。
+- **`/lease` 的 GET 语义修正**：回执里一直宣传的 `curl.exe -s "…/lease?action=consent_approve&requestId=…"`
+  在 HTTP 面其实是 404（路由只登记 POST，测试都直接调 `dispatchSessionAction`，所以没暴露）。现在 `/lease`
+  接受 GET，但**只放行 `consent_panel` / `consent_approve` / `consent_deny` / `consent_status`**；
+  其余动作的 GET 仍然回 404（与 POST-only 路由表时代的状态码一致，正文说明 GET 的用途），
+  不让 GET 偷偷改租约/会话状态。
+- **热更不丢面板状态**：待批准请求带 `handle` 落盘到 `<workDir>/consent/<request_id>.json`，Gateway 换代后
+  `consentRequestsAll()` 从磁盘恢复（`waitForConsentDecision` 用监听器即时唤醒，没有轮询延迟）。
+- **工具面**：`blender_session` 新增 `wait_ms`；回执顶层补 `consent_source`；`consent_status` 回
+  `mode` / `auto` / `policy_source`；`consent_required` 正文第一句改成"在这个会话的「Blender 会话」
+  面板里点批准即可"，终端命令降为等价通道。
+- **闸门收口（验收反馈同日，最高优先级）**：模型侧 `consent_approve` / `consent_deny` 过去能批准**自己刚落的**
+  请求（`agentConsentAction` → `registry.approveConsent(id,'agent:…')`），等于没有闸门。现在
+  ① 从 `blender_session` 动作表移除这两个动作（误调回 `consent_human_only`）；② HTTP 面**任何带 DSH 身份头**的
+  `consent_approve` / `consent_deny` 一律 403 `consent_human_only`（agent 直接 curl 也过不去，不是只删 schema）；
+  ③ `registry.approveConsent/denyConsent` 注明"非 caller 授权面，只服务人类通道与测试"；④ 无人值守仍走
+  `virtualGuiConsent=auto`（人写的配置，不经过任何工具调用）。
+- **验收**（`tests/unit/js/virtual-gui-consent-panel.test.ts`，15 条）：卡片 ≤1 s 出现、批准→同一次 start
+  落地 ≤2 s 且 `consent_source=approved_request`、auto 不弹卡片且面板常显、deny `policy_denied` 且
+  spawn=0、认领表与 `status` 逐字段一致、换代后从磁盘恢复、user-gui claim/release/viewer 语义不变、
+  非回环 Origin 403、`wait_ms=0` 回 pending 后一次 start 即消费、agent 自批 403 且请求仍 pending。
+- **证据边界（别当成时延保证）**：手动批准 → 落地的 **14 ms / 卡片 3 ms 来自 fake provider**（同一份
+  registry + lifecycle 代码路径），HTTP 面（`consent_panel` / `consent_approve` / `consent_deny` / CORS /
+  Origin 门）才是真 Gateway 真请求；本机没有就绪的 virtual-gui provider（helper + Blender），**真 spawn 链路
+  未在本机跑通**。面板没有截图/录屏（沙箱无浏览器自动化、React 未随包安装）：证据是 `panelTree` 的 HTML
+  预览 + 文本快照 + 渲染断言（按钮 `data-request`、auto 条款、认领表字段）。
+
 ## v3.3.0（2026-11-21）
 
 ### 2026-11-21 发布收口：3.3.0 · 行预算拆分 · 口径统一

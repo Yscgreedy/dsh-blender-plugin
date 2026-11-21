@@ -77,6 +77,7 @@ describe('optional client services', () => {
     const source = fs.readFileSync(BUNDLE, 'utf8')
     expect(source).toContain('conversation.input.dock')
     expect(source).toContain('blender-selection-bridge')
+    expect(source).toContain('blender-session-panel')
     expect(source).not.toContain('conversation.view')
     expect(source).not.toContain('sidebar.right.pane.tab')
   })
@@ -85,14 +86,24 @@ describe('optional client services', () => {
     const mod = loadModule()
     const host = makeHost(false)
     expect(() => mod.apply(host.ctx)).not.toThrow()
-    expect(host.docks).toHaveLength(1)
-    expect(host.docks[0].options).toMatchObject({
+    // v3.3.1：同一个席位两个条目 —— 选中桥（不渲染）与「Blender 会话」面板。
+    expect(host.docks).toHaveLength(2)
+    const bridge = host.docks.find((d) => d.options.id === 'blender-selection-bridge')
+    const panel = host.docks.find((d) => d.options.id === 'blender-session-panel')
+    expect(bridge.options).toMatchObject({
       name: 'conversation.input.dock',
       id: 'blender-selection-bridge',
       order: 90,
     })
-    expect(host.docks[0].options.inject).toBeTypeOf('function')
-    expect(host.docks[0].component).toBeTruthy()
+    expect(bridge.options.inject).toBeTypeOf('function')
+    expect(bridge.component).toBeTruthy()
+    expect(panel.options).toMatchObject({
+      name: 'conversation.input.dock',
+      id: 'blender-session-panel',
+      order: 80,
+    })
+    expect(panel.options.inject).toBeTypeOf('function')
+    expect(panel.component).toBeTruthy()
     expect(host.sources).toEqual([])
   })
 
@@ -112,11 +123,11 @@ describe('optional client services', () => {
     const host = makeHost(false)
     mod.apply(host.ctx)
     mod.apply(host.ctx)
-    expect(host.docks).toHaveLength(1)
+    expect(host.docks).toHaveLength(2)
     const reset = host.effects.find((effect) => String(effect.name).includes('reset apply guard'))
     expect(reset).toBeTruthy()
     reset!.callback()()
     mod.apply(host.ctx)
-    expect(host.docks).toHaveLength(2)
+    expect(host.docks).toHaveLength(4)
   })
 })

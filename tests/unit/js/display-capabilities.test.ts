@@ -300,7 +300,8 @@ describe('blender_session start pre-spawn gate', () => {
 
   it('requires one-time human consent before a ready capability may start', async () => {
     const reg = registry()
-    const denied = await reg.start(caller)
+    // wait_ms=0：这条用例验的是"没有 token 就不许 start"，不验等待窗口
+    const denied = await reg.start(caller, { waitMs: 0 })
     expect(denied.ok).toBe(false)
     if (denied.ok) return
     expect(denied.code).toBe('consent_required')

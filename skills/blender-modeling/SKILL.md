@@ -43,7 +43,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
   同一个常驻 `blender -b` 里连续执行 + 连续取帧（稳态 ~30 ms），比 `kind="headless"` 每次冷启动 ~2 s 便宜一个数量级；
   `checkpoint label="s1_raw"` 落一档、`revert label="s1_raw"` 一行回到那一档，不用再手工另存 .blend。
   长任务（>1 min）仍然走 `kind="headless"` 作业 —— worker 是串行的，长代码会把它占住。
-- **consent / 掉线检查**：`start kind="virtual-gui"` 回 `consent_required` 时，把回执里的 `request_id` 和那行 approve 命令**原样转给用户**（不要自己重试到超时）；`attach` 回 `addon_disconnected` / `addon_unresponsive` 时让用户在 Blender N 面板重新 Enable + Connect，不要靠重试。
+- **consent / 掉线检查**：`start kind="virtual-gui"` 在 manual 策略下会**等人在会话的「Blender 会话」面板点批准**（默认 20 s，`wait_ms` 可调）——不要自己重试到超时；回 `state=pending` 时说明"面板里点批准后我再 start 一次即可"，别让用户去复制 request_id 跑终端（终端命令只是等价通道）。`attach` 回 `addon_disconnected` / `addon_unresponsive` 时让用户在 Blender N 面板重新 Enable + Connect，不要靠重试。
 - `blender_py` 里**不要**写 `wm.read_factory_settings` / `wm.read_homefile`：会把 addon 一起卸掉，工具默认拦下（`factory_reset_blocked`）；要清场景用逐对象删除，或在 worker / headless 里重置。
 - **`blender_py` 有回退点，也有「结果未知」口径**：默认 `checkpoint="auto"` 在执行前打一次文件级快照（lease 写通道或大场景可能降级为 `checkpoint=none` + 警告）；成功回执带 `outcome=complete · request_id · checkpoint=py-xxxxxxxx`。**180 s 超时/断线回 `outcome_unknown`——这不等于是失败**，脚本可能还在 Blender 里跑：先 `blender_inspect command=get_scene_info` 看有没有重复材质/节点，或 `blender_session(action="txn", op="restore", label=<checkpoint>)` 退回执行前；确认场景没变再重跑。要跳过快照传 `checkpoint="off"`。
 - `script_file` / `file` 给**绝对路径**最稳：相对路径按 `workdir → 工作区 env → Gateway cwd` 解析，缺文件会在起进程前回 `input_missing`。

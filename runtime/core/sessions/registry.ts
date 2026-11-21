@@ -1,8 +1,10 @@
 import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import type { AttachLiveness } from './attach.js'
-import { consentPolicy, issueConsentToken } from './consent.js'
+import { issueConsentToken } from './consent.js'
+import { resolveConsentPolicy } from './consent-policy.js'
 import {
   approveConsentRequest,
+  consentRequestsAll,
   consentRequestView,
   consentRequestsFor,
   denyConsentRequest,
@@ -626,7 +628,7 @@ export class SessionRegistry {
 
   async start(
     c: CallerIdentity,
-    opts: { kind?: SessionKind; consentToken?: string } = {},
+    opts: { kind?: SessionKind; consentToken?: string; waitMs?: number } = {},
   ): Promise<SessionResult<{ session: Record<string, unknown> }>> {
     this.prune()
     return this.lifecycle.start(c, opts)
@@ -642,11 +644,28 @@ export class SessionRegistry {
       ok: true,
       request: consentRequestView(filed.requestId),
       reused: filed.reused,
-      policy: consentPolicy(),
+      ...(() => {
+        const policy = resolveConsentPolicy()
+        return {
+          policy: policy.policy,
+          mode: policy.mode,
+          auto: policy.auto,
+          policy_source: policy.source,
+        }
+      })(),
     }
   }
 
-  /** Record the human's approval for a filed request (no caller identity needed). */
+  /**
+   * Record the human's approval for a filed request.
+   *
+   * NOT reachable from an agent: `dispatchSessionAction` refuses
+   * `consent_approve` / `consent_deny` for any call that carries a DSH identity
+   * (`consent_human_only`), and the model tool schema no longer offers them.
+   * The decision comes from the identity-free human channel (session panel /
+   * terminal command). This method stays in-process for that channel and for
+   * tests; it is not a caller-facing authorization.
+   */
   approveConsent(requestId: unknown, source = 'human'): SessionResult<Record<string, unknown>> {
     const decided = approveConsentRequest(requestId, source)
     if (!decided.ok)
@@ -662,6 +681,7 @@ export class SessionRegistry {
     return { ok: true, request: decided.request }
   }
 
+  /** Human-only, same rule as approveConsent (see the note there). */
   denyConsent(requestId: unknown, reason = 'human denied'): SessionResult<Record<string, unknown>> {
     const decided = denyConsentRequest(requestId, reason)
     if (!decided.ok)
@@ -677,7 +697,57 @@ export class SessionRegistry {
 
   /** What this caller still has waiting on a human. */
   consentStatus(c: CallerIdentity): SessionResult<Record<string, unknown>> {
-    return { ok: true, policy: consentPolicy(), requests: consentRequestsFor(c) }
+    const policy = resolveConsentPolicy()
+    return {
+      ok: true,
+      policy: policy.policy,
+      mode: policy.mode,
+      auto: policy.auto,
+      policy_source: policy.source,
+      requests: consentRequestsFor(c),
+    }
+  }
+
+  /**
+   * Read-only data for the Blender session panel inside the conversation view.
+   *
+   * It takes no DSH identity on purpose: the browser that renders the panel is
+   * not the agent, and the panel must not become a write path. Everything here is
+   * a projection of state the Gateway already owns; the two actions the panel
+   * offers (approve / deny) go through the human consent channel, which can only
+   * release a request the agent itself filed.
+   */
+  consentPanel(dshSessionId: string, now = Date.now()): Record<string, unknown> {
+    this.prune(now)
+    const sid = String(dshSessionId || '')
+    const policy = resolveConsentPolicy(process.env, now)
+    const limits = this.limitsFn()
+    const ready = this.instances.filter((x) => x.ready)
+    const sessions = [...this.sessions.values()].map((s) => panelSessionRow(s, sid))
+    return {
+      ok: true,
+      ts: now,
+      panel_session: sid || null,
+      policy: {
+        mode: policy.mode,
+        policy: policy.policy,
+        auto: policy.auto,
+        source: policy.source,
+        file: policy.file,
+        note: policy.note,
+      },
+      resources: {
+        instances: this.virtualGuiCount(),
+        limit: limits.limit,
+        configured: limits.configured,
+        low_resource: limits.low_resource,
+        limit_reason: limits.reason,
+        ready_instances: ready.length,
+        connected: ready.length > 0,
+      },
+      requests: consentRequestsAll(now).map((r) => ({ ...r })),
+      sessions,
+    }
   }
   async stop(c: CallerIdentity, sessionId?: string): Promise<SessionResult<{ stopped: boolean }>> {
     this.prune()
@@ -1031,5 +1101,35 @@ export class SessionRegistry {
     }
     session.activePy = null
     return { ok: true, released: true }
+  }
+}
+/**
+ * One row of the panel's claim table.
+ *
+ * `is_mine` answers "does the conversation that renders this panel own that
+ * window?" — the same question `blender_session status` answers for the agent of
+ * that conversation. The panel has no DSH identity headers, so the owner's host id
+ * is borrowed: ownership in 3.1 is host + DSH session, and the session half is the
+ * one the panel actually knows.
+ */
+function panelSessionRow(s: SessionRecord, dshSessionId: string): Record<string, unknown> {
+  const owner = s.owner
+  const mine = !!owner && !!dshSessionId && String(owner.dshSessionId || '') === dshSessionId
+  const caller: CallerIdentity | null = dshSessionId
+    ? {
+        hostId: owner ? String(owner.hostId || '') : '',
+        dshSessionId,
+        agentId: mine ? String(owner?.agentId || '') : '',
+        role: 'main',
+      }
+    : null
+  const view = sessionView(s, caller || undefined)
+  const viewer =
+    !!dshSessionId &&
+    [...s.agents.values()].some((a) => String(a.caller.dshSessionId || '') === dshSessionId)
+  return {
+    ...view,
+    panel_is_mine: dshSessionId ? mine : null,
+    viewer,
   }
 }

@@ -1,34 +1,41 @@
-// Human-consent requests for virtual-gui (3.2).
+// Human-consent requests for virtual-gui (3.2, panel-aware since 3.3.1).
 //
 // Why this file exists: in 3.1 the model could not mint consent and the host had
 // no surface that asked the human, so action=start kind=virtual-gui failed with a
 // bare consent_required, nothing was recorded, and the human saw no prompt at
 // all. A request is now a first-class, persisted object:
 //
-//   1. the agent's start files a request (id + expiry) and gets the approve
-//      command back inside the tool receipt, which is what the human reads;
-//   2. the human approves it from any terminal (POST /lease action=consent_approve)
-//      or pre-approves the host with DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow;
-//   3. the next start consumes the approved request and mints the one-time token.
+//   1. the agent's start files a request (id + expiry) and — since 3.3.1 — waits
+//      (wait_ms) for the human's decision, so the *same* call can complete;
+//   2. the human approves it in the Blender session panel of the conversation
+//      (GET /lease?action=consent_approve&handle=…) or from any terminal (request
+//      id) or pre-approves the host with DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow;
+//   3. approval notifies the waiting start, which mints the one-time token.
 //
 // The model never sees a path that mints its own approval: approve needs the
-// request id, and the id only exists because a start asked for it.
+// request id (or the panel handle), and the id only exists because a start asked
+// for it. Requests are persisted so a Gateway restart (HMR) does not lose the
+// panel's state.
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CFG } from '../../config.js'
 import { callerKey } from './types.js'
+import { consentDir } from './consent-policy.js'
 import { issueConsentToken } from './consent.js'
 import type { CallerIdentity } from './types.js'
 
 export const CONSENT_REQUEST_TTL_MS = 15 * 60_000
 /** Approved requests stay usable for one start, then are consumed. */
 const MAX_REQUESTS = 50
+/** How often the persisted request directory is re-read (HMR survival). */
+const HYDRATE_MS = 500
 
 export type ConsentState = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
 
 export interface ConsentRequest {
   id: string
+  /** Panel-facing capability: the human's buttons carry this, not the id. */
+  handle: string
   state: ConsentState
   callerKey: string
   caller: CallerIdentity
@@ -40,16 +47,22 @@ export interface ConsentRequest {
 }
 
 const requests = new Map<string, ConsentRequest>()
+const waiters = new Map<string, Set<(state: ConsentState) => void>>()
+let hydratedAt = 0
 
-/** Host-side directory that makes a request visible when the transcript was missed. */
+/** Folder that makes a request visible when the transcript was missed. */
 export function consentRequestDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = String(env.DSH_BLENDER_CONSENT_DIR || '').trim()
-  return override || path.join(CFG.workDirWsl, 'consent')
+  return consentDir(env)
+}
+
+function newHandle(): string {
+  return 'h-' + randomUUID().replace(/-/g, '').slice(0, 24)
 }
 
 function requestView(r: ConsentRequest): Record<string, unknown> {
   return {
     request_id: r.id,
+    handle: r.handle,
     state: r.state,
     created_at: r.createdAt,
     expires_at: r.expiresAt,
@@ -72,12 +85,83 @@ function persist(r: ConsentRequest): void {
   }
 }
 
+function recordFromFile(raw: unknown): ConsentRequest | null {
+  if (!raw || typeof raw !== 'object') return null
+  const row = raw as Record<string, unknown>
+  const id = String(row.request_id || '')
+  const caller =
+    row.caller && typeof row.caller === 'object' ? (row.caller as Record<string, unknown>) : {}
+  const expiresAt = Number(row.expires_at)
+  if (!id || !Number.isFinite(expiresAt)) return null
+  const state = String(row.state || 'pending') as ConsentState
+  const identity: CallerIdentity = {
+    hostId: String(caller.hostId || ''),
+    dshSessionId: String(caller.dshSessionId || ''),
+    agentId: String(caller.agentId || ''),
+    parentAgentId: caller.parentAgentId ? String(caller.parentAgentId) : undefined,
+    role: caller.role === 'main' ? 'main' : 'subagent',
+  }
+  return {
+    id,
+    handle: String(row.handle || newHandle()),
+    state,
+    callerKey: callerKey(identity),
+    caller: identity,
+    createdAt: Number(row.created_at) || 0,
+    expiresAt,
+    decidedAt: row.decided_at == null ? null : Number(row.decided_at),
+    source: row.source == null ? null : String(row.source),
+    reason: row.reason == null ? null : String(row.reason),
+  }
+}
+
+/**
+ * Re-read persisted requests. A Gateway restart (HMR) recreates the process, so
+ * the panel's pending cards must come back from disk instead of vanishing.
+ */
+function hydrate(now = Date.now()): void {
+  if (now - hydratedAt < HYDRATE_MS) return
+  hydratedAt = now
+  let names: string[]
+  try {
+    names = fs.readdirSync(consentRequestDir()).filter((n) => n.endsWith('.json'))
+  } catch {
+    return
+  }
+  for (const name of names.slice(-MAX_REQUESTS)) {
+    const id = name.slice(0, -'.json'.length)
+    if (requests.has(id)) continue
+    try {
+      const parsed: unknown = JSON.parse(
+        fs.readFileSync(path.join(consentRequestDir(), name), 'utf8'),
+      )
+      const request = recordFromFile(parsed)
+      if (request) requests.set(request.id, request)
+    } catch {
+      /* unreadable file: ignore, the in-memory record (if any) still works */
+    }
+  }
+}
+
 function stateOf(r: ConsentRequest, now: number): ConsentState {
   if (r.state === 'pending' && now > r.expiresAt) {
     r.state = 'expired'
     persist(r)
   }
   return r.state
+}
+
+function notify(r: ConsentRequest): void {
+  const listeners = waiters.get(r.id)
+  if (!listeners) return
+  for (const listener of listeners) {
+    try {
+      listener(r.state)
+    } catch {
+      /* a broken waiter must not affect the decision */
+    }
+  }
+  waiters.delete(r.id)
 }
 
 function trim(now: number): void {
@@ -102,6 +186,7 @@ export function ensureConsentRequest(
   now = Date.now(),
   reason = 'start_virtual_gui',
 ): ConsentRequestView {
+  hydrate(now)
   trim(now)
   const key = callerKey(c)
   const pending = [...requests.values()]
@@ -110,12 +195,14 @@ export function ensureConsentRequest(
   if (pending) return { requestId: pending.id, expiresAt: pending.expiresAt, reused: true }
   const request: ConsentRequest = {
     id: randomUUID(),
+    handle: newHandle(),
     state: 'pending',
     callerKey: key,
     caller: {
       hostId: c.hostId,
       dshSessionId: c.dshSessionId,
       agentId: c.agentId,
+      ...(c.parentAgentId ? { parentAgentId: c.parentAgentId } : {}),
       role: c.role,
     },
     createdAt: now,
@@ -131,12 +218,23 @@ export function ensureConsentRequest(
 
 export type ConsentDecision = 'ok' | 'missing' | 'expired' | 'already' | 'denied' | 'consumed'
 
+/** Accept either the real request id or the panel's handle. */
+export function resolveRequestRef(ref: unknown, now = Date.now()): string | null {
+  hydrate(now)
+  const raw = String(ref || '').trim()
+  if (!raw) return null
+  if (requests.has(raw)) return raw
+  for (const r of requests.values()) if (r.handle === raw) return r.id
+  return null
+}
+
 export function approveConsentRequest(
   requestId: unknown,
   source = 'human',
   now = Date.now(),
 ): { ok: true; request: Record<string, unknown> } | { ok: false; reason: ConsentDecision } {
-  const r = requests.get(String(requestId || ''))
+  const id = resolveRequestRef(requestId, now)
+  const r = id ? requests.get(id) : undefined
   if (!r) return { ok: false, reason: 'missing' }
   const state = stateOf(r, now)
   if (state === 'expired') return { ok: false, reason: 'expired' }
@@ -148,6 +246,7 @@ export function approveConsentRequest(
   r.decidedAt = now
   r.source = source
   persist(r)
+  notify(r)
   return { ok: true, request: requestView(r) }
 }
 
@@ -156,24 +255,29 @@ export function denyConsentRequest(
   reason = 'human denied the request',
   now = Date.now(),
 ): { ok: true; request: Record<string, unknown> } | { ok: false; reason: ConsentDecision } {
-  const r = requests.get(String(requestId || ''))
+  const id = resolveRequestRef(requestId, now)
+  const r = id ? requests.get(id) : undefined
   if (!r) return { ok: false, reason: 'missing' }
-  if (r.state === 'consumed' || r.state === 'expired') return { ok: false, reason: 'expired' }
+  const state = stateOf(r, now)
+  if (state === 'consumed' || state === 'expired') return { ok: false, reason: 'expired' }
   r.state = 'denied'
   r.decidedAt = now
   r.source = 'human'
   r.reason = reason
   persist(r)
+  notify(r)
   return { ok: true, request: requestView(r) }
 }
 
 export function consentRequestView(requestId: unknown): Record<string, unknown> | null {
-  const r = requests.get(String(requestId || ''))
+  const id = resolveRequestRef(requestId)
+  const r = id ? requests.get(id) : null
   return r ? requestView(r) : null
 }
 
 /** Requests filed by this caller, newest first (so status can show what is waiting). */
 export function consentRequestsFor(c: CallerIdentity): Record<string, unknown>[] {
+  hydrate()
   const key = callerKey(c)
   const now = Date.now()
   return [...requests.values()]
@@ -183,6 +287,72 @@ export function consentRequestsFor(c: CallerIdentity): Record<string, unknown>[]
       return requestView(r)
     })
     .sort((a, b) => Number(b.created_at) - Number(a.created_at))
+}
+
+/**
+ * Every request the panel should show (all callers: multiple agents share one
+ * machine, and "who is asking" is part of the card). Decided requests stay for
+ * the TTL so the card can say what happened instead of silently disappearing.
+ */
+export function consentRequestsAll(now = Date.now()): Record<string, unknown>[] {
+  hydrate(now)
+  return [...requests.values()]
+    .filter((r) => now - r.createdAt <= CONSENT_REQUEST_TTL_MS + 60_000)
+    .map((r) => {
+      stateOf(r, now)
+      return requestView(r)
+    })
+    .sort((a, b) => Number(b.created_at) - Number(a.created_at))
+}
+
+export { requestView as consentRequestRow }
+
+/**
+ * Wait for the human's decision on one request. Resolves as soon as approve/deny
+ * lands (listener), and on the poll tick for an expiry. Never rejects: the
+ * caller re-reads the state and decides what its receipt says.
+ */
+export function waitForConsentDecision(
+  requestId: string,
+  timeoutMs: number,
+  pollMs = 100,
+): Promise<ConsentState> {
+  const id = String(requestId || '')
+  const r = requests.get(id)
+  if (!r) return Promise.resolve('expired')
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  return new Promise<ConsentState>((resolve) => {
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const settle = (state: ConsentState): void => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      const listeners = waiters.get(id)
+      if (listeners) {
+        listeners.delete(settle)
+        if (!listeners.size) waiters.delete(id)
+      }
+      resolve(state)
+    }
+    const tick = (): void => {
+      if (done) return
+      const state = stateOf(r, Date.now())
+      if (state !== 'pending') {
+        settle(state)
+        return
+      }
+      if (Date.now() >= deadline) {
+        settle('pending')
+        return
+      }
+      timer = setTimeout(tick, pollMs)
+    }
+    const listeners = waiters.get(id) || new Set<(state: ConsentState) => void>()
+    listeners.add(settle)
+    waiters.set(id, listeners)
+    tick()
+  })
 }
 
 /**
@@ -198,6 +368,7 @@ export function takeApprovedToken(c: CallerIdentity, now = Date.now()): string |
   const token = issueConsentToken(c, now).consentToken
   approved.state = 'consumed'
   persist(approved)
+  notify(approved)
   return token
 }
 
@@ -213,7 +384,9 @@ export function consentApproveCommand(
   return 'curl.exe -s "' + base + '/lease?action=' + action + '&requestId=' + requestId + '"'
 }
 
-/** Test helper: forget every request. */
+/** Test helper: forget every request (and every waiter). */
 export function resetConsentRequests(): void {
   requests.clear()
+  waiters.clear()
+  hydratedAt = 0
 }
