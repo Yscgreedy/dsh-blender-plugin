@@ -1,7 +1,7 @@
 import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import type { AttachLiveness } from './attach.js'
 import { issueConsentToken } from './consent.js'
-import { resolveConsentPolicy } from './consent-policy.js'
+import { policyLock, policyWriteTarget, resolveConsentPolicy } from './consent-policy.js'
 import {
   approveConsentRequest,
   consentRequestsAll,
@@ -640,6 +640,20 @@ export class SessionRegistry {
   /** File (or reuse) the pending virtual-gui consent request for this caller. */
   requestConsent(c: CallerIdentity): SessionResult<Record<string, unknown>> {
     const filed = ensureConsentRequest(c)
+    if (filed.rateLimited)
+      return fail(
+        'consent_rate_limited',
+        'session',
+        'this caller filed a consent request less than a minute ago (' + filed.requestId + ')',
+        'approve the waiting request in the session panel, wait ' +
+          String(Math.ceil(Number(filed.retryAfterMs || 0) / 1000)) +
+          's, or switch the policy to auto/deny in the panel',
+        {
+          reason: 'rate_limited',
+          request_id: filed.requestId,
+          retry_after_ms: filed.retryAfterMs ?? null,
+        },
+      )
     return {
       ok: true,
       request: consentRequestView(filed.requestId),
@@ -735,6 +749,20 @@ export class SessionRegistry {
         source: policy.source,
         file: policy.file,
         note: policy.note,
+        // The panel may switch the mode — unless a human pinned it with the env
+        // var, in which case the controls are disabled and a POST is refused.
+        ...(() => {
+          const lock = policyLock()
+          const target = policyWriteTarget()
+          return {
+            locked: lock.locked,
+            lock_env: lock.locked ? lock.env : null,
+            lock_value: lock.value,
+            writable: !lock.locked,
+            write_target: target.file,
+            write_target_exists: target.exists,
+          }
+        })(),
       },
       resources: {
         instances: this.virtualGuiCount(),

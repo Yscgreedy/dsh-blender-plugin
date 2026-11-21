@@ -29,6 +29,18 @@ export const CONSENT_REQUEST_TTL_MS = 15 * 60_000
 const MAX_REQUESTS = 50
 /** How often the persisted request directory is re-read (HMR survival). */
 const HYDRATE_MS = 500
+/** Retention: the panel is a status surface, not an audit log (field: 648 files). */
+export const CONSENT_RETAIN_MS = 7 * 24 * 3600_000
+export const CONSENT_MAX_FILES = 200
+const PRUNE_MS = 10 * 60_000
+/** At most one *new* request per caller in this window (field: no throttle). */
+export const CONSENT_MIN_INTERVAL_MS = 60_000
+export const CONSENT_MIN_INTERVAL_ENV = 'DSH_BLENDER_CONSENT_MIN_INTERVAL_MS'
+
+export function consentMinIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env[CONSENT_MIN_INTERVAL_ENV])
+  return Number.isFinite(raw) && raw >= 0 ? raw : CONSENT_MIN_INTERVAL_MS
+}
 
 export type ConsentState = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
 
@@ -49,6 +61,7 @@ export interface ConsentRequest {
 const requests = new Map<string, ConsentRequest>()
 const waiters = new Map<string, Set<(state: ConsentState) => void>>()
 let hydratedAt = 0
+let prunedAt = 0
 
 /** Folder that makes a request visible when the transcript was missed. */
 export function consentRequestDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -116,12 +129,55 @@ function recordFromFile(raw: unknown): ConsentRequest | null {
 }
 
 /**
+ * Delete request files nobody can act on any more: older than the retention
+ * window, or beyond the newest CONSENT_MAX_FILES. Pending / approved requests
+ * that are still live in memory are never deleted.
+ */
+function pruneFiles(now: number, force: boolean): void {
+  if (!force && now - prunedAt < PRUNE_MS) return
+  prunedAt = now
+  const dir = consentRequestDir()
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'))
+  } catch {
+    return
+  }
+  const rows: { file: string; id: string; mtime: number }[] = []
+  for (const name of names) {
+    const file = path.join(dir, name)
+    try {
+      rows.push({ file, id: name.slice(0, -'.json'.length), mtime: fs.statSync(file).mtimeMs })
+    } catch {
+      /* vanished between readdir and stat */
+    }
+  }
+  rows.sort((a, b) => b.mtime - a.mtime)
+  rows.forEach((row, index) => {
+    const live = requests.get(row.id)
+    if (live && (live.state === 'pending' || live.state === 'approved')) return
+    if (index < CONSENT_MAX_FILES && now - row.mtime <= CONSENT_RETAIN_MS) return
+    try {
+      fs.unlinkSync(row.file)
+    } catch {
+      /* already gone */
+    }
+  })
+}
+
+/** Ops/test entry: run the retention sweep now. */
+export function pruneConsentFiles(now = Date.now()): void {
+  pruneFiles(now, true)
+}
+
+/**
  * Re-read persisted requests. A Gateway restart (HMR) recreates the process, so
  * the panel's pending cards must come back from disk instead of vanishing.
  */
 function hydrate(now = Date.now()): void {
   if (now - hydratedAt < HYDRATE_MS) return
   hydratedAt = now
+  pruneFiles(now, false)
   let names: string[]
   try {
     names = fs.readdirSync(consentRequestDir()).filter((n) => n.endsWith('.json'))
@@ -178,6 +234,9 @@ export interface ConsentRequestView {
   requestId: string
   expiresAt: number
   reused: boolean
+  /** True when a fresh request was refused by the throttle (same window). */
+  rateLimited?: boolean
+  retryAfterMs?: number
 }
 
 /** File (or reuse) the pending request for this caller. */
@@ -193,6 +252,20 @@ export function ensureConsentRequest(
     .filter((r) => r.callerKey === key && stateOf(r, now) === 'pending')
     .sort((a, b) => b.createdAt - a.createdAt)[0]
   if (pending) return { requestId: pending.id, expiresAt: pending.expiresAt, reused: true }
+  // Throttle: one *new* request per caller per window. A denied or consumed
+  // request must not turn into a card factory when the agent retries in a loop.
+  const interval = consentMinIntervalMs()
+  const newest = [...requests.values()]
+    .filter((r) => r.callerKey === key)
+    .sort((a, b) => b.createdAt - a.createdAt)[0]
+  if (newest && interval > 0 && now - newest.createdAt < interval)
+    return {
+      requestId: newest.id,
+      expiresAt: newest.expiresAt,
+      reused: true,
+      rateLimited: true,
+      retryAfterMs: interval - (now - newest.createdAt),
+    }
   const request: ConsentRequest = {
     id: randomUUID(),
     handle: newHandle(),
@@ -389,4 +462,5 @@ export function resetConsentRequests(): void {
   requests.clear()
   waiters.clear()
   hydratedAt = 0
+  prunedAt = 0
 }

@@ -178,3 +178,116 @@ export function writeConsentPolicy(
     return { ok: false, file, error: e instanceof Error ? e.message : String(e) }
   }
 }
+
+/** The env var, when set to a mode, wins over every file — and locks the panel. */
+export interface PolicyLock {
+  locked: boolean
+  env: string
+  value: string | null
+}
+
+export function policyLock(env: NodeJS.ProcessEnv = process.env): PolicyLock {
+  const raw = String(env[CONSENT_POLICY_ENV] || '').trim()
+  if (!raw) return { locked: false, env: CONSENT_POLICY_ENV, value: null }
+  const mode = parseConsentMode(raw)
+  return { locked: mode !== null, env: CONSENT_POLICY_ENV, value: mode }
+}
+
+/**
+ * The file a panel write goes to, in the order a human would expect:
+ * the explicit policy file, the configured config file, an existing plugin
+ * config anywhere on the list, then ~/.dsh (created on demand).
+ */
+export function policyWriteTarget(env: NodeJS.ProcessEnv = process.env): {
+  file: string
+  exists: boolean
+  from: string
+} {
+  const explicit = String(env[CONSENT_POLICY_FILE_ENV] || '').trim()
+  if (explicit)
+    return {
+      file: explicit,
+      exists: fs.existsSync(explicit),
+      from: 'env:' + CONSENT_POLICY_FILE_ENV,
+    }
+  const configured = String(env.DSH_BLENDER_CONFIG || '').trim()
+  if (configured)
+    return { file: configured, exists: fs.existsSync(configured), from: 'env:DSH_BLENDER_CONFIG' }
+  for (const file of CONFIG_FILES) {
+    if (fs.existsSync(file))
+      return {
+        file,
+        exists: true,
+        from: file.startsWith(CFG.workDirWsl) ? 'workdir' : 'config-list',
+      }
+  }
+  return {
+    file: path.join(os.homedir(), '.dsh', 'dsh-blender.config.json'),
+    exists: false,
+    from: 'default',
+  }
+}
+
+export interface PolicySetResult {
+  ok: boolean
+  mode: ConsentMode | null
+  file: string
+  backup: string | null
+  previous: string | null
+  created: boolean
+  error: string | null
+}
+
+/**
+ * Write ONE key (`virtualGuiConsent`) into the human's config file.
+ *
+ * This is the only write path the panel has besides approve/deny, and it exists
+ * so the human can switch the policy without editing JSON by hand. Nothing else
+ * in the file is touched; a .bak copy of the previous bytes is left next to it
+ * before the first write of a session.
+ */
+export function setConsentPolicy(
+  mode: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): PolicySetResult {
+  const target = policyWriteTarget(env)
+  const parsed = parseConsentMode(mode)
+  const base: PolicySetResult = {
+    ok: false,
+    mode: parsed,
+    file: target.file,
+    backup: null,
+    previous: null,
+    created: !target.exists,
+    error: null,
+  }
+  if (!parsed) return { ...base, error: 'mode must be auto | manual | deny' }
+  try {
+    fs.mkdirSync(path.dirname(target.file), { recursive: true })
+    let current: Record<string, unknown> = {}
+    let bytes = ''
+    if (fs.existsSync(target.file)) {
+      bytes = fs.readFileSync(target.file, 'utf8')
+      const json: unknown = bytes.trim() ? JSON.parse(bytes) : {}
+      if (!isRecord(json)) return { ...base, error: 'the config file is not a JSON object' }
+      current = json
+    }
+    const previous =
+      current.virtualGuiConsent === undefined ? null : String(current.virtualGuiConsent)
+    if (previous !== null && parseConsentMode(previous) === parsed)
+      return { ...base, ok: true, previous, created: false }
+    let backup: string | null = null
+    if (bytes) {
+      backup = target.file + '.bak'
+      fs.writeFileSync(backup, bytes, 'utf8')
+    }
+    const next = { ...current, virtualGuiConsent: parsed }
+    const tmp = target.file + '.tmp-' + String(process.pid)
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8')
+    fs.renameSync(tmp, target.file)
+    resetConsentPolicyCache()
+    return { ...base, ok: true, previous, backup, created: !bytes }
+  } catch (e) {
+    return { ...base, error: e instanceof Error ? e.message : String(e) }
+  }
+}

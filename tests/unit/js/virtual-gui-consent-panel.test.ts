@@ -80,6 +80,8 @@ beforeAll(() => {
   policyFile = path.join(consentDir, 'policy.json')
   process.env.DSH_BLENDER_CONSENT_DIR = consentDir
   process.env.DSH_BLENDER_CONSENT_POLICY_FILE = policyFile
+  // 验收用例会在几十毫秒里连续 start；节流单独一条用例验。
+  process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS = '0'
 })
 
 afterEach(() => {
@@ -105,6 +107,7 @@ afterEach(() => {
 afterAll(() => {
   delete process.env.DSH_BLENDER_CONSENT_DIR
   delete process.env.DSH_BLENDER_CONSENT_POLICY_FILE
+  delete process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS
   try {
     fs.rmSync(consentDir, { recursive: true, force: true })
   } catch {
@@ -461,6 +464,214 @@ describe('virtual-gui consent panel (3.3.1)', () => {
   })
 })
 
+describe('策略写路径 consent_policy_set（唯一新写路径）', () => {
+  const origin = 'http://127.0.0.1:51822'
+
+  it('只写 virtualGuiConsent 一个键、留 .bak、立即生效', async () => {
+    const { registry } = panelRegistry()
+    fs.writeFileSync(
+      policyFile,
+      JSON.stringify(
+        { httpPort: 39877, virtualGuiConsent: 'manual', features: { virtualGui: 'on' } },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    )
+    resetConsentPolicyCache()
+    const res = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'auto' },
+      undefined,
+      origin,
+    )
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.effective).toBe('immediate')
+    const policy = res.body.policy as Record<string, unknown>
+    expect(policy.mode).toBe('auto')
+    expect(policy.auto).toBe(true)
+    expect(policy.source).toContain('file:')
+    const audit = res.body.audit as Record<string, unknown>
+    expect(Number(audit.at)).toBeGreaterThan(0)
+    expect(audit.origin).toBe(origin)
+
+    const after = JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>
+    expect(Object.keys(after).sort()).toEqual(['features', 'httpPort', 'virtualGuiConsent'])
+    expect(after.virtualGuiConsent).toBe('auto')
+    expect(after.httpPort).toBe(39877)
+    expect((after.features as Record<string, unknown>).virtualGui).toBe('on')
+    const backup = policyFile + '.bak'
+    expect(fs.existsSync(backup)).toBe(true)
+    expect(
+      (JSON.parse(fs.readFileSync(backup, 'utf8')) as Record<string, unknown>).virtualGuiConsent,
+    ).toBe('manual')
+
+    // 下一次 start：不需要任何工具调用就已是 auto
+    const started = await registry.start(main(), { kind: 'virtual-gui' })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect((started.session as Record<string, unknown>).consent_source).toBe('policy:allow')
+  })
+
+  it('切回 manual：立即恢复弹卡片（不需要重启）', async () => {
+    const { registry } = panelRegistry()
+    const auto = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'auto' },
+      undefined,
+      origin,
+    )
+    expect(auto.status).toBe(200)
+    expect((auto.body.policy as Record<string, unknown>).mode).toBe('auto')
+    const manual = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'manual' },
+      undefined,
+      origin,
+    )
+    expect(manual.status).toBe(200)
+    expect((manual.body.policy as Record<string, unknown>).mode).toBe('manual')
+    expect((manual.body.policy as Record<string, unknown>).auto).toBe(false)
+    const panel = registry.consentPanel('dsh-1')
+    expect((panel.policy as Record<string, unknown>).auto).toBe(false)
+    const pending = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
+    expect(pending.ok).toBe(false)
+    if (pending.ok) return
+    expect(pending.evidence.state).toBe('pending')
+    expect((manual.body.policy as Record<string, unknown>).source).toContain('file:')
+  })
+
+  it('带 DSH 身份头 → 403 consent_human_only（agent 改不了策略），且没写文件', async () => {
+    fs.rmSync(policyFile, { force: true })
+    resetConsentPolicyCache()
+    const { registry } = panelRegistry()
+    const res = await runWithCaller(main(), () =>
+      dispatchSessionAction(registry, 'consent_policy_set', { mode: 'auto' }, undefined, origin),
+    )
+    expect(res.status).toBe(403)
+    expect(res.body.code).toBe('consent_human_only')
+    expect(String(res.body.fix)).toContain('human')
+    expect(fs.existsSync(policyFile)).toBe(false)
+  })
+
+  it('env 锁定时拒绝（409 policy_locked），不会假装改成功', async () => {
+    fs.writeFileSync(policyFile, JSON.stringify({ virtualGuiConsent: 'manual' }), 'utf8')
+    resetConsentPolicyCache()
+    process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT = 'manual'
+    const { registry } = panelRegistry()
+    const res = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'auto' },
+      undefined,
+      origin,
+    )
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('policy_locked')
+    expect(
+      (JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>)
+        .virtualGuiConsent,
+    ).toBe('manual')
+    // 面板同步显示锁定
+    const panel = registry.consentPanel('dsh-1')
+    const view = panel.policy as Record<string, unknown>
+    expect(view.locked).toBe(true)
+    expect(view.lock_env).toBe('DSH_BLENDER_VIRTUAL_GUI_CONSENT')
+    expect(view.writable).toBe(false)
+    delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+  })
+
+  it('非回环 Origin → 403 origin_not_allowed', async () => {
+    const { registry } = panelRegistry()
+    const res = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'auto' },
+      undefined,
+      'https://evil.example',
+    )
+    expect(res.status).toBe(403)
+    expect(res.body.code).toBe('origin_not_allowed')
+  })
+
+  it('非法 mode → 500 policy_write_failed（不写半截文件）', async () => {
+    fs.writeFileSync(policyFile, JSON.stringify({ virtualGuiConsent: 'manual' }), 'utf8')
+    resetConsentPolicyCache()
+    const { registry } = panelRegistry()
+    const res = await dispatchSessionAction(
+      registry,
+      'consent_policy_set',
+      { mode: 'sometimes' },
+      undefined,
+      origin,
+    )
+    expect(res.status).toBe(500)
+    expect(String((res.body as Record<string, unknown>).root_cause)).toContain('mode must be')
+    expect(
+      (JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>)
+        .virtualGuiConsent,
+    ).toBe('manual')
+  })
+})
+
+describe('同意目录的保留与节流', () => {
+  it('prune：删掉 7 天前的请求文件，保留最近的和仍 pending 的', async () => {
+    const { registry } = panelRegistry()
+    const pendingStart = registry.start(main(), { kind: 'virtual-gui', waitMs: 120 })
+    await waitForCard(registry, 'dsh-1')
+    const live = fs.readdirSync(consentDir).filter((n) => n.endsWith('.json'))
+    expect(live.length).toBeGreaterThan(0)
+    const oldFile = path.join(consentDir, '00000000-0000-4000-8000-000000000000.json')
+    fs.writeFileSync(
+      oldFile,
+      JSON.stringify({
+        request_id: path.basename(oldFile, '.json'),
+        state: 'denied',
+        expires_at: 1,
+        caller: {},
+      }),
+      'utf8',
+    )
+    const old = new Date(Date.now() - 30 * 24 * 3600_000)
+    fs.utimesSync(oldFile, old, old)
+    const { pruneConsentFiles } = await import('../../../runtime/core/sessions/consent-requests.js')
+    pruneConsentFiles()
+    expect(fs.existsSync(oldFile)).toBe(false)
+    for (const name of live) expect(fs.existsSync(path.join(consentDir, name))).toBe(true)
+    await pendingStart
+  })
+
+  it('节流：同一 caller 一分钟内只落一条新请求（驳回后立刻重试被挡）', async () => {
+    process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS = '60000'
+    try {
+      const { registry } = panelRegistry()
+      const first = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
+      expect(first.ok).toBe(false)
+      if (first.ok) return
+      const requestId = String(first.evidence.request_id)
+      expect(registry.approveConsent(requestId, 'human').ok).toBe(true)
+      const started = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
+      expect(started.ok).toBe(true) // 消费掉那条批准
+      // 现在再要一条新请求 → 被节流挡住
+      const again = await registry.start(main(), { kind: 'virtual-gui', waitMs: 0 })
+      expect(again.ok).toBe(false)
+      if (again.ok) return
+      expect(again.evidence.reason).toBe('rate_limited')
+      expect(Number(again.evidence.retry_after_ms)).toBeGreaterThan(0)
+      const filed = registry.requestConsent(main())
+      expect(filed.ok).toBe(false)
+      if (filed.ok) return
+      expect(filed.code).toBe('consent_rate_limited')
+    } finally {
+      process.env.DSH_BLENDER_CONSENT_MIN_INTERVAL_MS = '0'
+    }
+  })
+})
+
 /** 面板渲染树的文字（用于断言"人真的能看到什么"）。 */
 function treeText(node: any): string {
   if (node === null || node === undefined || node === false) return ''
@@ -517,13 +728,172 @@ describe('session panel rendering (client half)', () => {
       error: '',
       busy: '',
       collapsed: true,
+      confirmAuto: '',
       onDecide: () => {},
+      onPolicy: () => {},
       onToggle: () => {},
     })
     const text = treeText(tree)
     expect(text).toContain('自动批准已开')
-    expect(text).toContain('策略 auto · file:c.json')
+    expect(model.policyLabel).toContain('auto · file:c.json')
     expect(text).toContain('实例 1/4')
+  })
+
+  it('折叠行补两个数：待批准 N / 认领 M；策略区三态 + 来源 + 立即生效', () => {
+    const self = clientSelf()
+    const payload = panel({
+      requests: [
+        {
+          handle: 'h-1',
+          state: 'pending',
+          expires_at: 1_700_000_000_000 + 60_000,
+          expires_in_ms: 60_000,
+          caller: { agentId: 'agent-main', dshSessionId: 'dsh-1', role: 'main' },
+        },
+      ],
+      sessions: [
+        {
+          id: 'virtual-gui:v1',
+          instanceId: 'v1',
+          kind: 'virtual-gui',
+          is_mine: true,
+          owner: {
+            dshSessionId: 'dsh-1',
+            agentId: 'agent-main',
+            heartbeat_age_ms: 0,
+            expiresInMs: 1_800_000,
+          },
+          grants: [],
+        },
+        {
+          id: 'user-gui:g1',
+          instanceId: 'g1',
+          kind: 'user-gui',
+          is_mine: false,
+          borrowed: true,
+          owner: {
+            dshSessionId: 'dsh-9',
+            agentId: 'agent-other',
+            heartbeat_age_ms: 5,
+            expiresInMs: 1_799_000,
+          },
+          grants: [],
+        },
+      ],
+    })
+    const model = self.panelModel(payload, 1_700_000_000_000)
+    const seen: string[] = []
+    const tree = self.panelTree(h, {
+      model,
+      error: '',
+      busy: '',
+      collapsed: false,
+      confirmAuto: '',
+      onDecide: () => {},
+      onPolicy: (mode: string) => seen.push(mode),
+      onToggle: () => {},
+    })
+    const text = treeText(tree)
+    expect(text).toContain('Blender 会话 · 1 待批准')
+    expect(text).toContain('待批准 1 ｜ 认领 2')
+    expect(text).toContain('实例 1/4')
+    expect(text).toContain('策略')
+    expect(text).toContain('当前 manual · default')
+    expect(text).toContain('改完立即生效，无需重启')
+    const modes = findByType(tree, 'button').filter((b: any) => b.props['data-mode'])
+    expect(modes.map((b: any) => b.props['data-mode'])).toEqual(['manual', 'auto', 'deny'])
+    expect(treeText(modes[0])).toContain('● manual')
+    expect(modes[0].props.disabled).toBe(false)
+    // 点 auto 只是"进入二次确认"，由组件决定（纯树层只派发 mode）
+    modes[1].props.onClick()
+    expect(seen).toEqual(['auto'])
+  })
+
+  it('0 待批准 · 0 实例：入口仍可达且显示零值', () => {
+    const self = clientSelf()
+    const model = self.panelModel(panel(), Date.now())
+    const tree = self.panelTree(h, {
+      model,
+      error: '',
+      busy: '',
+      collapsed: false,
+      confirmAuto: '',
+      onDecide: () => {},
+      onPolicy: () => {},
+      onToggle: () => {},
+    })
+    const text = treeText(tree)
+    expect(text).toContain('待批准 0 ｜ 认领 0')
+    expect(text).toContain('0 待批准 · 0 实例')
+    expect(text).toContain('Blender 会话')
+  })
+
+  it('auto 二次确认：确认态文案写清后果', () => {
+    const self = clientSelf()
+    const model = self.panelModel(panel(), Date.now())
+    const tree = self.panelTree(h, {
+      model,
+      error: '',
+      busy: '',
+      collapsed: false,
+      confirmAuto: 'auto',
+      onDecide: () => {},
+      onPolicy: () => {},
+      onToggle: () => {},
+    })
+    const text = treeText(tree)
+    expect(text).toContain('确认自动批准')
+    expect(text).toContain('以后每次 start 都直接放行、不再询问')
+    expect(text).toContain('再点一次「确认自动批准」')
+  })
+
+  it('env 锁定时控件禁用并提示来源', () => {
+    const self = clientSelf()
+    const locked = panel({
+      policy: {
+        mode: 'auto',
+        policy: 'allow',
+        auto: true,
+        source: 'env:DSH_BLENDER_VIRTUAL_GUI_CONSENT',
+        file: null,
+        locked: true,
+        lock_env: 'DSH_BLENDER_VIRTUAL_GUI_CONSENT',
+        lock_value: 'auto',
+        writable: false,
+      },
+    })
+    const model = self.panelModel(locked, Date.now())
+    const tree = self.panelTree(h, {
+      model,
+      error: '',
+      busy: '',
+      collapsed: false,
+      confirmAuto: '',
+      onDecide: () => {},
+      onPolicy: () => {},
+      onToggle: () => {},
+    })
+    const modes = findByType(tree, 'button').filter((b: any) => b.props['data-mode'])
+    expect(modes.every((b: any) => b.props.disabled === true)).toBe(true)
+    expect(treeText(tree)).toContain('被环境变量 DSH_BLENDER_VIRTUAL_GUI_CONSENT=auto 锁定')
+    expect(treeText(tree)).toContain('自动批准已开')
+  })
+
+  it('会话头部入口与极简状态行的文案（0 也可见）', () => {
+    const self = clientSelf()
+    const empty = self.panelModel(panel(), Date.now())
+    expect(empty.chipLabel).toBe('Blender · 0 待批准')
+    expect(empty.chipActive).toBe(false)
+    const one = self.panelModel(
+      panel({
+        requests: [
+          { handle: 'h-1', state: 'pending', expires_at: Date.now() + 60_000, caller: {} },
+        ],
+      }),
+      Date.now(),
+    )
+    expect(one.chipLabel).toBe('Blender · 1 待批准')
+    expect(one.chipActive).toBe(true)
   })
 
   it('manual：卡片带请求方、资源影响、倒计时与两个按钮；按钮携带 handle', () => {
@@ -547,7 +917,9 @@ describe('session panel rendering (client half)', () => {
       error: '',
       busy: '',
       collapsed: false,
+      confirmAuto: '',
       onDecide: (handle: string, action: string) => decided.push(handle + ':' + action),
+      onPolicy: () => {},
       onToggle: () => {},
     })
     const text = treeText(tree)
@@ -557,7 +929,7 @@ describe('session panel rendering (client half)', () => {
     expect(text).toContain('有效期剩余 4m00')
     expect(text).not.toContain('11111111-1111') // request_id 不进页面
 
-    const buttons = findByType(tree, 'button')
+    const buttons = findByType(tree, 'button').filter((b: any) => b.props['data-request'])
     expect(buttons).toHaveLength(2)
     expect(buttons[0].props['data-request']).toBe('h-abcdef')
     expect(treeText(buttons[0])).toBe('批准')
@@ -595,10 +967,13 @@ describe('session panel rendering (client half)', () => {
       error: '',
       busy: '',
       collapsed: false,
+      confirmAuto: '',
       onDecide: () => {},
+      onPolicy: () => {},
       onToggle: () => {},
     })
     const text = treeText(tree)
+    expect(text).toContain('待批准 0 ｜ 认领 1')
     expect(text).toContain('vgui-1')
     expect(text).toContain('dsh-9/agent-other')
     expect(text).toContain('is_mine ✗')

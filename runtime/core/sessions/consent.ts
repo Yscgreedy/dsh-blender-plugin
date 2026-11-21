@@ -78,10 +78,12 @@ export interface ConsentFailureExtra {
   pending?: boolean
   /** How long this start waited for a human decision. */
   waitMs?: number
+  /** Throttle: how long until this caller may file a fresh request. */
+  retryAfterMs?: number
 }
 
 export function consentFailure<T = Record<string, unknown>>(
-  reason: ConsentReason | 'policy_denied' | 'request_denied',
+  reason: ConsentReason | 'policy_denied' | 'request_denied' | 'rate_limited',
   extra: ConsentFailureExtra = {},
 ): SessionResult<T> {
   const resolved = resolveConsentPolicy()
@@ -92,11 +94,15 @@ export function consentFailure<T = Record<string, unknown>>(
     'consent_required',
     'session',
     'virtual-gui requires explicit human consent (' + reason + ')',
-    pending
-      ? 'a request is waiting in the Blender session panel of this conversation: approve it there and ' +
+    reason === 'rate_limited'
+      ? 'this caller filed a consent request less than a minute ago: approve it in the panel, wait ' +
+          String(Math.ceil(Number(extra.retryAfterMs || 0) / 1000)) +
+          's, or set the policy to auto/deny in the panel'
+      : pending
+        ? 'a request is waiting in the Blender session panel of this conversation: approve it there and ' +
           'the same start completes; if it already returned, call action=start again (an approval is ' +
           'consumed once)'
-      : 'ask the human to approve the request in the Blender session panel (or run the approve command ' +
+        : 'ask the human to approve the request in the Blender session panel (or run the approve command ' +
           'from this receipt); ' +
           CONSENT_POLICY_ENV +
           '=allow on the Gateway host pre-approves every start',
@@ -109,6 +115,7 @@ export function consentFailure<T = Record<string, unknown>>(
       request_expires_at: extra.expiresAt || null,
       state: pending ? 'pending' : null,
       wait_ms: extra.waitMs ?? null,
+      retry_after_ms: extra.retryAfterMs ?? null,
       options: [
         { action: 'attach', label: 'attach the running Blender window (no consent needed)' },
         { action: 'start', label: 'start a virtual Blender window after human approval' },

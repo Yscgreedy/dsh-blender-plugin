@@ -120,6 +120,15 @@ export async function startVirtualGuiGate(
   // Nothing to consume: file (or reuse) the request the human approves, then wait
   // for them — the panel's button completes *this* call, not a later one.
   const request = ensureConsentRequest(input.caller)
+  if (request.rateLimited)
+    return consentFailure<{ capability: DisplayCapabilities }>('rate_limited', {
+      ...base,
+      requestId: request.requestId,
+      expiresAt: request.expiresAt,
+      pending: true,
+      waitMs: 0,
+      retryAfterMs: request.retryAfterMs,
+    })
   // Only a first start (no token at all) waits for the human. A token that was
   // replayed or expired is the caller's own mistake: answer immediately so the
   // receipt still names 'used' / 'invalid' instead of parking a stale call.

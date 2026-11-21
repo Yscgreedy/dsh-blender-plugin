@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { isolateConsentDir } from '../../helpers/consent-dir'
 import { buildDisplayCapabilities } from '../../../runtime/display/prerequisites.js'
 import {
   clampVirtualGuiLimit,
@@ -79,6 +80,16 @@ async function startWithConsent(reg: SessionRegistry, caller = MAIN) {
   if (!consent.ok) throw new Error('consent failed')
   return reg.start(caller, { consentToken: consent.consentToken })
 }
+
+/** 隔离 consent 目录：start 会落请求，不能写进操作者的真实 workDir。 */
+let consentSandbox: ReturnType<typeof isolateConsentDir> | null = null
+beforeAll(() => {
+  consentSandbox = isolateConsentDir('dsh-consent-lifecycle-')
+})
+afterAll(() => {
+  consentSandbox?.dispose()
+  consentSandbox = null
+})
 
 describe('virtual-gui lifecycle', () => {
   it('registers a ready session only after the addon handshake', async () => {

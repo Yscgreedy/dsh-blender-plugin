@@ -15,6 +15,11 @@ import {
   consentApproveCommand,
   denyConsentRequest,
 } from '../../../core/sessions/consent-requests.js'
+import {
+  policyLock,
+  resolveConsentPolicy,
+  setConsentPolicy,
+} from '../../../core/sessions/consent-policy.js'
 
 function statusFor(result: AvailabilityFailure): number {
   if (result.code === 'invalid_params') return 400
@@ -91,6 +96,53 @@ function withHumanAction(
 }
 
 /**
+ * Switch the policy from the panel: the only write path besides approve/deny.
+ *
+ * The gate is the same door as a decision (loopback or no Origin, and never a
+ * DSH-attributed call), plus the env lock: an environment variable that pins the
+ * mode makes a write a lie, so it is refused instead of silently overridden.
+ * Only `virtualGuiConsent` is written; the file gets a .bak first.
+ */
+function policySetAction(payload: Record<string, unknown>, origin: unknown): SessionApiResult {
+  if (!panelOriginAllowed(origin)) return forbiddenOrigin('a policy change', origin)
+  const lock = policyLock()
+  if (lock.locked)
+    return {
+      status: 409,
+      cors: true,
+      body: {
+        ok: false,
+        code: 'policy_locked',
+        root_cause:
+          lock.env + '=' + String(lock.value) + ' pins the virtual-gui policy for this Gateway',
+        fix: 'unset ' + lock.env + ' on the Gateway host, then switch the mode in the panel',
+        evidence: { env: lock.env, value: lock.value },
+      },
+    }
+  const written = setConsentPolicy(payload.mode)
+  const policy = resolveConsentPolicy()
+  return {
+    status: written.ok ? 200 : 500,
+    cors: true,
+    body: {
+      ok: written.ok,
+      policy: {
+        mode: policy.mode,
+        policy: policy.policy,
+        auto: policy.auto,
+        source: policy.source,
+        file: written.file,
+      },
+      effective: written.ok ? 'immediate' : null,
+      audit: { at: Date.now(), origin: origin === undefined ? null : String(origin || '') },
+      ...(written.ok
+        ? { backup: written.backup, previous: written.previous, created: written.created }
+        : { code: 'policy_write_failed', root_cause: written.error }),
+    },
+  }
+}
+
+/**
  * The human side of the consent gate. A terminal has no DSH identity headers, so
  * approve/deny are the only actions allowed without a caller — and they need the
  * unguessable request id that a start just showed to the human.
@@ -102,37 +154,16 @@ function humanConsentAction(
   origin: unknown,
 ): SessionApiResult | null {
   if (action === 'consent_panel') {
-    if (!panelOriginAllowed(origin))
-      return {
-        status: 403,
-        cors: true,
-        body: {
-          ok: false,
-          code: 'origin_not_allowed',
-          root_cause: 'the session panel answers only loopback origins (or no Origin at all)',
-          fix: 'open the panel from the DSH web app (127.0.0.1 / localhost), or use the terminal commands',
-          evidence: { origin: origin || null },
-        },
-      }
+    if (!panelOriginAllowed(origin)) return forbiddenOrigin('a session panel read', origin)
     return {
       status: 200,
       cors: true,
       body: registry.consentPanel(String(payload.dshSessionId || payload.sessionId || '')),
     }
   }
+  if (action === 'consent_policy_set') return policySetAction(payload, origin)
   if (action !== 'consent_approve' && action !== 'consent_deny') return null
-  if (!panelOriginAllowed(origin))
-    return {
-      status: 403,
-      cors: true,
-      body: {
-        ok: false,
-        code: 'origin_not_allowed',
-        root_cause: 'a consent decision from this origin is not accepted',
-        fix: 'decide in the session panel of the DSH conversation, or run the approve command in a terminal',
-        evidence: { origin: origin || null },
-      },
-    }
+  if (!panelOriginAllowed(origin)) return forbiddenOrigin('a consent decision', origin)
   const ref = payload.requestId ?? payload.handle
   const decided =
     action === 'consent_approve'
@@ -191,7 +222,13 @@ function agentConsentAction(
  * panel / terminal command. Unattended hosts use the policy (`auto`), which is
  * a human-written file, not a tool call.
  */
-const HUMAN_ONLY_ACTIONS = new Set(['consent_approve', 'consent_deny'])
+const HUMAN_ONLY_ACTIONS = new Set([
+  'consent_approve',
+  'consent_deny',
+  // The panel may switch the policy; an agent that could switch it to auto has
+  // no gate at all. Same 403 as a self-approval.
+  'consent_policy_set',
+])
 
 function humanOnlyRefusal(action: string, payload: Record<string, unknown>): SessionApiResult {
   return {
@@ -213,6 +250,21 @@ function humanOnlyRefusal(action: string, payload: Record<string, unknown>): Ses
         request_id: payload.requestId || payload.handle || null,
         caller: callerView(currentCaller() as CallerIdentity),
       },
+    },
+  }
+}
+
+/** One refusal shape for every panel action reached from a foreign origin. */
+function forbiddenOrigin(what: string, origin?: unknown): SessionApiResult {
+  return {
+    status: 403,
+    cors: true,
+    body: {
+      ok: false,
+      code: 'origin_not_allowed',
+      root_cause: what + ' from this origin is not accepted',
+      fix: 'use the session panel of the DSH conversation (loopback origin), or the terminal command from the receipt',
+      evidence: { origin: origin === undefined ? null : String(origin || '') },
     },
   }
 }

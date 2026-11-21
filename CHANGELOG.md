@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-11-21 面板迁到会话视图右侧栏 + 策略可在面板里切换
+
+- **容器迁移（用户实拍：折叠条贴在输入框上方、跟对话流无关）**：主体改成右侧栏的 tab 类型
+  `blender-session`（`sidebarRightTabs.register` + 两个 keyed 槽位 `sidebar.right.pane.tab` /
+  `sidebar.right.pane.tab.title`，标题单独注册）；入口是会话头部 `conversation.session.header.actions`
+  的按钮（有 pending 带徽标数），右侧栏服务缺失时落 `shell.overlay` 抽屉。**输入框上方只剩一行**
+  `Blender · N 待批准`（无 pending 灰显，点它开面板），卡片/认领表/策略都不再放那里。
+  展开状态换键 `dsh-blender-plugin:panel:tab-open`（并清理旧 key），避免状态错位。
+- **策略区（折叠行补 `待批准 N ｜ 认领 M`）**：manual / auto / deny 三态切换，显示当前值与来源
+  （`default` / `env:…` / `file:…`）与「改完立即生效，无需重启」；**切 auto 需二次确认**
+  （第一下变「确认自动批准」并写清"以后每次 start 都直接放行、不再询问"）。
+- **新写路径（只此一条）**：`POST /lease {"action":"consent_policy_set","mode":"manual|auto|deny"}`。
+  只接受回环 Origin（或无 Origin）+ 无 DSH 身份头；带 `X-DSH-*` 一律 403 `consent_human_only`
+  （agent 改不了策略）。只写 `virtualGuiConsent` 一个键（其它键不动），写前留 `.bak`，原子写；
+  回执 `{ok, policy:{mode,policy,auto,source,file}, effective:'immediate', audit:{at,origin}}`。
+  env `DSH_BLENDER_VIRTUAL_GUI_CONSENT` 存在时面板禁用控件并提示「被环境变量锁定」，
+  POST 回 409 `policy_locked`。`OPTIONS /lease` 为浏览器预检回 204 + CORS 头。
+- **保留与节流（验收侧提出）**：`<workDir>/consent` 超过 7 天或超出最近 200 个的请求文件自动清理
+  （pending/approved 不删，10 分钟扫一次）；同一 caller **60 s 内最多一条新请求**
+  （`DSH_BLENDER_CONSENT_MIN_INTERVAL_MS`，默认 60000），被挡时 `start` 回 `reason=rate_limited`、
+  `consent_request` 回 `consent_rate_limited`。
+- **测试隔离**：新增 `tests/helpers/consent-dir.ts`，`display-capabilities` 与 `virtual-gui-lifecycle`
+  也改用临时 consent 目录 —— 此前它们的 `caller=h/s/a` 会写进操作者真实的 workDir，出现在正在用的面板里。
+
 ### 2026-11-21 virtual-gui 人工确认面板：从"复制 uuid 去终端"变成"在对话里点一下"
 
 > 来源：BlenderProject 实测（插件 3.3.0）。`start kind=virtual-gui` 首次回 `consent_required`，回执要人

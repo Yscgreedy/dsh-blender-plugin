@@ -5,6 +5,8 @@ import { currentCaller } from '../../caller.js'
 import { dispatchSessionAction } from './api.js'
 import type { SessionControl } from './api.js'
 import { buildReloadReport, drainGateway } from './control.js'
+import { hostCorsHeaders } from '../../response.js'
+import { panelOriginAllowed } from './api.js'
 
 /**
  * One action through the session API. Browser-facing answers (the session panel)
@@ -37,6 +39,20 @@ const CONSENT_HTTP_ACTIONS = new Set([
   'consent_deny',
   'consent_status',
 ])
+
+/**
+ * CORS preflight for the panel's one write (POST consent_policy_set). Only the
+ * loopback origins the pages are served from get an answer; anything else is a
+ * plain 404, the same as an unknown method used to be.
+ */
+function answerPreflight(E: HttpRouteDeps, req: IncomingMessage, res: ServerResponse): void {
+  if (!panelOriginAllowed(req.headers.origin)) {
+    E.json(res, 404, { ok: false, error: 'not_found' })
+    return
+  }
+  res.writeHead(204, hostCorsHeaders(req.headers.origin))
+  res.end()
+}
 
 /** Payload = JSON body, then query-string values for keys the body did not set. */
 async function leasePayload(
@@ -140,6 +156,10 @@ export function createLeaseHandler(E: HttpRouteDeps) {
     _url: URL,
     _p: string,
   ): Promise<void> {
+    if (req.method === 'OPTIONS') {
+      answerPreflight(E, req, res)
+      return
+    }
     const get = req.method === 'GET' || req.method === 'HEAD'
     const payload = await leasePayload(E, req)
     const action = typeof payload.action === 'string' ? payload.action : ''

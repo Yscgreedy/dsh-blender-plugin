@@ -155,8 +155,13 @@ itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-tim
 and `consent-policy.ts` (auto / manual / deny, read per call from env, the profile key
 `virtualGuiConsent`, then the config file, so an edit lands in ≤250 ms without a restart). Since
 3.3.1 `start` files a request and **waits** (`wait_ms`, default 20 s) for the human: the Blender session
-panel in the conversation view (`conversation.input.dock`, `src/client/index.js`) shows the card and
-`GET /lease?action=consent_approve&handle=…` releases that same call (`consent_source=approved_request`).
+panel — a right-Sidebar tab type (`sidebar.right.pane.tab` + its own `…pane.tab.title`) opened from the
+session header entry, with a one-line `Blender · N 待批准` chip left in `conversation.input.dock`
+(`src/client/index.js`) — shows the card and `GET /lease?action=consent_approve&handle=…` releases that
+same call (`consent_source=approved_request`). The panel also switches the policy through
+`POST /lease {"action":"consent_policy_set"}`, which writes only `virtualGuiConsent` (with a `.bak`),
+refuses DSH-attributed calls with 403 `consent_human_only`, and answers 409 `policy_locked` while the
+env var pins the mode.
 The terminal command (`requestId=`) stays as an equivalent channel; `/lease` accepts GET only for the
 `consent_*` actions. Requests persist under `<workDir>/consent/`, so a Gateway restart (HMR) restores
 the panel's cards instead of losing them. The panel is read-only plus approve/deny: it never spawns

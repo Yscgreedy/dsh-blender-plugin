@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { isolateConsentDir } from '../../helpers/consent-dir'
 import {
   buildDisplayCapabilities,
   prerequisiteTable,
@@ -15,6 +16,16 @@ import type { EngineApiDeps } from '../../../runtime/core/engine-api/index.js'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
 
 const WIN_CHECKS = { 'win-hidden-desktop-helper': true, blender: true }
+
+/** 隔离 consent 目录：这里的 start 会落请求，不能写进操作者的真实 workDir。 */
+let consentSandbox: ReturnType<typeof isolateConsentDir> | null = null
+beforeAll(() => {
+  consentSandbox = isolateConsentDir('dsh-consent-caps-')
+})
+afterAll(() => {
+  consentSandbox?.dispose()
+  consentSandbox = null
+})
 
 describe('provider selection order', () => {
   it('tries the Windows hidden desktop before the IDD fallback', () => {
