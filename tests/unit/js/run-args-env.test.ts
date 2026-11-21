@@ -7,7 +7,7 @@ import {
   normalizeArgs,
   normalizeEnv,
   splitArgs,
-} from '../../../runtime/core/queue/spawn-executor.js'
+} from '../../../runtime/core/queue/job-args.js'
 import { normalizeSelftestReceipt } from '../../../runtime/core/selftest.js'
 import type { JobRecord } from '../../../runtime/core/queue/types.js'
 

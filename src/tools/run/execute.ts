@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BACKEND_HINT } from '../../constants.js'
 import type { AvailabilityStage } from '../../contracts/availability.js'
-import { text } from '../../contracts/dynamic.js'
+import { asRecord, text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import { backendPost, jsonPayload } from '../../host/http.js'
 import type { WorkspaceView } from '../../host/workspace.js'
@@ -23,7 +23,13 @@ import {
   formatPerf,
   formatSubmit,
   formatWait,
+  jobApplied,
+  jobEnvelope,
+  jobFields,
+  listEnvelope,
+  listRows,
   runHelp,
+  submitEnvelope,
 } from './presenter.js'
 
 const LF = String.fromCharCode(10)
@@ -88,6 +94,8 @@ const RENDER_KEYS = [
   'engine',
   'format',
   'camera',
+  'device',
+  'compute_device_type',
 ]
 const HEADLESS_KEYS = [
   'script',
@@ -265,6 +273,11 @@ function submitPayload(args: Record<string, unknown>): Record<string, unknown> |
   if (kind === 'render') {
     if (present(args.script) || present(args.script_file))
       return 'render 不接受 script/script_file：最终渲染是声明式入口；跑脚本请用 kind=headless 或 blender_py'
+    // Blender 的 // 是"相对当前 .blend 目录"的规范写法；没有 file 就没有基准，提前拒掉，
+    // 别让后端把它当绝对路径去 mkdir 'C:\'（阶段=spawn 的错误完全不含路径语义）。
+    const out = present(args.output) ? String(args.output).trim() : ''
+    if (out.startsWith('//') && !present(args.file))
+      return 'output 以 // 开头（Blender 相对 .blend 目录），需要同时给 file=<.blend> 作为基准；或直接给绝对路径'
     for (const k of RENDER_KEYS) if (present(args[k])) payload[k] = args[k]
     // render channels：默认 ["render"]，非法值 invalid_params 并把允许列表还回去。
     const channels = normalizeChannels(args.channels)
@@ -303,6 +316,37 @@ async function tune(port: number, args: Record<string, unknown>): Promise<unknow
   return { text: 'RUN tune ' + op + ' ' + JSON.stringify(r.result ?? r) }
 }
 
+/** submit 分支：参数收窄 → 路径绝对化 → 入队 → 结构化句柄（executeRun 保持 <120 行）。 */
+async function submitRun(
+  ctx: unknown,
+  port: number,
+  args: Record<string, unknown>,
+  exec?: unknown,
+): Promise<unknown> {
+  const built = submitPayload(args)
+  if (typeof built === 'string')
+    return toolError('invalid_params', built, 'action=help 查看 render/headless 参数')
+  const ws = workspaceRoots(exec, ctx)
+  const resolved = absolutizePayload(built, ws)
+  if (resolved.error)
+    return toolError(
+      'input_missing',
+      resolved.error,
+      '给绝对路径，或传 workdir=<工作区根>',
+      workspaceNote(ws),
+    )
+  const body = await postQueue(port, built, 60000)
+  if (body.ok !== true) return failureOf(body, 'submit')
+  // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与 receipt.v2 信封同源。
+  const job = asRecord(body.job)
+  return {
+    text: formatSubmit(job) + LF + workspaceNote(ws, resolved.base),
+    ...jobFields(job),
+    queued_ahead: typeof job.queued_ahead === 'number' ? job.queued_ahead : null,
+    envelope: submitEnvelope(job, job.queued_ahead, resolved.base),
+  }
+}
+
 export async function executeRun(
   ctx: unknown,
   port: number,
@@ -327,35 +371,18 @@ export async function executeRun(
   // 痛点7/8：同一个热进程里连续 exec/see + checkpoint 栈（不再每次冷启动、不再手工另存 .blend）
   if (action === 'worker') return executeWorker(ctx, port, args, exec)
 
-  if (action === 'submit') {
-    const built = submitPayload(args)
-    if (typeof built === 'string')
-      return toolError('invalid_params', built, 'action=help 查看 render/headless 参数')
-    const ws = workspaceRoots(exec, ctx)
-    const resolved = absolutizePayload(built, ws)
-    if (resolved.error)
-      return toolError(
-        'input_missing',
-        resolved.error,
-        '给绝对路径，或传 workdir=<工作区根>',
-        workspaceNote(ws),
-      )
-    const body = await postQueue(port, built, 60000)
-    if (body.ok !== true) return failureOf(body, action)
-    return {
-      text:
-        formatSubmit(body.job as Record<string, unknown>) + LF + workspaceNote(ws, resolved.base),
-    }
-  }
+  if (action === 'submit') return submitRun(ctx, port, args, exec)
   if (action === 'list') {
     const payload: Record<string, unknown> = { op: 'list' }
     for (const k of ['state', 'kind', 'owner']) if (present(args[k])) payload[k] = args[k]
     const body = await postQueue(port, payload, 60000)
     if (body.ok !== true) return failureOf(body, action)
+    const jobs = Array.isArray(body.jobs) ? (body.jobs as Array<Record<string, unknown>>) : []
     return {
-      text: formatList(
-        Array.isArray(body.jobs) ? (body.jobs as Array<Record<string, unknown>>) : [],
-      ),
+      text: formatList(jobs),
+      jobs: listRows(jobs),
+      count: jobs.length,
+      envelope: listEnvelope(jobs),
     }
   }
   if (action === 'perf') {
@@ -373,15 +400,27 @@ export async function executeRun(
   if (action === 'status') {
     const body = await postQueue(port, { op: 'status', id }, 60000)
     if (body.ok !== true) return failureOf(body, action)
-    return { text: formatJob(body.job as Record<string, unknown>).join(String.fromCharCode(10)) }
+    const job = asRecord(body.job)
+    return {
+      text: formatJob(job).join(String.fromCharCode(10)),
+      ...jobFields(job),
+      applied: jobApplied(job),
+      envelope: jobEnvelope(action, job),
+    }
   }
   if (action === 'wait') {
     const timeoutMs = Number(args.timeout_ms) || 120000
     const budget = Math.min(600000, Math.max(1000, timeoutMs)) + 30000
     const body = await postQueue(port, { op: 'wait', id, timeout_ms: timeoutMs }, budget)
     if (body.ok !== true) return failureOf(body, action)
+    const job = asRecord(body.job)
     return {
-      text: formatWait(body.job as Record<string, unknown>, body.waitedMs, body.waitTimedOut),
+      text: formatWait(job, body.waitedMs, body.waitTimedOut),
+      ...jobFields(job),
+      applied: jobApplied(job),
+      waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
+      timed_out: body.waitTimedOut === true,
+      envelope: jobEnvelope(action, job),
     }
   }
   if (action === 'collect') {
@@ -391,10 +430,23 @@ export async function executeRun(
       60000,
     )
     if (body.ok !== true) return failureOf(body, action)
-    return { text: formatCollect(body.job as Record<string, unknown>) }
+    const job = asRecord(body.job)
+    return {
+      text: formatCollect(job),
+      ...jobFields(job),
+      applied: jobApplied(job),
+      envelope: jobEnvelope(action, job),
+    }
   }
   // cancel
   const body = await postQueue(port, { op: 'cancel', id }, 60000)
   if (body.ok !== true) return failureOf(body, action)
-  return { text: formatCancel(body) }
+  const job = asRecord(body.job)
+  return {
+    text: formatCancel(body),
+    ...jobFields(job),
+    canceled: body.canceled === true,
+    already_finished: body.alreadyFinished === true,
+    envelope: jobEnvelope(action, job),
+  }
 }

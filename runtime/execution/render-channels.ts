@@ -118,6 +118,8 @@ export function channelRepro(params: Record<string, unknown>): string {
     'resolution',
     'samples',
     'engine',
+    'device',
+    'compute_device_type',
     'format',
     'camera',
     'output',

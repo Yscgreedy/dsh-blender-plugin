@@ -139,7 +139,13 @@ describe('source guards (WSL/Windows branches still exist)', () => {
     expect(detect).toContain('where.exe')
   })
   it('keeps the WSL path-helper rewrite', () => {
-    const source = read('runtime/paths.ts') + NL + read('runtime/proc_env.ts')
+    // 3.3.0：PATH_HELPERS 模板拆到 runtime/embedded/path-helpers.ts（paths.ts 仍再导出）。
+    const source =
+      read('runtime/paths.ts') +
+      NL +
+      read('runtime/embedded/path-helpers.ts') +
+      NL +
+      read('runtime/proc_env.ts')
     expect(source).toContain('WSLENV')
     expect(source).toContain('startswith("/mnt/")')
   })

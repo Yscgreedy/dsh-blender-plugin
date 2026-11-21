@@ -101,7 +101,7 @@ async function dispatchWorker(
     }
   if (op === 'reset') return { ok: true, op: op, result: await engine.worker.reset(name) }
   // 痛点8：文件级 checkpoint 栈 —— 与 exec/see 同一个热进程。
-  if (op === 'checkpoint' || op === 'revert' || op === 'checkpoints') {
+  if (op === 'checkpoint' || op === 'revert' || op === 'checkpoints' || op === 'relocate') {
     const spec = (payload.spec || payload.checkpoint || payload.revert || {}) as unknown
     return { ok: true, op: op, result: await engine.worker.aux(op, spec, name) }
   }

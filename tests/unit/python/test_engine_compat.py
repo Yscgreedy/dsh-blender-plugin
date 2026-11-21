@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[3]
 CALL_SITES = (
     "runtime/py/core/worker.py",
     "runtime/py/core/perf.py",
-    "runtime/paths.ts",
+    # 3.3.0: the GPU/engine prelude moved out of paths.ts into its own embedded module.
+    "runtime/embedded/gpu-prelude.ts",
 )
 BOUNDED_EXPRESSION = "(4, 2, 0) <= bpy.app.version < (5, 0, 0)"
 

@@ -174,10 +174,18 @@ export class JobQueue {
     delete job.params.kind
     job.params.kind = kind
     this.events(job, null, 'queued', 'submitted')
+    // 入队位置：同一优先级按创建时间 FIFO；只在 submit 回执里给（未持久化，避免过期数字）。
+    // 必须在 push/pump 之前算：pump 会立刻把前面的作业提成 running，事后数会少。
+    const queuedAhead = this.jobs.filter(
+      (other) =>
+        other.state === 'queued' &&
+        (other.priority > job.priority ||
+          (other.priority === job.priority && other.createdAt < job.createdAt)),
+    ).length
     this.jobs.push(job)
     this.persist()
     this.pump()
-    return this.snapshot(job)
+    return Object.assign(this.snapshot(job), { queued_ahead: queuedAhead })
   }
 
   status(id: string): JobRecord | null {

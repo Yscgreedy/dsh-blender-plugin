@@ -3,12 +3,17 @@ import type { Provenance } from '../evidence.js'
 import { engineProvenance } from '../evidence.js'
 import {
   PLAN_CATALOG,
+  PLAN_READ_ONLY,
   PLAN_TOOL_MAP,
   TOOL_DETAIL,
   planOpNames,
   renderFamilyText,
 } from '../../catalog/index.js'
+import { isLocalOpName } from '../../execution/local-op/names.js'
 import { MODELING_CLASS_GUIDE, renderClassText, renderHandoff } from '../../classes.js'
+
+/** 只读但必须有真 UI 上下文的 op（不是 GUI 租约，但 headless 也做不了）。 */
+const GUI_ONLY_READ_OPS = new Set(['gui_frame', 'gui_shading'])
 
 /** 默认页的索引行（family / 工具 / 展开方式） */
 function catalogIndexLines(): string[] {
@@ -51,6 +56,10 @@ function catalogIndexLines(): string[] {
   L.push(
     '展开方式：op="catalog", args={family:"sculpt"} 看单族；op="sculpt_help" 等看算子细节；' +
       '机器/复盘要结构化明细用 args={full:true}。',
+  )
+  L.push(
+    '结构化判定（程序读）：args={format:"json"} → families[].ops[].{needs_gui, headless, read_only}；' +
+      'needs_gui=false 表示不需要 GUI 租约（只读 op 仍需 addon 在线），headless=true 表示可走本地无头车道（args.file）。',
   )
   L.push(
     '工具参数细节（重工具的长尾说明）：args={tool:"blender_run"}；可查 ' +
@@ -102,6 +111,52 @@ function catalogProvenanceLines(prov: Provenance): string[] {
   return L
 }
 
+/** 单 op 的机器可读标记：是否需要 GUI 租约、能否走本地无头车道、是否只读。 */
+function opFlags(name: string): Record<string, unknown> {
+  const readOnly = PLAN_READ_ONLY.has(name)
+  return {
+    name: name,
+    needs_gui: !readOnly || GUI_ONLY_READ_OPS.has(name),
+    headless: isLocalOpName(name),
+    read_only: readOnly,
+  }
+}
+
+/**
+ * 结构化目录（args={format:"json"}）：程序用它判断"这个 op 能不能在 headless 里跑"。
+ * 文本仍给一行摘要；families[].ops[] 才是判据（needs_gui / headless / read_only）。
+ */
+function catalogJson(prov: Provenance): Record<string, unknown> {
+  const families = PLAN_CATALOG.map((e) => {
+    const ops = e.ops.map((o) => opFlags(e.prefix ? e.prefix + o : o))
+    return {
+      id: e.f,
+      prefix: e.prefix,
+      requires_session: e.requires_session,
+      write_scope: e.write_scope,
+      needs_gui_ops: ops.filter((o) => o.needs_gui === true).length,
+      headless_ops: ops.filter((o) => o.headless === true).map((o) => String(o.name)),
+      ops: ops,
+    }
+  })
+  const opsCount = planOpNames().length
+  return {
+    ok: true,
+    op: 'catalog',
+    format: 'json',
+    text:
+      'CATALOG json · ' +
+      String(families.length) +
+      ' families / ' +
+      String(opsCount) +
+      ' ops · 判据 families[].ops[].{needs_gui, headless, read_only}',
+    ops_count: opsCount,
+    families: families,
+    tools: PLAN_TOOL_MAP,
+    provenance: prov,
+  }
+}
+
 function renderCatalogIndex(o: Record<string, unknown>, prov: Provenance): Record<string, unknown> {
   const L = catalogIndexLines().concat(catalogProvenanceLines(prov))
   const out: Record<string, unknown> = {
@@ -110,6 +165,7 @@ function renderCatalogIndex(o: Record<string, unknown>, prov: Provenance): Recor
     text: L.join(String.fromCharCode(10)),
     families: PLAN_CATALOG.map((e) => e.f),
     ops_count: planOpNames().length,
+    format_hint: 'args={format:"json"} → families[].ops[].{needs_gui, headless, read_only}',
     provenance: prov,
   }
   if (o.full) {
@@ -137,6 +193,18 @@ export function catalogPayload(opts?: unknown): Record<string, unknown> {
     verify: o.verify === true || o.verify === 'true',
     verifyTimeoutMs: o.verifyTimeoutMs,
   })
+  // 机器可读目录（format=json）：程序判断 headless 可用性，不再靠解析 12.9k 人类文本。
+  if (o.format !== undefined) {
+    if (String(o.format) !== 'json')
+      return {
+        ok: false,
+        error:
+          '不支持的 catalog format：' + String(o.format) + '（允许：json；不传就是人类文本目录）',
+        formats: ['json'],
+        provenance: prov,
+      }
+    return catalogJson(prov)
+  }
   // v0.9.6：工具参数细节（重工具的长尾）也走这里 —— 一个入口覆盖"哪个 op / 哪个 family / 哪个工具"
   if (o.tool) {
     const t = String(o.tool).replace(/^blender_/, '')

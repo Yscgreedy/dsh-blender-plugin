@@ -24,6 +24,18 @@ const CHANNELS_DESCRIPTION =
   '每通道回执给路径 + foreground_px/coverage/n_components/bbox；缺 ink 对象时该通道 skipped、整体 verdict=degraded（不是失败）。' +
   '帧区间与命令行不变，只是渲染完多一步 numpy 收尾'
 
+/** 设备参数单独抽出来，避免 buildRunTool 越过 120 行硬限。 */
+const RENDER_DEVICE_PARAMS = {
+  device: {
+    type: 'string',
+    description: 'render：auto（默认，能绑 GPU 就绑）/ gpu / cpu；只对 CYCLES 有意义',
+  },
+  compute_device_type: {
+    type: 'string',
+    description: 'render：OPTIX / CUDA / HIP / ONEAPI / METAL / NONE（auto 默认按此顺序试）',
+  },
+}
+
 function buildRunTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_run',
@@ -77,6 +89,7 @@ function buildRunTool(ctx: HostContext, port: number) {
       },
       format: { type: 'string', description: 'render：图片格式（PNG/JPEG/OPEN_EXR…）' },
       camera: { type: 'string', description: 'render：camera=true 用场景相机，或相机对象名' },
+      ...RENDER_DEVICE_PARAMS,
       channels: { type: 'json', description: CHANNELS_DESCRIPTION },
       script: {
         type: 'string',

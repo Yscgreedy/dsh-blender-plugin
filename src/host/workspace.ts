@@ -1,7 +1,7 @@
 /**
  * Session workspace roots for path absolutization.
  *
- * Field report 3.2.0-alpha.1（P2）：blender_run 的相对 script_file / file 被按
+ * Field report 3.2.0-alpha.1（反馈 2）：blender_run 的相对 script_file / file 被按
  * **宿主进程 cwd** 绝对化，而宿主进程 cwd 是 DSH profile（C:\Users\…\.dsh\profiles\desktop），
  * 不是调用方的会话工作区；DSH_BLENDER_WORKSPACE / DSH_WORKSPACE / DSH_PROJECT_DIR 在这台机器上
  * 一个都没设，所以"工作区环境变量"那一档等于不存在，相对路径静默落到 profile 目录。

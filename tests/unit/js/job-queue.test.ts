@@ -6,7 +6,8 @@ import { JobQueue, QueueError } from '../../../runtime/core/queue/manager.js'
 import { MemoryJobStore, JsonJobStore } from '../../../runtime/core/queue/store.js'
 import type { JobExecutor, JobHandle, JobRecord } from '../../../runtime/core/queue/types.js'
 import { JobSurface, callerFromHeaders } from '../../../runtime/core/queue/handler.js'
-import { SpawnJobExecutor, buildJobArgs } from '../../../runtime/core/queue/spawn-executor.js'
+import { SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
+import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
 import type { CallerIdentity } from '../../../runtime/core/sessions/types.js'
 
 const main = (over: Partial<CallerIdentity> = {}): CallerIdentity => ({
@@ -107,6 +108,20 @@ describe('3.1 job queue', () => {
       gpu: { used: 1, total: 1 },
       cpu: { used: 1, total: 2 },
     })
+  })
+
+  it('reports queued_ahead at submission and keeps it out of the persisted record', () => {
+    const { queue } = setup()
+    const first = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const second = queue.submit(main(), { kind: 'render', file: 'b.blend' })
+    const third = queue.submit(main(), { kind: 'render', file: 'c.blend' })
+    expect(first.queued_ahead).toBe(0)
+    expect(second.queued_ahead).toBe(0)
+    expect(third.queued_ahead).toBe(1)
+    // 高优先级插队：它前面没有更高/更早的 queued 作业。
+    const vip = queue.submit(main(), { kind: 'render', file: 'd.blend', priority: 10 })
+    expect(vip.queued_ahead).toBe(0)
+    expect(queue.status(third.id)).not.toHaveProperty('queued_ahead')
   })
 
   it('rejects a full pending queue with QUEUE_FULL instead of waiting', () => {
@@ -307,6 +322,34 @@ describe('3.1 queue executor command shape', () => {
     expect(args.slice(-5)).toEqual(['-s', '1', '-e', '2', '-a'])
   })
 
+  it('render defines s before engine/output even without resolution and aliases EEVEE_NEXT', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-nores-'))
+    const blend = path.join(dir, 'scene.blend')
+    fs.writeFileSync(blend, 'x')
+    const { args } = buildJobArgs(
+      record('render', {
+        file: blend,
+        output: path.join(dir, 'out', 'frame_####.png'),
+        engine: 'BLENDER_EEVEE_NEXT',
+        samples: 8,
+        frames: [1, 1],
+      }),
+      os.tmpdir(),
+    )
+    const expr = args[args.indexOf('--python-expr') + 1]
+    // 反馈（手册章节探针）：省略 resolution 时 s 未定义 -> NameError，engine/output
+    // 都不执行，产物落回 .blend 的 C:/tmp。s 必须先于第一处使用定义。
+    const sAt = expr.indexOf('s=bpy.context.scene')
+    expect(sAt).toBeGreaterThanOrEqual(0)
+    expect(sAt).toBeLessThan(expr.indexOf('_dsh_engine_requested'))
+    expect(expr).toContain('_dsh_engine_alias')
+    // 5.3 只有 BLENDER_EEVEE；别名回退必须把请求值和实际值都写进回执。
+    expect(expr).toContain('"engine_requested_value"')
+    expect(expr).toContain('"engine_alias"')
+    expect(expr).toContain('s.render.filepath=')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   it('render with camera + frames previews an animation without a GUI session', () => {
     const blend = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-')), 'scene.blend')
     fs.writeFileSync(blend, 'x')
@@ -336,6 +379,63 @@ describe('3.1 queue executor command shape', () => {
     expect(args.join(' ')).toContain('s.render.filepath=')
     expect(fs.existsSync(outdir!)).toBe(true)
     fs.rmSync(outdir!, { recursive: true, force: true })
+  })
+
+  it('render resolves the Blender // prefix against the .blend directory', () => {
+    const blend = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-slash-')),
+      'scene.blend',
+    )
+    fs.writeFileSync(blend, 'x')
+    const { args, outdir } = buildJobArgs(
+      record('render', { file: blend, output: '//render/f_####' }),
+      os.tmpdir(),
+    )
+    const expected = path.join(path.dirname(blend), 'render', 'f_####')
+    expect(outdir).toBe(path.dirname(expected))
+    expect(fs.existsSync(outdir!)).toBe(true)
+    const expr = args[args.indexOf('--python-expr') + 1]
+    // 反馈 8-1: #### stays a frame template (Blender expands it); no trailing separator.
+    expect(expr).toContain('s.render.filepath=' + JSON.stringify(expected))
+    fs.rmSync(path.dirname(blend), { recursive: true, force: true })
+  })
+
+  it('render rejects // output without a file base with a path-aware message', () => {
+    expect(() =>
+      buildJobArgs(record('render', { output: '//render/f_####' }), os.tmpdir()),
+    ).toThrow(/output 以 \/\/ 开头.*file/)
+  })
+
+  it('render injects the device/samples prelude and echoes DSH_RENDER', () => {
+    const blend = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-render-dev-')),
+      'scene.blend',
+    )
+    fs.writeFileSync(blend, 'x')
+    const { args } = buildJobArgs(
+      record('render', {
+        file: blend,
+        samples: 128,
+        engine: 'CYCLES',
+        device: 'gpu',
+        compute_device_type: 'optix',
+      }),
+      os.tmpdir(),
+    )
+    const expr = args[args.indexOf('--python-expr') + 1]
+    expect(expr).toContain('DSH_RENDER')
+    expect(expr).toContain('"device": "gpu"')
+    expect(expr).toContain('"compute_device_type": "OPTIX"')
+    expect(expr).toContain('"samples": 128')
+    // 反馈 8-2: the receipt must say where the engine came from (requested vs .blend).
+    expect(expr).toContain('"engine_requested": True')
+    expect(expr).toContain('_dsh_engine_before')
+    // samples 现在由 Python 按实际 engine 落地，不再只在显式 engine 时才写 JS 行
+    expect(expr).not.toContain('s.cycles.samples=128')
+    const inherit = buildJobArgs(record('render', { file: blend }), os.tmpdir())
+    const inheritExpr = inherit.args[inherit.args.indexOf('--python-expr') + 1]
+    expect(inheritExpr).toContain('"engine_requested": False')
+    fs.rmSync(path.dirname(blend), { recursive: true, force: true })
   })
 
   it('render with an explicit output collects artifacts from its parent directory', () => {

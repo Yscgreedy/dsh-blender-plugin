@@ -8,11 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import {
-  digestBaselineEvidence,
-  digestEvidence,
-  executeWorker,
-} from '../../../src/tools/run/worker.js'
+import { digestBaselineEvidence, digestEvidence } from '../../../src/tools/run/worker-digest.js'
+import { executeWorker } from '../../../src/tools/run/worker.js'
 import { pkgPath } from '../../helpers/pkg'
 
 describe('工单 7 worker digest evidence', () => {
@@ -49,10 +46,28 @@ describe('工单 7 worker digest evidence', () => {
         'changed',
         'digest_after',
         'digest_before',
+        'digest_limited',
+        'digest_ms',
         'digest_scope',
         'elapsed_ms',
+        'eval_faces_after',
+        'eval_faces_before',
+        'eval_faces_delta',
+        'eval_verts_after',
+        'eval_verts_before',
+        'faces_after',
+        'faces_before',
+        'faces_delta',
+        'filepath_after',
+        'filepath_before',
+        'filepath_changed',
+        'frame_after',
+        'frame_before',
         'kit_source',
+        'modifiers_after',
+        'objects_delta',
         'restore_applied',
+        'verts_delta',
         'worker',
       ].sort(),
     )

@@ -50,8 +50,14 @@ vi.mock('../../../src/host/http.js', () => ({
 }))
 
 import { executeRun } from '../../../src/tools/run/execute.js'
-import { formatCollect, formatJob, runHelp } from '../../../src/tools/run/presenter.js'
-import { buildJobArgs, SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
+import {
+  formatApplied,
+  formatCollect,
+  formatJob,
+  runHelp,
+} from '../../../src/tools/run/presenter.js'
+import { SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
+import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
 import type { SpawnExecutorOptions } from '../../../runtime/core/queue/spawn-executor.js'
 import {
   CHANNEL_NAMES,
@@ -365,6 +371,31 @@ describe('作业回执解析（spawn executor）', () => {
     expect(String(parsed?.repro)).toContain('channels=["render","ink"]')
   })
 
+  it('DSH_RENDER 标记进 result.parsed.applied（设备/采样结论可见）', async () => {
+    const file = blendFile()
+    const child = new FakeChild()
+    const executor = new SpawnJobExecutor({ blenderExe: 'blender', spawnImpl: fakeSpawn(child) })
+    const handle = executor.start(renderJob({ file, frames: [1, 1], samples: 128 }, 'job-device'))
+    await settle(
+      child,
+      'DSH_RENDER ' +
+        JSON.stringify({
+          engine: 'CYCLES',
+          samples: 128,
+          scene_device: 'GPU',
+          compute_device_type: 'OPTIX',
+          devices_used: ['NVIDIA GeForce RTX 4060 Laptop GPU'],
+          fell_back_to_cpu: false,
+          warnings: [],
+        }) +
+        String.fromCharCode(10),
+    )
+    const result = await handle.done
+    const parsed = result.parsed as PostBody | undefined
+    expect((parsed?.applied as PostBody).compute_device_type).toBe('OPTIX')
+    expect((parsed?.applied as PostBody).samples).toBe(128)
+  })
+
   it('没有 CHANNELS 标记时 render 的 parsed 保持 undefined（旧作业一样）', async () => {
     const file = blendFile()
     const child = new FakeChild()
@@ -377,6 +408,25 @@ describe('作业回执解析（spawn executor）', () => {
 })
 
 describe('回执呈现', () => {
+  it('applied 行回显实际后端，并在回落 CPU 时给 warning', () => {
+    const lines = formatApplied({
+      applied: {
+        engine: 'CYCLES',
+        samples: 128,
+        scene_device: 'CPU',
+        compute_device_type: 'NONE',
+        devices_used: [],
+        fell_back_to_cpu: true,
+        warnings: ['gpu_unavailable: no GPU backend available'],
+      },
+    })
+    const text = lines.join(String.fromCharCode(10))
+    expect(text).toContain('compute_device_type=NONE')
+    expect(text).toContain('device=CPU')
+    expect(text).toContain('GPU 请求没有生效')
+    expect(text).toContain('gpu_unavailable')
+  })
+
   const job = {
     id: 'job-channels',
     kind: 'render',

@@ -83,6 +83,8 @@ export interface JobRecord {
   lostReason?: string
   /** 判 lost 的时刻（毫秒时间戳） */
   lostAt?: number
+  /** submit 回执专用的入队位次（派生值，不持久化）。 */
+  queued_ahead?: number
 }
 
 export interface JobExecutionResult {

@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BACKEND_HINT } from '../../constants.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
+import { digestOutcome, execOutcome } from './worker-digest.js'
 import { backendPost } from '../../host/http.js'
 import { workspaceRoots } from '../../host/workspace.js'
 import { toAttachment } from '../../utils/image.js'
@@ -27,6 +28,7 @@ const WORKER_OPS = [
   'checkpoint',
   'revert',
   'checkpoints',
+  'relocate',
   'reset',
   'status',
   'start',
@@ -62,6 +64,12 @@ function workerPayload(
     if (filePath) payload.file = filePath
     return payload
   }
+  if (op === 'relocate') {
+    const spec: Record<string, unknown> = {}
+    if (text(args.file)) spec.file = text(args.file)
+    payload.spec = spec
+    return payload
+  }
   if (op === 'checkpoint' || op === 'revert' || op === 'checkpoints') {
     const spec: Record<string, unknown> = {}
     const label = text(args.label || args.checkpoint || args.name_label)
@@ -76,163 +84,6 @@ function workerPayload(
   if (Object.keys(spec).length) payload.spec = spec
   else if (op === 'see' || op === 'watch') payload.spec = { width: Number(args.max_size) || 560 }
   return payload
-}
-
-/**
- * 工单 7：exec digest=true 的**结构化**字段（信封 evidence）。
- *
- * `auto_restore` / `restore_applied` 恒为 false —— 本插件从不自动回滚：改了就是改了。
- * `changed` 只看内容哈希（digest_before !== digest_after），不看 mtime。
- */
-export function digestEvidence(
-  r: Record<string, unknown>,
-  worker: { session?: string; file?: string | null } = {},
-): Record<string, unknown> {
-  const before = r.digest_before == null ? null : text(r.digest_before) || null
-  const after = r.digest_after == null ? null : text(r.digest_after) || null
-  const scope = Array.isArray(r.digest_scope)
-    ? r.digest_scope.map(text).filter(Boolean)
-    : [text(r.digest_scope) || 'objects']
-  return {
-    digest_before: before,
-    digest_after: after,
-    changed: before !== null && after !== null ? before !== after : r.changed === true,
-    digest_scope: scope,
-    restore_applied: false,
-    auto_restore: false,
-    kit_source: text(r.kit_source) || 'unknown',
-    elapsed_ms: Number(r.elapsed_ms ?? r.ms ?? 0) || 0,
-    // 会话/文件自证：确认 worker 开的是调用方给的那个 .blend，而不是静默回到出厂场景。
-    worker: {
-      session: text(worker.session ?? r.session ?? ''),
-      file: worker.file == null ? null : text(worker.file) || null,
-    },
-  }
-}
-
-/** 工单 7：op=digest 的基线证据（同样显式 auto_restore=false）。 */
-export function digestBaselineEvidence(
-  r: Record<string, unknown>,
-  worker: { session?: string; file?: string | null } = {},
-): Record<string, unknown> {
-  const scope = Array.isArray(r.digest_scope)
-    ? r.digest_scope.map(text).filter(Boolean)
-    : [text(r.digest_scope) || 'objects']
-  return {
-    digest: r.digest == null ? null : text(r.digest) || null,
-    digest_scope: scope,
-    restore_applied: false,
-    auto_restore: false,
-    kit_source: text(r.kit_source) || 'unknown',
-    elapsed_ms: Number(r.elapsed_ms ?? 0) || 0,
-    objects: Number(r.objects ?? 0) || 0,
-    meshes: Number(r.meshes ?? 0) || 0,
-    verts: Number(r.verts ?? 0) || 0,
-    truncated: r.truncated === true,
-    worker: {
-      session: text(worker.session ?? r.session ?? ''),
-      file: worker.file == null ? null : text(worker.file) || null,
-    },
-  }
-}
-
-function digestLine(ev: Record<string, unknown>): string {
-  return (
-    'digest: before=' +
-    text(ev.digest_before ?? '-') +
-    ' · after=' +
-    text(ev.digest_after ?? '-') +
-    ' · changed=' +
-    String(ev.changed === true) +
-    ' · scope=' +
-    (Array.isArray(ev.digest_scope) ? (ev.digest_scope as unknown[]).map(text).join(',') : '-') +
-    ' · auto_restore=' +
-    String(ev.auto_restore === true) +
-    ' · restore_applied=' +
-    String(ev.restore_applied === true) +
-    ' · kit_source=' +
-    text(ev.kit_source || '-') +
-    ' · elapsed_ms=' +
-    String(ev.elapsed_ms ?? 0) +
-    '\nworker: session=' +
-    text(asRecord(ev.worker).session || '-') +
-    ' · file=' +
-    text(asRecord(ev.worker).file || '(factory startup)')
-  )
-}
-
-function digestText(name: string, ev: Record<string, unknown>, ok: boolean): string {
-  return [
-    'WORKER digest · ' + name + ' · ' + (ok ? 'ok' : 'FAIL'),
-    'digest: ' +
-      text(ev.digest ?? '-') +
-      ' · scope=' +
-      (Array.isArray(ev.digest_scope) ? (ev.digest_scope as unknown[]).map(text).join(',') : '-') +
-      ' · objects=' +
-      String(ev.objects) +
-      ' · meshes=' +
-      String(ev.meshes) +
-      ' · verts=' +
-      String(ev.verts) +
-      ' · truncated=' +
-      String(ev.truncated === true),
-    'kit_source: ' + text(ev.kit_source) + ' · auto_restore=' + String(ev.auto_restore),
-    'worker: session=' +
-      text(asRecord(ev.worker).session || '-') +
-      ' · file=' +
-      text(asRecord(ev.worker).file || '(factory startup)'),
-  ].join(LF)
-}
-
-/** exec 的最终回执：带 digest 时补一行 + structured evidence（工单 7）。 */
-function execOutcome(name: string, result: Record<string, unknown>): Record<string, unknown> {
-  const out = execText(name, result)
-  if (result.digest_before === undefined && result.digest_after === undefined) return { text: out }
-  const evidence = digestEvidence(result, {
-    session: name,
-    file: typeof result.file === 'string' ? result.file : null,
-  })
-  return { text: out + LF + digestLine(evidence), evidence: evidence }
-}
-
-/** op=digest 的最终回执。 */
-function digestOutcome(
-  name: string,
-  result: Record<string, unknown>,
-  ok: boolean,
-): Record<string, unknown> {
-  const evidence = digestBaselineEvidence(result, {
-    session: name,
-    file: typeof result.file === 'string' ? result.file : null,
-  })
-  return { text: digestText(name, evidence, ok), evidence }
-}
-
-function execText(name: string, r: Record<string, unknown>): string {
-  const out = asRecord(r.result)
-  const lines = [
-    'WORKER exec · ' +
-      name +
-      ' · ' +
-      (r.ok === true ? 'ok' : 'FAIL') +
-      ' · ' +
-      String(r.ms ?? '?') +
-      'ms',
-  ]
-  if (r.error) lines.push('error: ' + text(r.error))
-  if (r.file !== undefined)
-    lines.push(
-      'loaded_file: ' +
-        (text(r.file) || '(空场景/未保存)') +
-        ' · objects=' +
-        String(r.objects ?? '?'),
-    )
-  if (out && Object.keys(out).length) lines.push('result: ' + JSON.stringify(out).slice(0, 4000))
-  const so = text(r.stdout || '').trim()
-  if (so) lines.push('stdout:', so.slice(-4000))
-  const tb = text(r.traceback || '').trim()
-  if (tb) lines.push('traceback:', tb.slice(-2000))
-  return lines.filter(Boolean).join(LF)
 }
 
 /**
@@ -325,6 +176,18 @@ function auxText(op: string, name: string, r: Record<string, unknown>, ok = true
     const c = asRecord(r.restored_from)
     lines.push('reverted to: ' + text(c.label) + ' · ' + text(c.path))
     lines.push('objects=' + String(r.objects ?? '?') + ' · file=' + text(r.file || '-'))
+    // 反馈 5: the working file must come back, not stay on the checkpoint copy.
+    if (r.file_changed === true)
+      lines.push(
+        '⚠ file_changed=true：工作文件从 ' +
+          text(r.file_before || '-') +
+          ' 变成 ' +
+          text(r.file || '-') +
+          '（之后 save 落这里）',
+      )
+    if (r.backup) lines.push('pre_revert 备份: ' + text(r.backup))
+    if (r.relocate_error) lines.push('relocate_error: ' + text(r.relocate_error))
+    if (r.next_save_goes_to) lines.push('next_save_goes_to: ' + text(r.next_save_goes_to))
   }
   if (Array.isArray(r.stack)) {
     if (!r.stack.length) lines.push('stack: (空)')
@@ -443,6 +306,9 @@ function workerHelp(): string {
     '  · kit_source 说明 K 从哪来（boot | boot-degraded | bootstrap）；checkpoint 不建、不进证据。',
     '  · evidence 字段：digest_before: string · digest_after: string · changed: boolean ·',
     '    digest_scope: string[]（实际参与哈希的域，如 objects/mesh/materials/actions）·',
+    '    eval_faces_before/after/delta、eval_verts_before/after（depsgraph 评估计数，与 base faces 并列）·',
+    '    frame_before/after（单独回报，不计入 changed）· modifiers_after: array ·',
+    '    digest_ms: number（本次哈希耗时）· digest_limited: boolean（触顶/截断，不作交付指纹）·',
     '    restore_applied: boolean · kit_source: string · elapsed_ms: number · auto_restore: boolean ·',
     '    worker: {session: string, file: string|null}（file=null 表示 factory startup）。',
     '  schema: {"digest_before":{"type":"string"},"digest_after":{"type":"string"},"changed":{"type":"boolean"},"digest_scope":{"type":"array"},"restore_applied":{"type":"boolean"},"kit_source":{"type":"string"},"elapsed_ms":{"type":"number"},"auto_restore":{"type":"boolean"},"worker":{"type":"object"}}',

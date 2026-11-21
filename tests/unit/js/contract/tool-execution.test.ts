@@ -277,6 +277,18 @@ describe('model tool execution semantics (six-tool surface)', () => {
     expect(out.text).toContain('headless 需要 script / script_file / file 之一')
   })
 
+  it('blender_run rejects // output without file before submitting', async () => {
+    const mark = backend.requests.length
+    const out = await run('blender_run', {
+      action: 'submit',
+      kind: 'render',
+      output: '//render/f_####',
+    })
+    expect(out.text).toContain('output 以 // 开头')
+    expect(out.text).toContain('file=<.blend>')
+    expect(requestsSince(mark).some((r: any) => r.path === '/job')).toBe(false)
+  })
+
   it('blender_run lists queued jobs', async () => {
     backend.setHandler('POST /job', () => ({
       status: 200,

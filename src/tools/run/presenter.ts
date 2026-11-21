@@ -64,6 +64,8 @@ export function formatJob(job: Record<string, unknown>): string[] {
     )
   const channelLines = formatChannels(result.parsed)
   if (channelLines.length) lines.push(...channelLines)
+  const appliedLines = formatApplied(result.parsed)
+  if (appliedLines.length) lines.push(...appliedLines)
   const provenance = asRecord(result.provenance)
   if (result.provenance)
     lines.push(
@@ -95,6 +97,51 @@ export function formatJob(job: Record<string, unknown>): string[] {
       'fix     ' + text(err.fix || '-'),
     )
   return lines
+}
+
+/**
+ * render 的 applied 块：engine / samples / device / compute_device_type / devices_used。
+ * 现场（设备回执）：CPU 日志也会打 "Copying BVH to device"，只看日志会误判；这里给的是 Cycles 实际绑定结果。
+ */
+export function formatApplied(parsed: unknown): string[] {
+  const applied = asRecord(asRecord(parsed).applied)
+  if (!Object.keys(applied).length) return []
+  const used = Array.isArray(applied.devices_used)
+    ? applied.devices_used.map((d) => text(d)).filter(Boolean)
+    : []
+  const lines = [
+    'applied  engine=' +
+      (text(applied.engine) || '-') +
+      (applied.engine_source
+        ? ' (' +
+          text(applied.engine_source) +
+          (applied.engine_source === 'inherit' && applied.engine_before
+            ? ': 继承 .blend，未显式传 engine'
+            : '') +
+          ')'
+        : '') +
+      ' · samples=' +
+      (applied.samples === null || applied.samples === undefined
+        ? text(applied.samples_requested ?? '-')
+        : text(applied.samples)) +
+      ' · device=' +
+      (text(applied.scene_device) || '-') +
+      ' · compute_device_type=' +
+      (text(applied.compute_device_type) || '-') +
+      ' · devices_used=' +
+      (used.length ? used.join(', ') : '-'),
+  ]
+  if (applied.fell_back_to_cpu === true)
+    lines.push('warning  GPU 请求没有生效：本次已回落 CPU（warnings 里是原因）')
+  const warnings = Array.isArray(applied.warnings) ? applied.warnings : []
+  for (const w of warnings.slice(0, 4)) lines.push('warning  ' + text(w))
+  return lines
+}
+
+/** status/wait/collect 顶层的结构化 applied（submit 还没有结果时是 null）。 */
+export function jobApplied(job: Record<string, unknown>): Record<string, unknown> | null {
+  const applied = asRecord(asRecord(asRecord(job.result).parsed).applied)
+  return Object.keys(applied).length ? applied : null
 }
 
 /**
@@ -148,7 +195,114 @@ export function formatSubmit(job: Record<string, unknown>): string {
       text(job.id) +
       '（默认 120s，上限 600s，超时不取消）；action=collect 取日志/产物；action=cancel 取消',
   )
+  lines.push(
+    'list  blender_run action=list（本工具的队列枚举；DSH 宿主的 job_list 只列宿主后台作业，不含 Blender 作业）',
+  )
   return lines.join(LF)
+}
+
+/** 作业句柄的稳定字段（submit/status/wait/collect/cancel 共用；调用方不必再正则扒文本）。 */
+export function jobFields(job: Record<string, unknown>): Record<string, unknown> {
+  const id = text(job.id)
+  return {
+    jobId: id || null,
+    id: id || null,
+    state: text(job.state) || null,
+    slot: text(job.slot) || null,
+    priority: typeof job.priority === 'number' ? job.priority : null,
+    kind: text(job.kind) || null,
+  }
+}
+
+/**
+ * receipt.v2 信封：与 blender_op 共用同一份契约（contract/op/verdict/summary/next/provenance）。
+ * submit 是"作业已建立"不是判定，verdict 固定 null；job_id 与 queued_ahead 是结构化句柄。
+ */
+export function submitEnvelope(
+  job: Record<string, unknown>,
+  queuedAhead: unknown,
+  workspaceBase: string | undefined,
+): Record<string, unknown> {
+  const id = text(job.id)
+  return {
+    contract: 'receipt.v2',
+    op: 'blender_run',
+    action: 'submit',
+    verdict: null,
+    summary: 'RUN ' + id + ' · ' + text(job.kind) + ' · ' + text(job.state),
+    job_id: id || null,
+    jobId: id || null,
+    state: text(job.state) || null,
+    status: text(job.state) || null,
+    slot: text(job.slot) || null,
+    priority: typeof job.priority === 'number' ? job.priority : null,
+    kind: text(job.kind) || null,
+    queued_ahead: typeof queuedAhead === 'number' ? queuedAhead : null,
+    next: id
+      ? [
+          { op: 'blender_run', args: { action: 'wait', id: id } },
+          { op: 'blender_run', args: { action: 'collect', id: id } },
+        ]
+      : [],
+    provenance: {
+      route: '/job',
+      surface: 'queue',
+      workspace_base: workspaceBase || null,
+    },
+  }
+}
+
+/** status/wait/collect/cancel 的信封：同一套 job_id/state，action 区分来源。 */
+export function jobEnvelope(action: string, job: Record<string, unknown>): Record<string, unknown> {
+  const id = text(job.id)
+  return {
+    contract: 'receipt.v2',
+    op: 'blender_run',
+    action: action,
+    verdict: null,
+    summary: 'RUN ' + id + ' · ' + text(job.kind) + ' · ' + text(job.state),
+    job_id: id || null,
+    jobId: id || null,
+    state: text(job.state) || null,
+    slot: text(job.slot) || null,
+    provenance: { route: '/job', surface: 'queue' },
+  }
+}
+
+/** list 的结构化行（只留可枚举字段；文本仍给人读）。 */
+export function listRows(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return jobs.map((j) => {
+    const owner = asRecord(j.owner)
+    const decision = asRecord(j.decision)
+    return {
+      ...jobFields(j),
+      createdAt: typeof j.createdAt === 'number' ? j.createdAt : null,
+      updatedAt: typeof j.updatedAt === 'number' ? j.updatedAt : null,
+      pid: typeof j.pid === 'number' ? j.pid : null,
+      owner: {
+        dshSessionId: text(owner.dshSessionId) || null,
+        agentId: text(owner.agentId) || null,
+      },
+      decision: j.decision
+        ? { outcome: text(decision.outcome) || null, reason: text(decision.reason) || null }
+        : null,
+    }
+  })
+}
+
+export function listEnvelope(jobs: Array<Record<string, unknown>>): Record<string, unknown> {
+  const rows = listRows(jobs)
+  const CAP = 64
+  return {
+    contract: 'receipt.v2',
+    op: 'blender_run',
+    action: 'list',
+    verdict: null,
+    jobs_count: rows.length,
+    truncated: rows.length > CAP,
+    jobs: rows.slice(0, CAP),
+    provenance: { route: '/job', surface: 'queue' },
+  }
 }
 
 export function formatWait(
@@ -189,7 +343,8 @@ export function formatCancel(body: Record<string, unknown>): string {
 }
 
 export function formatList(jobs: Array<Record<string, unknown>>): string {
-  if (!jobs.length) return 'RUN list · 0 个作业（队列为空）'
+  if (!jobs.length)
+    return 'RUN list · 0 个作业（Blender 作业队列为空；DSH 宿主的 job_list 不含本队列）'
   const lines = ['RUN list · ' + String(jobs.length) + ' 个作业']
   for (const j of jobs)
     lines.push(
@@ -239,14 +394,17 @@ export function runHelp(): string {
   return [
     'blender_run 动作（唯一作业入口：submit → jobId → status/wait/collect/cancel；无同步模式）：',
     '  action=submit kind=render|headless + 参数',
-    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/channels/priority',
+    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/device/compute_device_type/channels/priority',
     '      · channels=["render","alpha","mask","ink"]（默认 ["render"]）：每通道给路径 + foreground_px/coverage/n_components/bbox；' +
       '缺 ink 对象时该通道 skipped、整体 verdict=degraded（degraded ≠ 通过，但不是失败）',
+    '      · device=auto（默认，能绑 GPU 就绑）/gpu/cpu + compute_device_type=OPTIX|CUDA|HIP|ONEAPI|METAL|NONE；' +
+      '回执 result.parsed.applied 带实际 compute_device_type / devices_used / samples，绑不上 GPU 有 warning（不静默跑 CPU）',
     '    headless（跑脚本）：script/script_file/file/outdir/timeout_ms/engine/preload/factory_startup/bootstrap/workdir/include_noise/out_json/args/env/priority',
     '      · 默认注入内核 K（bootstrap=false 才关）+ preload 模块；preload 名不存在 → job_prepare_failed',
     '      · args=string（引号分词）| string[]；env={KEY:VALUE}；两者都写进 result.provenance 供对账',
     '  action=status|wait|collect|cancel id=<jobId>；wait 默认 120s、上限 600s，超时不取消',
     '  action=list [state=kind=owner=] | action=perf（队列容量与槽位）',
+    '    · list 是本工具的唯一队列枚举（submit 的 jobId）；DSH 宿主的 job_list 只列宿主后台作业，看不到 Blender 作业',
     '  action=tune op=status|analyze|apply|revert|help（旧 blender_run 的 Cycles 分析）',
     '旧工具迁移：blender_rt_headless / blender_rt_job → blender_run action=submit（kind=headless / render）；blender_rt_perf → blender_run action=tune。',
   ].join(LF)
