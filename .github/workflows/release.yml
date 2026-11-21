@@ -234,6 +234,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
       - name: Require main branch
         run: |
@@ -246,14 +247,21 @@ jobs:
         with:
           name: release-assets
           path: release
-      - name: Check tag and release do not exist
+      - name: Check the tag and release state
         env:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-            echo "::error::tag v${VERSION} already exists"
-            exit 1
+          TAG_SHA="$(git rev-parse -q --verify "refs/tags/v${VERSION}^{commit}" || true)"
+          if [ -n "$TAG_SHA" ]; then
+            if [ "$TAG_SHA" != "${GITHUB_SHA}" ]; then
+              echo "::error::tag v${VERSION} exists at $TAG_SHA, not at ${GITHUB_SHA}"
+              exit 1
+            fi
+            echo "TAG_EXISTS=true" >> "$GITHUB_ENV"
+            echo "tag v${VERSION} already points at ${GITHUB_SHA}; reusing it"
+          else
+            echo "TAG_EXISTS=false" >> "$GITHUB_ENV"
           fi
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             echo "::error::release v${VERSION} already exists"
@@ -264,7 +272,10 @@ jobs:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ARGS=(--draft --target "${GITHUB_SHA}" --title "v${VERSION}" --generate-notes)
+          ARGS=(--draft --title "v${VERSION}" --generate-notes)
+          if [[ "${TAG_EXISTS}" != "true" ]]; then
+            ARGS+=(--target "${GITHUB_SHA}")
+          fi
           if [[ "${VERSION}" == *-* ]]; then
             ARGS+=(--prerelease)
           fi

@@ -24,6 +24,11 @@
 - **parity 门禁补齐**：`check:parity` 的 base 注入补登记 anim（3 op）/ toon（2 op）两个新族，以及三个只读审计
   op（`anim_rig_report` / `anim_deform_audit` / `toon_outline_audit`）。此前 HEAD 上 `npm run test:parity`
   就是红的（current 38/269 vs base 36/264），本次随发布收口转绿；显式声明之外仍是逐字严格比对。
+- **CI/CD**：仓库此前没有任何 tag，而 `pr.yml` / `release.yml` 的 coverage ratchet 以 `v2.6.2` 为基线，
+  `git rev-parse --verify v2.6.2` 必然失败；本次补上指向 `8b1b470`（release v2.6.2）的 tag，并让 release
+  workflow 允许「先打 tag 再发版」：tag 已存在且指向同一 commit 时复用，指向别处才报错。新增
+  `tests/unit/js/workers-facade.test.ts`，把 `runtime/execution/workers/index.ts` 行覆盖从 63% 提到 97%
+  （execution module 门槛 80%），coverage gate 随之转绿。
 - **计数口径**：`MIGRATIONS.md`、`docs/AI-安装提示词.md`、`docs/给第三方的安装清单.md` 里残留的
   35 family / 261 op 与 36/264 统一到 **38 family / 269 op**；`docs/DSH-更新适配.md` 的历史括号补一句
   「v3.3 起 38/269」。`docs/architecture.md` 同步新模块（`runtime/embedded/`、`queue/job-args.ts`）
@@ -51,6 +56,7 @@
   - **`no_scene_change` 口径**：表示**最终**场景没变（`changed=false`），与是否调 ops 无关；纯 `print` 也为 `true`，是否调过 ops 看新增的 `has_ops`。域外回滚后最终一致也是 `true`，越界仍以 `scope_violations/rolled_back/rollback_complete` 判定。
 - **`op_no_effect` 误判只读/烘焙脚本**：旧判据是“源码里出现 `bpy.ops.` + changed=false”，于是 `dir(bpy.ops.fleshy)`、`fleshy.bake_frame`、`wm.bind_proxy` 全被判失败。现在只有**几何/UV 写算子**（bevel/loopcut/bisect/knife/subdivide/extrude/inset/bridge/spin/screw/merge/delete/duplicate/unwrap/smart_project/pack/join/separate）且 `changed=false` 才 `op_no_effect`；其它 ops 只回 `no_scene_change` 警告，`ok:true`。真机 5.3 复测：`dir()` → has_ops=false；`select_all` → ok + no_scene_change；空选择 bevel → CANCELLED（仍 ok:false）。
 - **回归**：session-family 新增「无 parent header 的 viewer」「grant 只给 target_agent_id」「10/15 min TTL + 1 h 上限」「owner 过期保留 grant」「子 agent 不 claim 无主会话」；session-registry 的 TTL 用例改为 30 min 主 owner，并保留 30 s 子 agent 用例。
+
 ### 2026-11-20 第三阶段：多 agent 归属 / 回执自证 / 取帧标定（BlenderProject 工单 P1–P8）
 
 > 4 个子代理 32 个探针实测。A 级 5 条全部修；B 级 3 组按实测口径修；每条都补了回归测试或真机探针。
@@ -64,6 +70,7 @@
 - **P7 status/list 矛盾 + worker 端口**：`status` 改读同一份 `/status?evidence=1` 的 `local_evidence.sessions`，并显示 `mine=yes/no` 与 stale 回收命令；`local_processes` 按 worker 注册表 `{pid,port}` 报**真实端口**（9879/9880/9881…），不再把所有 worker 写成 9879；配置文档同步"workerPort 只是起始端口"。
 - **P8 其它口径**：`kind=render` 的 `####` 不再被当目录（Blender 自己展开帧号；artifact 扫描目录取第一个 `#` 之前的父目录，并有回归）；`DSH_RENDER.applied` 新增 `engine_source=requested|inherit` + `engine_before`；txn 快照默认保留最近 20 档 / 1024 MB，自动 prune（`DSH_TXN_KEEP` / `DSH_TXN_MAX_MB`）；`bpy_api_lookup` 每个命中对象同时给 `identifier/description/parameters` 与 `name/doc/params` 别名。
 - **skill 口径**：`skills/blender-modeling/SKILL.md` 坑四从"headless 慎用 bpy.ops"改为 5.3 实测边界——`mode_set / mesh.bevel / uv.smart_project / object.convert` 在 `-b` 里可用且生效；真正的墙是事件型算子（knife poll、loopcut/bisect CANCELLED、view3d/render.opengl/ed.undo），并要求用 `changed/faces_delta` 自证。
+
 ### 2026-11-20 第二阶段：render 设备 / `//` 输出 / 长回执结构化（BlenderProject 工单）
 
 > 来源：第二阶段 3 条（1 条影响面大）+ 1 条口径澄清。全部按实测修，未改变已通过的 6 条 + BUG-1 行为。
