@@ -26,17 +26,28 @@ import {
   callerKey,
   callerView,
   fail,
+  callerMatchesHolder,
   grantView,
+  inOwnerFamily,
   isMain,
   ownerMatches,
+  ownerStale,
+  sameHost,
   sessionView,
 } from './types.js'
-import { findCallerSession, pruneSessions, unownedSessions } from './lookup.js'
+import {
+  findCallerSession,
+  pruneSessions,
+  readableSessions,
+  sessionForInstance,
+  unownedSessions,
+} from './lookup.js'
 import { VirtualGuiLifecycle, waitForAddonInstance } from './virtual-gui.js'
 import type { ProviderSelector } from './virtual-gui.js'
 import type {
   CallerIdentity,
   InstanceRef,
+  Owner,
   SessionKind,
   SessionRecord,
   SessionResult,
@@ -158,7 +169,7 @@ export class SessionRegistry {
   private ensureAttached(
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
-  ): SessionResult<{ session: SessionRecord }> {
+  ): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
     this.prune()
     const requested = opts.instanceId ? 'user-gui:' + String(opts.instanceId) : ''
     const existing = requested ? (this.sessions.get(requested) ?? null) : this.findForCaller(c)
@@ -182,15 +193,8 @@ export class SessionRegistry {
           'wait for the addon handshake, or check blender_session status',
           { sessionId: knownVirtual.id },
         )
-      // 只有"确实另有主人"才算 in_use；owner 过期被 prune 清掉的会话可以重新认领。
-      if (knownVirtual.owner && !ownerMatches(knownVirtual.owner, c))
-        return fail(
-          'session_in_use',
-          'session',
-          'another DSH session owns this virtual-gui session',
-          'ask the owner to release it',
-          { sessionId: knownVirtual.id },
-        )
+      // claimExisting owns the owner/viewer decision (same-host viewers are allowed,
+      // writes still need a grant); owner 过期被 prune 清掉的会话可以重新认领.
       return this.adopt(claimExisting(knownVirtual, c, this.livenessOf(knownVirtual)), c)
     }
     const known = this.sessions.get('user-gui:' + picked.instance.instanceId)
@@ -204,9 +208,9 @@ export class SessionRegistry {
   }
 
   private adopt(
-    result: SessionResult<{ session: SessionRecord }>,
+    result: SessionResult<{ session: SessionRecord; viewer?: boolean }>,
     c: CallerIdentity,
-  ): SessionResult<{ session: SessionRecord }> {
+  ): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
     if (result.ok) {
       touchAgent(result.session, c)
       if (result.session.instanceId)
@@ -240,18 +244,73 @@ export class SessionRegistry {
 
   list(): Record<string, unknown>[] {
     this.prune()
-    return [...this.sessions.values()].map(sessionView)
+    return [...this.sessions.values()].map((s) => sessionView(s))
+  }
+
+  /** Any authenticated call from the owner counts as a heartbeat (feedback 8). */
+  private refreshOwner(c: CallerIdentity): void {
+    for (const s of this.sessions.values()) {
+      if (s.owner && ownerMatches(s.owner, c)) s.owner.heartbeatAt = Date.now()
+    }
   }
 
   listFor(c: CallerIdentity): Record<string, unknown>[] {
     this.prune()
+    this.refreshOwner(c)
     const rows = new Map<string, Record<string, unknown>>()
     // 实例维度兜底：Blender 还连着、只是归属过期的会话也列出来。否则模型看到 0 个会话，
     // 手里没有 sessionId，attach/claim/stop 全被 session_in_use 挡住。
-    for (const s of unownedSessions(this.sessions, this.instances)) rows.set(s.id, sessionView(s))
+    for (const s of unownedSessions(this.sessions, this.instances))
+      rows.set(s.id, sessionView(s, c))
     const own = this.findForCaller(c)
-    if (own) rows.set(own.id, sessionView(own))
+    if (own) rows.set(own.id, sessionView(own, c))
+    // Read-only visibility (field 反馈 1/3): same-host sessions are listed with
+    // owner + is_mine=false so blender_see can use them and audit_* can attribute
+    // their results. Writes still fail in authorizeWrite (grant/owner required).
+    for (const s of readableSessions(this.sessions, c, this.instances)) {
+      if (rows.has(s.id)) continue
+      rows.set(s.id, { ...sessionView(s, c), read_only: true })
+    }
     return [...rows.values()]
+  }
+
+  /**
+   * The instance behind the only same-host session this caller may read but not
+   * own. Used for routing: see/read ops need a target, writes still go through
+   * authorizeWrite and are refused without a grant.
+   */
+  readableInstanceFor(c: CallerIdentity): string | null {
+    this.prune()
+    const rows = readableSessions(this.sessions, c, this.instances).filter(
+      (s) => s.status === 'ready' && !!s.instanceId,
+    )
+    return rows.length === 1 ? String(rows[0].instanceId) : null
+  }
+
+  /** Attribution for a plan/op receipt: the session behind the instance we drove. */
+  sessionInfo(c: CallerIdentity, instanceId?: string | null): Record<string, unknown> | null {
+    this.prune()
+    this.refreshOwner(c)
+    const session = instanceId
+      ? sessionForInstance(this.sessions, String(instanceId))
+      : this.findForCaller(c)
+    if (!session) return null
+    const mine = ownerMatches(session.owner, c) || inOwnerFamily(session.owner, c)
+    return {
+      sessionId: session.id,
+      instanceId: session.instanceId,
+      owner: session.owner
+        ? {
+            hostId: session.owner.hostId,
+            dshSessionId: session.owner.dshSessionId,
+            agentId: session.owner.agentId,
+            role: session.owner.role || 'main',
+            stale: ownerStale(session.owner),
+          }
+        : null,
+      is_mine: mine,
+      borrowed: !mine && sameHost(session.owner, c),
+    }
   }
 
   status(
@@ -259,6 +318,7 @@ export class SessionRegistry {
     sessionId?: string,
   ): SessionResult<{ session: Record<string, unknown> }> {
     this.prune()
+    this.refreshOwner(c)
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
     if (!session) {
       // A released record is gone by design; still answer what happened instead of
@@ -296,13 +356,16 @@ export class SessionRegistry {
     if (ownerMatches(session.owner, c) || session.agents.has(callerKey(c))) touchAgent(session, c)
     // live=false is the honest answer for "the record exists but its Blender is
     // gone"; attach refuses to revive it, so status must not imply otherwise.
-    return { ok: true, session: { ...sessionView(session), live: this.livenessOf(session) } }
+    return {
+      ok: true,
+      session: { ...sessionView(session, c), live: this.livenessOf(session) },
+    }
   }
 
   attach(
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
-  ): SessionResult<{ session: Record<string, unknown> }> {
+  ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean; note?: string }> {
     if (opts.kind && opts.kind !== 'user-gui') {
       return fail(
         'invalid_params',
@@ -314,13 +377,19 @@ export class SessionRegistry {
     }
     const r = this.ensureAttached(c, opts)
     if (!('session' in r)) return r
-    return { ok: true, session: sessionView(r.session) }
+    return {
+      ok: true,
+      session: sessionView(r.session, c),
+      ...(r.viewer === true
+        ? { viewer: true, note: 'subagent of the owner: read-only viewer (writes need a grant)' }
+        : {}),
+    }
   }
 
   claim(
     c: CallerIdentity,
     opts: { instanceId?: string } = {},
-  ): SessionResult<{ session: Record<string, unknown> }> {
+  ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean; note?: string }> {
     return this.attach(c, opts)
   }
 
@@ -372,22 +441,72 @@ export class SessionRegistry {
     return { ok: true, released: false }
   }
 
-  release(c: CallerIdentity, sessionId?: string): SessionResult<{ released: boolean }> {
+  release(
+    c: CallerIdentity,
+    sessionId?: string,
+    opts: { force?: boolean } = {},
+  ): SessionResult<{ released: boolean; reason: string; previous_owner?: Owner }> {
     this.prune()
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session) return { ok: true, released: false }
-    if (!session.owner) return { ok: true, released: false }
-    if (!ownerMatches(session.owner, c)) {
+    if (!session) {
+      // 静默 ok 是现场踩过的坑：调用方以为会话已经放掉，实际什么都没发生。
+      return fail(
+        'session_not_found',
+        'session',
+        'the session does not exist (nothing was released)',
+        'call blender_session action=list to see live sessions',
+        { sessionId: sessionId || null, released: false, reason: 'not_found' },
+      )
+    }
+    if (session.owner && !ownerMatches(session.owner, c)) {
+      // 反馈 2: a crashed subagent must not lock the GUI forever. Two escape
+      // hatches, both explicit in the receipt:
+      //   1) force=true from a main agent on the same host (the human's agent);
+      //   2) the owner's heartbeat is stale (subagent 30 s / main 30 min).
+      const forceHostMain = opts.force === true && c.role === 'main' && sameHost(session.owner, c)
+      if (forceHostMain || ownerStale(session.owner)) {
+        const reason = forceHostMain ? 'forced_by_host_main' : 'stale_owner'
+        const previous = session.owner
+        this.releaseSession(session)
+        return { ok: true, released: true, reason, previous_owner: previous ?? undefined }
+      }
       return fail(
         'session_in_use',
         'session',
-        'only the owning DSH session can release this GUI session',
-        'ask the owner to release it',
-        { sessionId: session.id, owner: session.owner },
+        'only the owning DSH session (or a same-host main agent with force=true) can release this GUI session',
+        c.role === 'main' && sameHost(session.owner, c)
+          ? 'retry with force=true (same-host main agent), or wait for the owner heartbeat to go stale'
+          : 'ask the owner to release it; a stale owner heartbeat is reclaimed automatically',
+        {
+          sessionId: session.id,
+          owner: session.owner,
+          released: false,
+          reason: 'owner_mismatch',
+          stale: ownerStale(session.owner),
+          force_allowed: c.role === 'main' && sameHost(session.owner, c),
+        },
       )
     }
+    // owner 心跳过期（主 30 min / 子 agent 30 s）后 prune 只清 owner、保留 agents：此时仍挂在这个会话上的
+    // agent 必须能释放它，否则 release 会回 released:false 而会话照旧 ready（现场误判源）。
+    const mine = session.agents.has(callerKey(c))
+    if (!session.owner && !mine) {
+      return fail(
+        'session_unowned',
+        'session',
+        'the session has no owner (owner heartbeat expired) and this caller is not attached to it',
+        'attach it first (blender_session action=attach) and then release; or let the main agent release it',
+        {
+          sessionId: session.id,
+          released: false,
+          reason: 'owner_expired',
+          agents: [...session.agents.keys()],
+        },
+      )
+    }
+    const reason = session.owner ? 'owner' : 'owner_expired'
     this.releaseSession(session)
-    return { ok: true, released: true }
+    return { ok: true, released: true, reason }
   }
 
   releaseSession(s: SessionRecord): void {
@@ -448,7 +567,7 @@ export class SessionRegistry {
   heartbeat(
     c: CallerIdentity,
     sessionId?: string,
-  ): SessionResult<{ session: Record<string, unknown> }> {
+  ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean }> {
     this.prune()
     const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
     if (!session)
@@ -460,16 +579,20 @@ export class SessionRegistry {
         {},
       )
     if (session.owner && !ownerMatches(session.owner, c)) {
+      if (inOwnerFamily(session.owner, c) || sameHost(session.owner, c)) {
+        touchAgent(session, c)
+        return { ok: true, session: sessionView(session, c), viewer: true }
+      }
       return fail(
         'session_in_use',
         'session',
         'another DSH session owns this GUI session',
-        'wait for the owner to release it',
-        { sessionId: session.id },
+        'reads are allowed on the same host; writes need a grant from the owner',
+        { sessionId: session.id, owner: session.owner, is_mine: false },
       )
     }
     claimFreeSession(session, c)
-    return { ok: true, session: sessionView(session) }
+    return { ok: true, session: sessionView(session, c) }
   }
 
   doctor(
@@ -591,8 +714,9 @@ export class SessionRegistry {
     scopes: unknown,
     target?: CallerIdentity,
     ttlMs?: number,
+    force = false,
   ): SessionResult<{ grant: Record<string, unknown> }> {
-    return grantTo(this.grantHost(), c, sessionId, scopes, target, ttlMs)
+    return grantTo(this.grantHost(), c, sessionId, scopes, target, ttlMs, force)
   }
 
   revoke(
@@ -606,7 +730,11 @@ export class SessionRegistry {
   grants(
     c: CallerIdentity,
     sessionId?: string,
-  ): SessionResult<{ grants: Record<string, unknown>[] }> {
+  ): SessionResult<{
+    grants: Record<string, unknown>[]
+    owner_expired?: boolean
+    note?: string
+  }> {
     return listGrants(this.grantHost(), c, sessionId)
   }
 
@@ -717,7 +845,12 @@ export class SessionRegistry {
     const session = this.sessions.get(String(sessionId))
     if (!session)
       return fail('session_not_found', 'session', 'the session does not exist', 'attach first', {})
-    if (session.owner && !ownerMatches(session.owner, c))
+    if (session.owner && !ownerMatches(session.owner, c)) {
+      // A family/same-host subagent viewer may publish presence; it never takes ownership.
+      if (inOwnerFamily(session.owner, c) || sameHost(session.owner, c)) {
+        touchAgent(session, c)
+        return { ok: true, session }
+      }
       return fail(
         'session_in_use',
         'session',
@@ -725,11 +858,20 @@ export class SessionRegistry {
         'wait for the owner to release it',
         {},
       )
+    }
     claimFreeSession(session, c)
     return { ok: true, session }
   }
 
-  /** Authorize one write call. Returns the owning session or a structured failure. */
+  /**
+   * Authorize one write call. Returns the owning session or a structured failure.
+   *
+   * 反馈 1: the grant check used to sit *after* the ownership check, so a
+   * subagent with a covering grant still got session_in_use (or session_required
+   * before that). Order is now: state checks → owner/main → covering grant.
+   * 反馈 3: a caller that owns nothing gets an explicit "not yours" receipt with
+   * the owner and the missing scope, never a silent write into someone's scene.
+   */
   authorizeWrite(
     c: CallerIdentity,
     sessionId: string | undefined,
@@ -743,17 +885,8 @@ export class SessionRegistry {
         'session_unavailable',
         'session',
         'no GUI session is attached for this caller',
-        'attach a ready Blender session first',
-        {},
-      )
-    }
-    if (session.owner && !ownerMatches(session.owner, c)) {
-      return fail(
-        'session_in_use',
-        'session',
-        'another DSH session owns this GUI session',
-        'wait for the owner to release it',
-        { sessionId: session.id, owner: session.owner },
+        'attach a ready Blender session first (blender_session action=attach)',
+        { is_mine: false, caller: callerView(c) },
       )
     }
     // 会话背后的 Blender 已经掉了：这次写不能放行。多实例下 addon.send 会退化成
@@ -767,39 +900,84 @@ export class SessionRegistry {
         'blender_session action=attach instance_id=… to take the live instance, then retry',
         { instanceId: missing.instanceId, ready: missing.ready },
       )
-    // 无主（归属已过期）的会话在第一次写调用时认领，写门才知道谁是 main。
-    claimFreeSession(session, c)
     const gate = evaluateWriteGate(session, c, scopes, opts)
     if (!('effective' in gate)) return gate
     const { effective } = gate
-    if (isMain(session, c)) {
-      const main = authorizeMainWrite(session, c, effective)
-      if (!main.ok) return main
-      return { ok: true, sessionId: session.id, mode: 'main' }
+    const owned = !session.owner || ownerMatches(session.owner, c)
+    if (owned) {
+      // 无主（归属已过期）的会话在第一次写调用时认领，写门才知道谁是 main。
+      claimFreeSession(session, c)
+      if (isMain(session, c)) {
+        const main = authorizeMainWrite(session, c, effective)
+        if (!main.ok) return main
+        return { ok: true, sessionId: session.id, mode: 'main' }
+      }
     }
+    // Anyone else — a subagent with a different dshSessionId, or another DSH
+    // session on the same host — needs a covering grant. This is the branch that
+    // used to be unreachable because ownership was rejected first.
     const grant = coveringGrant(session, c, effective)
-    if (grant) return { ok: true, sessionId: session.id, mode: 'grant', grantId: grant.id }
+    if (grant) {
+      // Active use renews the grant: a multi-step subagent round should not lose
+      // its write scope 10 minutes after the parent issued it.
+      const ttl = Math.max(1_000, grant.expiresAt - grant.createdAt)
+      grant.heartbeatAt = Date.now()
+      grant.expiresAt = grant.heartbeatAt + ttl
+      return { ok: true, sessionId: session.id, mode: 'grant', grantId: grant.id }
+    }
+    const otherSession = !!session.owner && !ownerMatches(session.owner, c)
     return fail(
-      'scope_required',
+      otherSession ? 'session_in_use' : 'scope_required',
       'session',
-      'the write scope was not granted to this agent',
-      'ask the main agent to grant the declared scope',
-      {
-        requested: effective,
-        held: [...session.grants.values()]
-          .filter((g) => callerKey(g.holder) === callerKey(c))
-          .map(grantView),
-      },
+      otherSession
+        ? 'another DSH session owns this GUI session (is_mine=false)'
+        : 'the write scope was not granted to this agent',
+      otherSession
+        ? "writes into someone else's scene are refused: ask the owner for " +
+            "blender_session action=grant scopes=['collection:…'] (targetAgentId=…) and declare the same " +
+            'write_scope on this call; read-only ops are allowed and carry owner/is_mine=false'
+        : 'ask the main agent to grant the declared scope',
+      this.writeFailureEvidence(session, c, effective, otherSession),
     )
   }
 
+  /** Field retest: a refusal names caller / owner / every grant holder, not just a code. */
+  private writeFailureEvidence(
+    session: SessionRecord,
+    c: CallerIdentity,
+    effective: unknown,
+    otherSession: boolean,
+  ): Record<string, unknown> {
+    return {
+      sessionId: session.id,
+      owner: session.owner,
+      is_mine: !otherSession,
+      borrowed: otherSession && sameHost(session.owner, c),
+      requested: effective,
+      required_scope: effective,
+      caller: callerView(c),
+      owner_agent: session.owner ? String(session.owner.agentId || '') : null,
+      callers_agent: String(c.agentId || ''),
+      grant_holders: [...session.grants.values()].map((g) => ({
+        agentId: String(g.holder.agentId || ''),
+        parentAgentId: g.holder.parentAgentId || null,
+        dshSessionId: String(g.holder.dshSessionId || ''),
+        scopes: g.scopes,
+        expiresInMs: Math.max(0, g.expiresAt - Date.now()),
+      })),
+      held: [...session.grants.values()]
+        .filter((g) => callerMatchesHolder(g.holder, c))
+        .map(grantView),
+    }
+  }
   async beginPy(
     c: CallerIdentity,
     sessionId?: string,
     waitMs = 0,
-  ): Promise<SessionResult<{ sessionId: string }>> {
+    scopes: unknown = [{ kind: 'exclusive' }],
+  ): Promise<SessionResult<{ sessionId: string; mode?: 'main' | 'grant'; grantId?: string }>> {
     const r = await waitForPyLock(
-      () => this.authorizeWrite(c, sessionId, [{ kind: 'exclusive' }], { py: true }),
+      () => this.authorizeWrite(c, sessionId, scopes, { py: true }),
       waitMs,
     )
     if (!('sessionId' in r)) return r
@@ -807,7 +985,12 @@ export class SessionRegistry {
     if (!session)
       return fail('session_not_found', 'session', 'the session disappeared', 're-attach', {})
     session.activePy = { caller: { ...c }, startedAt: Date.now() }
-    return { ok: true, sessionId: session.id }
+    return {
+      ok: true,
+      sessionId: session.id,
+      ...('mode' in r ? { mode: r.mode } : {}),
+      ...('grantId' in r && r.grantId ? { grantId: r.grantId } : {}),
+    }
   }
 
   /** Report a timed-out Python call without releasing the lock. */

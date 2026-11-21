@@ -153,7 +153,8 @@ async function statusOf(port: number): Promise<unknown> {
   if (!listed.ok) return listed.failure
   let body: Record<string, unknown>
   try {
-    body = await backendJson(port, '/status', 20000)
+    // 反馈 7: status and list must read the same source (local_evidence.sessions).
+    body = await backendJson(port, '/status?evidence=1', 20000)
   } catch (e: unknown) {
     return toolError(
       'gateway_unreachable',
@@ -167,7 +168,10 @@ async function statusOf(port: number): Promise<unknown> {
       'status 失败 · ' + text(body.error || body.raw || 'unknown'),
       '先 blender_session action=doctor 看 Gateway/addon 状态',
     )
-  return { text: formatStatus(body, listed.sessions) }
+  return {
+    text: formatStatus(body, listed.sessions, asRecord(body.local_evidence)),
+    evidence: asRecord(body.local_evidence),
+  }
 }
 
 async function doctorOf(port: number, args: Record<string, unknown>): Promise<unknown> {
@@ -202,6 +206,31 @@ async function doctorOf(port: number, args: Record<string, unknown>): Promise<un
   }
 }
 
+/** Structured companion to the human text: attach/viewer flags at the top level. */
+function sessionReceipt(action: string, body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { text: formatSessionResult(action, body) }
+  const row = asRecord(body.session)
+  if (row.id) {
+    out.session_id = row.id
+    out.owner = row.owner ?? null
+    out.is_mine = row.is_mine ?? null
+    out.borrowed = row.borrowed ?? null
+  }
+  if (body.viewer !== undefined) out.viewer = body.viewer === true
+  if (action === 'whoami') {
+    out.caller = body.caller ?? null
+    out.agentId = body.agentId ?? null
+    out.dshSessionId = body.dshSessionId ?? null
+    out.hostId = body.hostId ?? null
+    out.role = body.role ?? null
+  }
+  if (action === 'release' || action === 'detach') {
+    out.released = body.released === true
+    out.reason = body.reason ?? null
+  }
+  if (Array.isArray(body.grants)) out.grants = body.grants
+  return out
+}
 export async function executeSession(
   port: number,
   args: Record<string, unknown>,
@@ -236,7 +265,7 @@ export async function executeSession(
   if (bad) return toolError('invalid_params', bad, 'action=help 查看可用动作与参数')
   const body = await sessionAction(port, action, payloadFor(action, args))
   if (isFailureBody(body)) return consentOrFailure(action, body)
-  return { text: formatSessionResult(action, asRecord(body)) }
+  return sessionReceipt(action, asRecord(body))
 }
 
 /**

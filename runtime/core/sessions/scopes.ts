@@ -42,7 +42,20 @@ export function parseScope(value: unknown): ScopeSpec | null {
 }
 
 export function parseScopes(value: unknown): ScopeSpec[] {
-  const list = Array.isArray(value) ? value : [value]
+  // A JSON array or a comma-separated string is what tools receive from a
+  // type:"json" parameter; both must mean the same list as a real array.
+  let list: unknown[] = Array.isArray(value) ? value : [value]
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (raw.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        if (Array.isArray(parsed)) list = parsed
+      } catch {
+        /* not JSON: keep it as one token */
+      }
+    } else if (raw.includes(',')) list = raw.split(',')
+  }
   const out: ScopeSpec[] = []
   for (const item of list) {
     const parsed = parseScope(item)
@@ -83,4 +96,23 @@ export function scopeCovers(grant: ScopeSpec, write: ScopeSpec): boolean {
 
 export function scopesCover(granted: ScopeSpec[], writes: ScopeSpec[]): boolean {
   return writes.every((w) => granted.some((g) => scopeCovers(g, w)))
+}
+
+/**
+ * Does a grant scope cover one changed object? Used after blender_py to report
+ * writes that landed outside the declared scope (field 反馈 1: "py can only write
+ * _probe_x"). Collections come from the addon's state delta, so a collection
+ * grant is checked against real membership, not against the script's claim.
+ */
+export function scopeCoversObject(
+  scope: ScopeSpec,
+  name: string,
+  collections: string[] = [],
+): boolean {
+  if (scope.kind === 'exclusive') return true
+  const value = String(scope.value || '')
+  if (!value) return false
+  if (scope.kind === 'object') return name === value
+  if (scope.kind === 'prefix') return name.startsWith(value)
+  return collections.indexOf(value) >= 0
 }

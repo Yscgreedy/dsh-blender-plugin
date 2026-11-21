@@ -1,6 +1,7 @@
 /** blender_session 的呈现层：会话列表、动作回执、status/doctor 摘要。 */
 import { asRecord, isRecord, text } from '../../contracts/dynamic.js'
 import type { SessionRow } from '../shared/session.js'
+import { formatLocalEvidence } from './evidence-presenter.js'
 
 const LF = String.fromCharCode(10)
 const CLIP = 6000
@@ -83,126 +84,6 @@ export function formatConsentState(action: string, body: Record<string, unknown>
   )
 }
 
-function processText(procs: Record<string, unknown>[]): string {
-  if (!procs.length) return '(无)'
-  return procs
-    .map(
-      (p) =>
-        text(p.role || '?') +
-        ' pid=' +
-        text(p.pid) +
-        ' "' +
-        text(p.name) +
-        '" port=' +
-        (p.port === null || p.port === undefined ? 'null' : text(p.port)),
-    )
-    .join(' · ')
-}
-
-function portText(ports: Record<string, unknown>[]): string {
-  if (!ports.length) return '(无)'
-  return ports
-    .map((p) => {
-      const pids = Array.isArray(p.pids) ? p.pids.map(text).join(',') : ''
-      const raw = Array.isArray(p.pids_raw) ? p.pids_raw.map(text).join(',') : ''
-      return (
-        text(p.port) +
-        ' ' +
-        (p.listening === true ? 'listening' : 'closed') +
-        ' pids=[' +
-        pids +
-        '] pids_raw=[' +
-        raw +
-        ']' +
-        (p.process ? ' "' + text(p.process) + '"' : '') +
-        ' role=' +
-        text(p.role || '-') +
-        ' mode=' +
-        text(p.mode || '-')
-      )
-    })
-    .join(' · ')
-}
-
-function portsEvidenceLine(
-  ev: Record<string, unknown>,
-  evidence: Record<string, unknown>,
-  conflicts: string[],
-): string {
-  const gw = asRecord(ev.gateway)
-  const worker = asRecord(ev.worker)
-  const legacy = asRecord(ev.legacy)
-  return (
-    'source=' +
-    text(ev.source || evidence.source || '-') +
-    ' · scanned_at=' +
-    text(ev.scanned_at || evidence.scanned_at || '-') +
-    ' · gateway=' +
-    text(gw.port) +
-    ' ' +
-    text(gw.state) +
-    ' pid=' +
-    text(gw.pid === null || gw.pid === undefined ? '-' : gw.pid) +
-    ' matched=' +
-    String(gw.matched === true) +
-    ' · worker=' +
-    text(worker.port) +
-    ' ' +
-    text(worker.state) +
-    ' · legacy=' +
-    text(legacy.port) +
-    ' ' +
-    text(legacy.state) +
-    '（不冒充 gateway）' +
-    ' · conflicts=' +
-    String(conflicts.length)
-  )
-}
-
-function falsePositiveText(fps: Record<string, unknown>[]): string {
-  return fps.map((f) => text(f.port) + '/pid=' + text(f.pid) + ' ' + text(f.reason)).join(', ')
-}
-
-/**
- * 工单 6：本地进程 / 端口证据（list 与 doctor 共用同一段，避免两处口径漂移）。
- * 字段名保持 snake_case —— 判据要能被机械 grep（local_processes / ports / ports_evidence / false_positives）。
- */
-export function formatLocalEvidence(
-  evidence: Record<string, unknown> | null | undefined,
-): string[] {
-  if (!evidence || !Object.keys(evidence).length) return []
-  const procs = Array.isArray(evidence.local_processes)
-    ? evidence.local_processes.map(asRecord)
-    : []
-  const ports = Array.isArray(evidence.ports) ? evidence.ports.map(asRecord) : []
-  const ev = asRecord(evidence.ports_evidence)
-  const conflicts = Array.isArray(ev.conflicts) ? ev.conflicts.map(text) : []
-  const fps = Array.isArray(evidence.false_positives) ? evidence.false_positives.map(asRecord) : []
-  const fixture = asRecord(evidence.fixture)
-  const lines = [
-    'local_processes · ' + String(procs.length) + ' 个（' + processText(procs) + '）',
-    'ports · ' + portText(ports),
-    'ports_evidence · ' + portsEvidenceLine(ev, evidence, conflicts),
-    'false_positives · [' +
-      falsePositiveText(fps) +
-      ']' +
-      (fixture.path
-        ? '（fixture=' +
-          text(fixture.name || '-') +
-          ' path=' +
-          text(fixture.path) +
-          ' decoys=' +
-          String(fixture.decoys ?? 0) +
-          '）'
-        : ''),
-  ]
-  // 扫描失败不沉默：degraded 必须出现在回执里（端口状态此时是 unknown，不是 closed）。
-  if (evidence.degraded === true)
-    lines.push('degraded · ' + text(evidence.error || 'local scan degraded'))
-  if (conflicts.length) for (const c of conflicts) lines.push('  conflict: ' + c)
-  return lines
-}
-
 /**
  * 工单 6e：会话数的唯一判据是 local_evidence.sessions（Gateway 的 registry.list()），
  * 不是本调用者可见的行（registry.listFor(caller)）。别人的会话会让两者不一致：
@@ -223,6 +104,52 @@ function claimedElsewhereText(rows: SessionRow[]): string {
   return shown.join(' · ')
 }
 
+function emptySessionListText(
+  header: string,
+  evidenceRows: SessionRow[] | null,
+  addon: Record<string, unknown> | null | undefined,
+  blocks: string[],
+): string {
+  if (evidenceRows && evidenceRows.length) {
+    return [
+      header,
+      '已认领但不在本调用者名下：' + claimedElsewhereText(evidenceRows),
+      '说明：这些会话已有 owner，attach 会被 session_in_use 拒绝 —— 让 owner 先 detach/release，或换一个 DSH 会话。',
+      'next_actions · blender_session action=list（owner 释放后再 attach）',
+    ]
+      .concat(blocks)
+      .join(LF)
+  }
+  // 2026-11-19 纠正：3.1+ addon 主动拨 39877，**不需要用户点 Connect**。
+  // list=0 只说明"还没认领"，不说明通道离线 —— 文案必须给可粘贴的 attach。
+  const view = asRecord(addon)
+  const known = Object.keys(view).length > 0
+  const ready = Number(view.ready_instances ?? 0)
+  const instanceId = text(view.instanceId || '')
+  const actions = Array.isArray(view.next_actions)
+    ? view.next_actions.map(text).filter(Boolean)
+    : []
+  const attachLine = instanceId
+    ? 'blender_session action=attach instance_id=' + instanceId
+    : actions[0] || ''
+  const addonText = !known
+    ? 'addon 状态未知（evidenceOnly 未取到）'
+    : ready > 0
+      ? 'addon 已连，ready_instances=' + String(ready)
+      : 'addon 未连，ready_instances=0'
+  const head = [
+    header,
+    '未认领（' + addonText + '）' + (attachLine ? ' → 直接 attach：' + attachLine : ''),
+    '说明：list=0 只是未认领，不代表 addon 离线。',
+    attachLine
+      ? 'next_actions · ' + attachLine
+      : known && ready > 0
+        ? 'next_actions · 多实例：先 action=doctor 取 instance_id，再 blender_session action=attach（3.1+ 无需手动连接）'
+        : 'next_actions · addon 未连：启动 Blender 并启用扩展后再 action=list 取 instance_id（3.1+ 无需手动连接）',
+  ]
+  return head.concat(blocks).join(LF)
+}
+
 export function formatSessionList(
   sessions: SessionRow[],
   evidence?: Record<string, unknown> | null,
@@ -239,46 +166,7 @@ export function formatSessionList(
         ' 个会话（本调用者可见 ' +
         String(sessions.length) +
         '）'
-  if (!sessions.length) {
-    if (evidenceRows && evidenceRows.length) {
-      return [
-        header,
-        '已认领但不在本调用者名下：' + claimedElsewhereText(evidenceRows),
-        '说明：这些会话已有 owner，attach 会被 session_in_use 拒绝 —— 让 owner 先 detach/release，或换一个 DSH 会话。',
-        'next_actions · blender_session action=list（owner 释放后再 attach）',
-      ]
-        .concat(blocks)
-        .join(LF)
-    }
-    // 2026-11-19 纠正：3.1+ addon 主动拨 39877，**不需要用户点 Connect**。
-    // list=0 只说明"还没认领"，不说明通道离线 —— 文案必须给可粘贴的 attach。
-    const view = asRecord(addon)
-    const known = Object.keys(view).length > 0
-    const ready = Number(view.ready_instances ?? 0)
-    const instanceId = text(view.instanceId || '')
-    const actions = Array.isArray(view.next_actions)
-      ? view.next_actions.map(text).filter(Boolean)
-      : []
-    const attachLine = instanceId
-      ? 'blender_session action=attach instance_id=' + instanceId
-      : actions[0] || ''
-    const addonText = !known
-      ? 'addon 状态未知（evidenceOnly 未取到）'
-      : ready > 0
-        ? 'addon 已连，ready_instances=' + String(ready)
-        : 'addon 未连，ready_instances=0'
-    const head = [
-      header,
-      '未认领（' + addonText + '）' + (attachLine ? ' → 直接 attach：' + attachLine : ''),
-      '说明：list=0 只是未认领，不代表 addon 离线。',
-      attachLine
-        ? 'next_actions · ' + attachLine
-        : known && ready > 0
-          ? 'next_actions · 多实例：先 action=doctor 取 instance_id，再 blender_session action=attach（3.1+ 无需手动连接）'
-          : 'next_actions · addon 未连：启动 Blender 并启用扩展后再 action=list 取 instance_id（3.1+ 无需手动连接）',
-    ]
-    return head.concat(blocks).join(LF)
-  }
+  if (!sessions.length) return emptySessionListText(header, evidenceRows, addon, blocks)
   const lines = [header]
   for (const s of sessions) {
     const agents = Array.isArray(s.agents) ? s.agents.length : 0
@@ -293,10 +181,23 @@ export function formatSessionList(
         text(s.instanceId || '-') +
         ' · owner=' +
         text(asRecord(s.owner).agentId || '-') +
+        (s.is_mine === true ? ' · mine=yes' : s.is_mine === false ? ' · mine=no（只读可见）' : '') +
         ' · agents=' +
         String(agents) +
         (s.paused ? ' · PAUSED(human)' : '') +
-        (s.humanModified ? ' · human_modified' : ''),
+        (s.humanModified ? ' · human_modified' : '') +
+        (s.owner_expired === true ? ' · owner_expired → re-attach' : '') +
+        // 反馈 2: show the reclaim contract instead of an opaque 15-20 min wait.
+        (asRecord(s.owner).stale === true
+          ? ' · owner-stale(age=' +
+            String(asRecord(s.owner).heartbeat_age_ms ?? '?') +
+            'ms / ' +
+            String(asRecord(s.owner).stale_after_ms ?? '?') +
+            'ms)' +
+            (s.is_mine === false && s.readable === true
+              ? ' → blender_session action=release session_id=' + text(s.id) + ' force=true'
+              : '')
+          : ''),
     )
   }
   return lines.concat(blocks).join(LF)
@@ -305,7 +206,28 @@ export function formatSessionList(
 export function formatSessionResult(action: string, body: Record<string, unknown>): string {
   const s = asRecord(body.session)
   const head = 'SESSION ' + action + ' ok'
-  if (action === 'grants') return head + LF + clip(body.grants ?? [])
+  if (action === 'whoami')
+    return (
+      head +
+      LF +
+      'agentId=' +
+      text(asRecord(body.caller).agentId || body.agentId || '-') +
+      ' · dshSessionId=' +
+      text(asRecord(body.caller).dshSessionId || body.dshSessionId || '-') +
+      ' · hostId=' +
+      text(asRecord(body.caller).hostId || body.hostId || '-') +
+      ' · role=' +
+      text(asRecord(body.caller).role || body.role || '-')
+    )
+  if (action === 'release' || action === 'detach')
+    return (
+      head +
+      ' · released=' +
+      String(body.released === true) +
+      (body.reason ? ' · reason=' + text(body.reason) : '')
+    )
+  if (action === 'grants')
+    return head + LF + clip(body.grants ?? []) + (body.note ? LF + text(body.note) : '')
   if (action === 'presence') return head + LF + clip(body.presence ?? body.sessions ?? [])
   if (
     action === 'attach' ||
@@ -328,7 +250,10 @@ export function formatSessionResult(action: string, body: Record<string, unknown
           ' · instance=' +
           text(s.instanceId || '-') +
           ' · owner=' +
-          text(asRecord(s.owner).agentId || '-')
+          text(asRecord(s.owner).agentId || '-') +
+          (body.viewer === true ? ' · viewer=true' : '') +
+          (s.is_mine === false ? ' · is_mine=false' : s.is_mine === true ? ' · is_mine=true' : '') +
+          (s.borrowed === true ? ' · borrowed=true' : '')
         : LF + clip(body))
     )
   if (
@@ -412,7 +337,41 @@ export function formatReloadReport(body: Record<string, unknown>): string {
   return lines.join(LF)
 }
 
-export function formatStatus(body: Record<string, unknown>, sessions: SessionRow[]): string {
+/** Runtime-module provenance lines (status): one string, or null when absent. */
+function runtimeModulesLines(body: Record<string, unknown>): string[] {
+  const region = asRecord(body.region)
+  const addonRegion = asRecord(asRecord(body.addon).region)
+  const topRuntimeModules = asRecord(body.runtimeModules)
+  const runtimeModules = Object.keys(topRuntimeModules).length
+    ? topRuntimeModules
+    : asRecord(region.runtime_modules || addonRegion.runtime_modules)
+  if (!Object.keys(runtimeModules).length) return []
+  const modules = asRecord(runtimeModules.modules)
+  const stale = Object.entries(modules)
+    .filter(([, v]) => text(asRecord(v).verdict) === 'stale')
+    .map(([k]) => k)
+  const out = [
+    'runtime modules loaded=' +
+      text(runtimeModules.loaded_hash || '-') +
+      ' · disk=' +
+      text(runtimeModules.disk_hash || '-') +
+      ' · verdict=' +
+      text(runtimeModules.verdict || 'unknown') +
+      ' · count=' +
+      String(runtimeModules.count ?? 0) +
+      (stale.length ? ' · stale=' + stale.join(',') : ''),
+  ]
+  if (text(runtimeModules.verdict) === 'stale')
+    out.push(
+      '⚠ runtime 模块仍是旧代码：下一次业务调用会先重注入 —— 首调用结果可能来自旧代码，重跑一次再定论',
+    )
+  return out
+}
+export function formatStatus(
+  body: Record<string, unknown>,
+  sessions: SessionRow[],
+  evidence?: Record<string, unknown> | null,
+): string {
   const readiness = asRecord(body.readiness)
   const addon = asRecord(readiness.addon)
   const vg = asRecord(body.virtualGui)
@@ -442,29 +401,7 @@ export function formatStatus(body: Record<string, unknown>, sessions: SessionRow
         text(prov.verdict || 'unknown') +
         (prov.staleReason ? ' · ' + text(prov.staleReason).slice(0, 240) : ''),
     )
-  const region = asRecord(body.region)
-  const addonRegion = asRecord(asRecord(body.addon).region)
-  const topRuntimeModules = asRecord(body.runtimeModules)
-  const runtimeModules = Object.keys(topRuntimeModules).length
-    ? topRuntimeModules
-    : asRecord(region.runtime_modules || addonRegion.runtime_modules)
-  if (Object.keys(runtimeModules).length) {
-    const modules = asRecord(runtimeModules.modules)
-    const stale = Object.entries(modules)
-      .filter(([, v]) => text(asRecord(v).verdict) === 'stale')
-      .map(([k]) => k)
-    lines.push(
-      'runtime modules loaded=' +
-        text(runtimeModules.loaded_hash || '-') +
-        ' · disk=' +
-        text(runtimeModules.disk_hash || '-') +
-        ' · verdict=' +
-        text(runtimeModules.verdict || 'unknown') +
-        ' · count=' +
-        String(runtimeModules.count ?? 0) +
-        (stale.length ? ' · stale=' + stale.join(',') : ''),
-    )
-  }
+  lines.push(...runtimeModulesLines(body))
   if (body.addonError) lines.push('addonError ' + text(body.addonError))
   if (vg.enabled !== undefined)
     lines.push(
@@ -483,7 +420,7 @@ export function formatStatus(body: Record<string, unknown>, sessions: SessionRow
       ? ['blender_session action=attach instance_id=' + text(addon.instanceId)]
       : [],
   }
-  lines.push(formatSessionList(sessions, null, addonView))
+  lines.push(formatSessionList(sessions, evidence || null, addonView))
   return lines.join(LF)
 }
 
@@ -534,6 +471,7 @@ export function formatDoctor(body: Record<string, unknown>): string {
 export function sessionHelp(): string {
   return [
     'blender_session 动作（会话生命周期与归属；不含 Gateway 运维）：',
+    '  whoami（回本调用者的 agentId / dshSessionId / hostId / role）',
     '  list | status | doctor | attach | claim | detach | release',
     '  grant / revoke / grants（写权限 scope：exclusive | collection:名 | prefix:名 | object:名）',
     '  pause / resume（只有人类能暂停；agent 调用返回 human_action_required）',

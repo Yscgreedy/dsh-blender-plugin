@@ -113,6 +113,39 @@ describe('6c decoy fixture', () => {
     expect(role(5140)).toBe('addon')
   })
 
+  it('reports each worker on its real port instead of the default for all (field 7)', () => {
+    const evidence = classifyLocals({
+      listeners: [
+        { port: 9879, pid: 32416, address: 'b', process: 'blender.exe', decoy: false },
+        { port: 9880, pid: 32417, address: 'b', process: 'blender.exe', decoy: false },
+        { port: 9881, pid: 32418, address: 'b', process: 'blender.exe', decoy: false },
+      ],
+      processes: [
+        { pid: 7504, name: 'DeepSeek Harness.exe', decoy: false },
+        { pid: 32416, name: 'blender.exe', decoy: false },
+        { pid: 32417, name: 'blender.exe', decoy: false },
+        { pid: 32418, name: 'blender.exe', decoy: false },
+      ],
+      gatewayPid: 7504,
+      gatewayPort: 39877,
+      workerPort: 9879,
+      legacyPort: 9877,
+      source: 'netstat',
+      scanOk: true,
+      workerPids: [
+        { pid: 32416, port: 9879 },
+        { pid: 32417, port: 9880 },
+        { pid: 32418, port: 9881 },
+      ],
+      addonConnected: false,
+      fixture: null,
+    })
+    const port = (pid: number) => evidence.local_processes.find((p) => p.pid === pid)?.port
+    expect(port(32416)).toBe(9879)
+    expect(port(32417)).toBe(9880)
+    expect(port(32418)).toBe(9881)
+  })
+
   it('uses the visible-window blender as addon and keeps hidden instances as other', () => {
     const evidence = classifyLocals({
       listeners: [{ port: 9879, pid: 32416, address: 'b', process: 'blender.exe', decoy: false }],

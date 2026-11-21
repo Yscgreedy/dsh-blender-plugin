@@ -1,6 +1,6 @@
 import { touchAgent } from './presence.js'
 import type { CallerIdentity, InstanceRef, SessionRecord, SessionResult } from './types.js'
-import { fail, ownerMatches, ownerOf } from './types.js'
+import { fail, inOwnerFamily, ownerMatches, ownerOf, ownerStale, sameHost } from './types.js'
 
 /**
  * Take ownership of a session that has none, or refresh the heartbeat when the
@@ -10,8 +10,14 @@ import { fail, ownerMatches, ownerOf } from './types.js'
  * only a process kill could clear.
  */
 export function claimFreeSession(session: SessionRecord, c: CallerIdentity): void {
-  if (!session.owner) session.owner = ownerOf(c)
-  else session.owner.heartbeatAt = Date.now()
+  if (!session.owner) {
+    // A subagent never becomes the owner. The host may omit the parent header,
+    // but role=subagent is enough: it can attach as a viewer and write only
+    // through a grant. Only a main agent claims an unowned session.
+    if (c.role !== 'subagent') session.owner = ownerOf(c)
+  } else {
+    session.owner.heartbeatAt = Date.now()
+  }
   touchAgent(session, c)
 }
 
@@ -33,7 +39,7 @@ export function claimExisting(
   session: SessionRecord,
   c: CallerIdentity,
   live: AttachLiveness = { instanceReady: true, readyInstances: 1 },
-): SessionResult<{ session: SessionRecord }> {
+): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
   if (!live.instanceReady) {
     // Do not revive a dead record: report the disconnect instead of ok/ready.
     // Ownership/agents stay so status can still answer "your Blender went away"
@@ -61,13 +67,42 @@ export function claimExisting(
     )
   }
   if (session.owner && !ownerMatches(session.owner, c)) {
-    return fail(
-      'session_in_use',
-      'session',
-      'another DSH session owns this GUI session',
-      'wait for the owner to release it, or attach another Blender instance',
-      { sessionId: session.id, owner: session.owner },
-    )
+    // A dead subagent owner is not a wall: its heartbeat has stopped, so the next
+    // caller (or the same-host main agent) may claim the GUI again (field 反馈 2).
+    if (!ownerStale(session.owner)) {
+      // Field retest: role/parent headers are unreliable; any same-host non-owner may
+      // attach as a read-only viewer. Writes still need a covering grant.
+      if (inOwnerFamily(session.owner, c) || sameHost(session.owner, c)) {
+        // Subagent of the owner: attach as a viewer. Presence becomes visible to
+        // the main agent, but ownership never moves (writes still need a grant).
+        touchAgent(session, c)
+        session.status = 'ready'
+        return { ok: true, session, viewer: true }
+      }
+      return fail(
+        'session_in_use',
+        'session',
+        'another DSH session owns this GUI session',
+        'reads are allowed on the same host (blender_see / audit_* return owner + is_mine=false); ' +
+          'writes need blender_session action=grant from the owner, or the owner releases it',
+        {
+          sessionId: session.id,
+          owner: session.owner,
+          caller: {
+            hostId: c.hostId,
+            dshSessionId: c.dshSessionId,
+            agentId: c.agentId,
+            parentAgentId: c.parentAgentId || null,
+            role: c.role || 'subagent',
+          },
+          owner_agent: String(session.owner.agentId || ''),
+          callers_agent: String(c.agentId || ''),
+          is_mine: false,
+          fix_kind: 'grant_or_release',
+        },
+      )
+    }
+    session.owner = null
   }
   claimFreeSession(session, c)
   session.status = 'ready'
@@ -117,7 +152,8 @@ export function createSession(instance: InstanceRef, c: CallerIdentity): Session
     kind: 'user-gui',
     instanceId: instance.instanceId,
     status: 'ready',
-    owner: ownerOf(c),
+    // A subagent may be the first caller, but it never owns the GUI session.
+    owner: c.role === 'subagent' ? null : ownerOf(c),
     agents: new Map(),
     grants: new Map(),
     paused: false,

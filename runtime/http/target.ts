@@ -13,8 +13,14 @@ export function callerInstanceId(caller: CallerIdentity | null): string | null {
   if (!caller) return null
   const registry = sessionRegistry()
   const found = registry ? registry.findForCaller(caller) : null
-  const id = found && found.instanceId ? String(found.instanceId) : ''
-  return id || null
+  const own = found && found.instanceId ? String(found.instanceId) : ''
+  if (own) return own
+  // 反馈 1/3: a subagent (or another DSH session on this host) has no owned
+  // session, but read-only see/op calls still need a target. Routing to the one
+  // readable session lets the receipt carry owner/is_mine instead of guessing
+  // from whatever addon happens to be connected; writes stay gated.
+  const readable = registry ? registry.readableInstanceFor(caller) : null
+  return readable || null
 }
 
 /**

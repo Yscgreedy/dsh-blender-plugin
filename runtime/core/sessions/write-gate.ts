@@ -1,6 +1,6 @@
 import type { CallerIdentity, GrantRecord, SessionRecord, SessionResult } from './types.js'
-import { callerKey, fail } from './types.js'
-import { anyOverlap, parseScopes, scopesCover } from './scopes.js'
+import { callerKey, callerMatchesHolder, fail } from './types.js'
+import { parseScopes, scopesCover } from './scopes.js'
 import { conflictingHumanEdits } from './human-edits.js'
 import type { ScopeSpec } from './scopes.js'
 
@@ -52,35 +52,27 @@ export function evaluateWriteGate(
     )
   }
   const writes = parseScopes(scopes)
-  if (opts.py && !writes.some((s) => s.kind === 'exclusive')) {
-    return fail(
-      'invalid_params',
-      'session',
-      'blender_py requires an exclusive scope',
-      'declare exclusive for Python execution',
-      {},
-    )
-  }
+  // 反馈 1: a subagent with collection:_probe_x must be able to run Python there.
+  // Python has no static scope, so the declared scope is the contract; the act
+  // receipt reports the objects it actually changed and the Gateway flags any
+  // write outside the declaration (scope_violation).
   return { ok: true, effective: writes.length ? writes : [{ kind: 'exclusive' }] }
 }
 
-/** Main-agent writes are implicit, but must not overlap a live grant held by someone else. */
+/**
+ * The owner/granter is never blocked by its own grants.
+ *
+ * Field retest: issuing `collection:_probe_grant` to a subagent then writing that
+ * same collection as the owner returned scope_conflict — the granter locked itself
+ * out. A grant authorizes its holder; it does not fence the owner. Scope conflicts
+ * remain meaningful between two non-owner agents (grant issuance still refuses
+ * overlapping holders), but the main agent always writes.
+ */
 export function authorizeMainWrite(
-  session: SessionRecord,
-  c: CallerIdentity,
-  effective: ScopeSpec[],
+  _session: SessionRecord,
+  _c: CallerIdentity,
+  _effective: ScopeSpec[],
 ): SessionResult<{ mode: 'main' }> {
-  for (const g of session.grants.values()) {
-    if (callerKey(g.holder) === callerKey(c)) continue
-    if (!anyOverlap(g.scopes, effective)) continue
-    return fail(
-      'scope_conflict',
-      'session',
-      'the write overlaps a live grant held by another agent',
-      'revoke the grant or wait for it to expire, then retry',
-      { grant: g, requested: effective },
-    )
-  }
   return { ok: true, mode: 'main' }
 }
 
@@ -90,7 +82,7 @@ export function coveringGrant(
   effective: ScopeSpec[],
 ): GrantRecord | null {
   for (const g of session.grants.values()) {
-    if (callerKey(g.holder) !== callerKey(c)) continue
+    if (!callerMatchesHolder(g.holder, c)) continue
     if (scopesCover(g.scopes, effective)) return g
   }
   return null

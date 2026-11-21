@@ -10,10 +10,29 @@ import type { AvailabilityFailure } from '../availability.js'
 import type { ScopeSpec } from './scopes.js'
 import type { DisplayInstance, DisplayProvider } from '../../display/types.js'
 
-export const OWNER_TTL_MS = 120_000
+/**
+ * Main-agent ownership TTL. Field retest: a main agent that attaches and then
+ * waits ~10 minutes for a subagent lost ownership at 120 s — status showed
+ * owner=null while grants still said session_in_use. A main session may sit idle
+ * for a whole subagent round, so the TTL is 30 min; subagents keep their 30 s
+ * stale window, and a same-host main can always force-release a dead one.
+ */
+export const OWNER_TTL_MS = 1_800_000
 export const OWNER_HEARTBEAT_MS = 30_000
-export const GRANT_TTL_MS = 30_000
-export const GRANT_HEARTBEAT_MS = 10_000
+/**
+ * A subagent owner is reclaimed much faster than a main agent.
+ *
+ * field report 3.2.0-alpha.1（问题 2）: a subagent crashed mid-probe and its lease stayed
+ * on the GUI session; every later attach/release (even force=true) answered
+ * session_in_use until DSH was restarted. A subagent is short-lived and calls its
+ * tools continuously, so 30 s without a call is evidence it is gone. A main agent
+ * may legitimately sit idle for a whole subagent round, so it keeps 30 min.
+ */
+export const OWNER_STALE_SUBAGENT_MS = 30_000
+/** Default grant lifetime (10 min) and the hard cap a caller may request. */
+export const GRANT_TTL_MS = 600_000
+export const GRANT_HEARTBEAT_MS = 60_000
+export const GRANT_TTL_MAX_MS = 3_600_000
 export const PY_WAIT_MAX_MS = 5_000
 
 export type SessionKind = 'user-gui' | 'virtual-gui'
@@ -88,6 +107,9 @@ export interface Owner {
   agentId: string
   claimedAt: number
   heartbeatAt: number
+  /** Who claimed it: a subagent owner is reclaimed after 30 s without a call. */
+  role?: 'main' | 'subagent'
+  parentAgentId?: string
 }
 
 export interface SessionRecord {
@@ -135,6 +157,21 @@ export function callerKey(c: CallerIdentity): string {
   return [c.hostId, c.dshSessionId, c.agentId].map((x) => String(x || '')).join('|')
 }
 
+/**
+ * A grant holder may have been recorded with the parent's dshSessionId when the
+ * grant named only target_agent_id (DSH gives the subagent its own session id).
+ * Host + agentId is the stable identity for that case; an exact callerKey still
+ * wins for every other caller.
+ */
+export function callerMatchesHolder(holder: CallerIdentity, c: CallerIdentity): boolean {
+  if (callerKey(holder) === callerKey(c)) return true
+  return (
+    String(holder.hostId || '') === String(c.hostId || '') &&
+    !!holder.agentId &&
+    String(holder.agentId) === String(c.agentId || '')
+  )
+}
+
 export function ownerOf(c: CallerIdentity): Owner {
   return {
     hostId: String(c.hostId || ''),
@@ -142,11 +179,50 @@ export function ownerOf(c: CallerIdentity): Owner {
     agentId: String(c.agentId || ''),
     claimedAt: Date.now(),
     heartbeatAt: Date.now(),
+    role: c.role === 'main' ? 'main' : 'subagent',
+    ...(c.parentAgentId ? { parentAgentId: c.parentAgentId } : {}),
   }
 }
 
 export function ownerMatches(owner: Owner | null, c: CallerIdentity): boolean {
   return !!owner && owner.hostId === c.hostId && owner.dshSessionId === c.dshSessionId
+}
+
+/** Same machine + same DSH session is the strict match (the main agent and its direct agents). */
+export function sameHost(owner: Owner | null, c: CallerIdentity): boolean {
+  return !!owner && String(owner.hostId || '') === String(c.hostId || '')
+}
+
+/**
+ * Family = the owner's own DSH session, or a subagent whose parent is that owner.
+ *
+ * DSH gives a subagent its own dshSessionId (field report 问题 1), so ownerMatches()
+ * alone locks every subagent out. The parent link is the honest evidence that this
+ * caller works for the same user in the same workspace; it grants read + viewer
+ * presence, never a write.
+ */
+export function inOwnerFamily(owner: Owner | null, c: CallerIdentity): boolean {
+  if (!owner || !sameHost(owner, c)) return false
+  if (ownerMatches(owner, c)) return true
+  // A main agent of another DSH session is not family, even on the same host.
+  if (c.role !== 'subagent') return false
+  if (c.parentAgentId) return String(c.parentAgentId) === String(owner.agentId || '')
+  return false
+}
+
+/** Reads are cross-visible on the same machine (attributed with owner/is_mine). */
+export function readableBy(owner: Owner | null, c: CallerIdentity): boolean {
+  return sameHost(owner, c)
+}
+
+export function ownerStaleMs(owner: Owner | null): number {
+  return owner && owner.role === 'subagent' ? OWNER_STALE_SUBAGENT_MS : OWNER_TTL_MS
+}
+
+/** True when the owner heartbeat is old enough to be considered gone. */
+export function ownerStale(owner: Owner | null, now = Date.now()): boolean {
+  if (!owner) return false
+  return now - Number(owner.heartbeatAt || 0) > ownerStaleMs(owner)
 }
 
 export function isMain(session: SessionRecord, c: CallerIdentity): boolean {
@@ -181,22 +257,64 @@ export function grantView(g: GrantRecord): Record<string, unknown> {
   }
 }
 
-export function sessionView(s: SessionRecord): Record<string, unknown> {
+/**
+ * 反馈 2（修正）: the complaint was not "no reclaim at all" but "15-20
+ * minutes with no visible contract". Age + threshold make the countdown mechanical.
+ */
+function ownerViewOf(s: SessionRecord): Record<string, unknown> | null {
+  if (!s.owner) return null
+  return {
+    hostId: s.owner.hostId,
+    dshSessionId: s.owner.dshSessionId,
+    agentId: s.owner.agentId,
+    parentAgentId: s.owner.parentAgentId || null,
+    role: s.owner.role || 'main',
+    claimedAt: s.owner.claimedAt,
+    heartbeatAt: s.owner.heartbeatAt,
+    heartbeat_age_ms: Math.max(0, Date.now() - Number(s.owner.heartbeatAt || 0)),
+    stale_after_ms: ownerStaleMs(s.owner),
+    stale: ownerStale(s.owner),
+    expiresInMs: Math.max(0, s.owner.heartbeatAt + ownerStaleMs(s.owner) - Date.now()),
+  }
+}
+
+export function sessionView(s: SessionRecord, caller?: CallerIdentity): Record<string, unknown> {
+  const ownerView = ownerViewOf(s)
+  const isMine = !!caller && (ownerMatches(s.owner, caller) || inOwnerFamily(s.owner, caller))
+  const hasGrant =
+    !!caller &&
+    !!s.owner &&
+    [...s.grants.values()].some((g) => callerMatchesHolder(g.holder, caller))
   return {
     id: s.id,
     kind: s.kind,
     instanceId: s.instanceId,
     status: s.status,
-    owner: s.owner
+    /** Ownership attribution: never let a caller mistake someone else's scene for its own. */
+    is_mine: caller ? isMine : null,
+    readable: caller ? readableBy(s.owner, caller) : null,
+    borrowed: caller ? readableBy(s.owner, caller) && !isMine : null,
+    read_only: caller ? readableBy(s.owner, caller) && !isMine : null,
+    has_grant: caller ? hasGrant : null,
+    owner: ownerView,
+    ...(!s.owner && s.agents.size
       ? {
-          hostId: s.owner.hostId,
-          dshSessionId: s.owner.dshSessionId,
-          agentId: s.owner.agentId,
-          claimedAt: s.owner.claimedAt,
-          heartbeatAt: s.owner.heartbeatAt,
-          expiresInMs: Math.max(0, s.owner.heartbeatAt + OWNER_TTL_MS - Date.now()),
+          owner_expired: true,
+          note: 'owner heartbeat expired: call blender_session action=attach to reclaim; grants keep their own TTL',
         }
-      : null,
+      : {}),
+    ...(s.owner && ownerStale(s.owner)
+      ? {
+          reclaim:
+            'owner heartbeat is stale (age ' +
+            String(Math.max(0, Date.now() - Number(s.owner.heartbeatAt || 0))) +
+            ' ms > ' +
+            String(ownerStaleMs(s.owner)) +
+            ' ms): a same-host main agent can call blender_session action=release session_id=' +
+            s.id +
+            ' force=true',
+        }
+      : {}),
     paused: s.paused,
     agents: [...s.agents.values()].map((a) => ({
       agent: callerView(a.caller),

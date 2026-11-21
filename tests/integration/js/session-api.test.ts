@@ -91,18 +91,28 @@ describe('Gateway session API', () => {
     expect(attach.json.code).toBe('session_ambiguity')
   })
 
-  it('rejects a second DSH session with session_in_use, then allows it after release', async () => {
+  it('attaches a second DSH session as a read-only viewer, then hands ownership over after release', async () => {
     const { backend } = await setup()
     expect((await backend.post('/lease', { action: 'attach' }, main)).status).toBe(200)
-    const denied = await backend.post('/lease', { action: 'attach' }, other)
-    expect(denied.status).toBe(409)
-    expect(denied.json.code).toBe('session_in_use')
+    const viewer = await backend.post('/lease', { action: 'attach' }, other)
+    expect(viewer.status).toBe(200)
+    expect(viewer.json.viewer).toBe(true)
+    expect((viewer.json.session as Record<string, unknown>).is_mine).toBe(false)
     const released = await backend.post('/release', {}, main)
     expect(released.status).toBe(200)
     expect(released.json.released).toBe(true)
     const allowed = await backend.post('/lease', { action: 'attach' }, other)
     expect(allowed.status).toBe(200)
     expect(allowed.json.session.owner.dshSessionId).toBe('dsh-2')
+  })
+
+  it('returns the caller identity for whoami (UUID discovery without a failed write)', async () => {
+    const { backend } = await setup()
+    const who = await backend.post('/lease', { action: 'whoami' }, sub)
+    expect(who.status).toBe(200)
+    expect(who.json.agentId).toBe('agent-sub')
+    expect(who.json.dshSessionId).toBe('dsh-1')
+    expect((who.json.caller as Record<string, unknown>).agentId).toBe('agent-sub')
   })
 
   it('lets two agents of one DSH session attach and separates grant scopes', async () => {

@@ -88,10 +88,15 @@ export function readyRow(
       (!named || String(s.instanceId || '') === named),
   )
   const wanted = kind ? ready.filter((s) => String(s.kind || '') === kind) : ready
+  // Own session first; a same-host session visible read-only (is_mine=false) is a
+  // fallback so blender_see / audit_* can answer with attribution instead of
+  // refusing with session_required (field 反馈 1/3).
+  const mine = wanted.filter((s) => s.is_mine === true)
+  const pool = mine.length ? mine : wanted
   return (
-    wanted.find((s) => String(s.kind || '') === 'user-gui') ??
-    wanted.find((s) => String(s.kind || '') === 'virtual-gui') ??
-    wanted[0] ??
+    pool.find((s) => String(s.kind || '') === 'user-gui') ??
+    pool.find((s) => String(s.kind || '') === 'virtual-gui') ??
+    pool[0] ??
     null
   )
 }

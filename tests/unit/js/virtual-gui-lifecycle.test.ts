@@ -16,7 +16,7 @@ import type { VirtualGuiLimits } from '../../../runtime/display/limits.js'
 
 const WIN_CHECKS = { 'win-hidden-desktop-helper': true, blender: true }
 const MAIN = { hostId: 'h', dshSessionId: 's', agentId: 'a', role: 'main' as const }
-const OTHER = { hostId: 'h2', dshSessionId: 's2', agentId: 'a2', role: 'main' as const }
+const OTHER = { hostId: 'h', dshSessionId: 's2', agentId: 'a2', role: 'main' as const }
 
 function readyCap() {
   return buildDisplayCapabilities({
@@ -178,7 +178,7 @@ describe('virtual-gui lifecycle', () => {
     expect(again).toEqual({ ok: true, stopped: false })
   })
 
-  it('refuses an attach from another DSH session on a virtual instance', async () => {
+  it('attaches another DSH session as a read-only viewer on a virtual instance', async () => {
     const { provider } = fakeProvider()
     const instances = [{ instanceId: '', ready: true }]
     const reg = makeRegistry({ provider, instances })
@@ -186,9 +186,10 @@ describe('virtual-gui lifecycle', () => {
     if (!result.ok) throw new Error('start failed')
     instances[0].instanceId = String(result.session.instanceId)
     const other = reg.attach(OTHER)
-    expect(other.ok).toBe(false)
-    if (other.ok) return
-    expect(other.code).toBe('session_in_use')
+    expect(other.ok).toBe(true)
+    if (!other.ok) return
+    expect(other.viewer).toBe(true)
+    expect(other.session.is_mine).toBe(false)
     const owner = reg.attach(MAIN)
     expect(owner.ok).toBe(true)
     if (!owner.ok) return

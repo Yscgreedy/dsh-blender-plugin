@@ -8,12 +8,16 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import type { CallerIdentity, SessionRecord, SessionResult } from './types.js'
 import { PY_WAIT_MAX_MS, callerKey, callerView, fail } from './types.js'
 
-export type AuthorizeAttempt = () => SessionResult<{ sessionId: string }>
+export type AuthorizeAttempt = () => SessionResult<{
+  sessionId: string
+  mode?: 'main' | 'grant'
+  grantId?: string
+}>
 
 export async function waitForPyLock(
   attempt: AuthorizeAttempt,
   waitMs: number,
-): Promise<SessionResult<{ sessionId: string }>> {
+): Promise<SessionResult<{ sessionId: string; mode?: 'main' | 'grant'; grantId?: string }>> {
   const requested = Number(waitMs)
   const budget =
     Number.isFinite(requested) && requested > 0 ? Math.min(PY_WAIT_MAX_MS, requested) : 0

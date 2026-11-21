@@ -337,8 +337,8 @@ export interface FixtureDoc {
 export interface LocalsInput {
   listeners: ListenerRow[]
   processes: ProcInput[]
-  /** worker 注册表里活着的 pid（比"谁在 9879 上听"可靠）。 */
-  workerPids?: number[]
+  /** worker 注册表里活着的 pid + 它实际监听的端口（比"谁在 9879 上听"可靠）。 */
+  workerPids?: Array<number | { pid?: number; port?: number }>
   /** 当前是否有 ready 的 GUI addon（用来把唯一的 blender 进程认成 addon）。 */
   addonConnected?: boolean
   /** 有可见主窗口的 blender pid（Windows；用于把用户 GUI 与隐藏实例区分开）。 */
@@ -537,16 +537,28 @@ function buildProcessRows(
   gatewayPid: number,
   gatewayPort: number,
   workerPort: number,
-  workerPidsArg: number[] = [],
+  workerPidsArg: Array<number | { pid?: number; port?: number }> = [],
   addonConnected = false,
   guiPids: number[] = [],
 ): ProcessRow[] {
-  const workerPids = new Set([
-    ...workerPidsArg.filter((pid) => Number.isInteger(pid) && pid > 0),
-    ...listeners
-      .filter((r) => r.port === workerPort && isBlenderName(r.process || ''))
-      .map((r) => r.pid),
-  ])
+  // 反馈 7: each worker listens on its own port (9879, 9880, 9881…). Reporting the
+  // default port for all of them made five processes look like five copies of 9879.
+  const portByPid = new Map<number, number>()
+  const workerPids = new Set<number>()
+  for (const item of workerPidsArg) {
+    if (typeof item === 'number') {
+      if (Number.isInteger(item) && item > 0) workerPids.add(item)
+      continue
+    }
+    const pid = Number(item && item.pid)
+    if (!Number.isInteger(pid) || pid <= 0) continue
+    workerPids.add(pid)
+    const port = Number(item && item.port)
+    if (Number.isInteger(port) && port > 0) portByPid.set(pid, port)
+  }
+  for (const r of listeners) {
+    if (r.port === workerPort && isBlenderName(r.process || '')) workerPids.add(r.pid)
+  }
   // 唯一未认领的 blender 才算 addon；worker 注册表 pid 永远先认成 worker。
   const addonPids = addonPidsOf(inputs, gatewayPid, workerPids, addonConnected, guiPids)
   const rows: ProcessRow[] = inputs.map((p) => {
@@ -554,7 +566,12 @@ function buildProcessRows(
     return {
       ...p,
       role,
-      port: role === 'gateway' ? gatewayPort : role === 'worker' ? workerPort : null,
+      port:
+        role === 'gateway'
+          ? gatewayPort
+          : role === 'worker'
+            ? (portByPid.get(p.pid) ?? workerPort)
+            : null,
     }
   })
   for (const row of listeners) {
@@ -698,8 +715,8 @@ export interface CollectOptions {
   gatewayPid?: number
   probeFixture?: string | null
   timeoutMs?: number
-  /** worker 注册表里活着的 pid（route 从 engine.worker.list() 传入）。 */
-  workerPids?: number[]
+  /** worker 注册表里活着的 pid + 端口（route 从 engine.worker.list() 传入）。 */
+  workerPids?: Array<number | { pid?: number; port?: number }>
   /** 当前是否有 ready 的 GUI addon。 */
   addonConnected?: boolean
   /** 有可见主窗口的 blender pid（测试注入；省略时 Windows 自动扫）。 */

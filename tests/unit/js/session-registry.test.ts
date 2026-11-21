@@ -58,15 +58,19 @@ describe('3.1 GUI session registry', () => {
     expect(r.stage).toBe('session')
   })
 
-  it('reports session_in_use to a second DSH session without exposing the scene', () => {
+  it('attaches a second DSH session as a read-only viewer and refuses its writes', () => {
     const { registry } = setup()
     expect(registry.attach(main()).ok).toBe(true)
     const r = registry.attach(otherSession())
-    expect(r.ok).toBe(false)
-    if (r.ok) return
-    expect(r.code).toBe('session_in_use')
-    expect(r.stage).toBe('session')
-    expect((r.evidence.owner as Record<string, unknown>).dshSessionId).toBe('dsh-1')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.viewer).toBe(true)
+    expect((r.session.owner as Record<string, unknown>).dshSessionId).toBe('dsh-1')
+    expect(r.session.is_mine).toBe(false)
+    const write = registry.authorizeWrite(otherSession(), String(r.session.id), ['exclusive'])
+    expect(write.ok).toBe(false)
+    if (write.ok) return
+    expect(write.code).toBe('session_in_use')
   })
 
   it('lets the owner release and the next DSH session claim', () => {
@@ -127,7 +131,7 @@ describe('3.1 GUI session registry', () => {
     expect(r.stage).toBe('session')
   })
 
-  it('lets the main agent write without an explicit grant but conflicts with a live grant', () => {
+  it('never lets a live grant block its owner/granter', () => {
     const { registry } = setup()
     const attached = registry.attach(main())
     expect(attached.ok).toBe(true)
@@ -135,10 +139,12 @@ describe('3.1 GUI session registry', () => {
     const sessionId = String(attached.session.id)
     expect(registry.attach(sub()).ok).toBe(true)
     expect(registry.grant(main(), sessionId, ['collection:COL_A'], sub()).ok).toBe(true)
-    const blocked = registry.authorizeWrite(main(), sessionId, ['collection:COL_A'])
-    expect(blocked.ok).toBe(false)
-    if (blocked.ok) return
-    expect(blocked.code).toBe('scope_conflict')
+    // The grant authorizes the holder; it does not fence the owner out of its own
+    // collection (field retest: the granter got scope_conflict on write).
+    const own = registry.authorizeWrite(main(), sessionId, ['collection:COL_A'])
+    expect(own.ok).toBe(true)
+    if (!own.ok) return
+    expect(own.mode).toBe('main')
     const other = registry.authorizeWrite(main(), sessionId, ['collection:COL_B'])
     expect(other.ok).toBe(true)
   })
@@ -211,7 +217,7 @@ describe('3.1 GUI session registry', () => {
     expect(r.sessionId).toBe(sessionId)
   })
 
-  it('does not expire the active py grant or lock by the 30s TTL', async () => {
+  it('keeps the active py lock past the 30s grant TTL and lets the owner write', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-11-08T00:00:00Z'))
     const { registry } = setup()
@@ -220,13 +226,11 @@ describe('3.1 GUI session registry', () => {
     if (!attached.ok) return
     const sessionId = String(attached.session.id)
     expect(registry.attach(sub()).ok).toBe(true)
-    expect(registry.grant(main(), sessionId, ['exclusive'], sub()).ok).toBe(true)
+    expect(registry.grant(main(), sessionId, ['exclusive'], sub(), 30_000).ok).toBe(true)
     expect((await registry.beginPy(sub(), sessionId)).ok).toBe(true)
     vi.advanceTimersByTime(31_000)
-    const blocked = registry.authorizeWrite(main(), sessionId, ['exclusive'])
-    expect(blocked.ok).toBe(false)
-    if (blocked.ok) return
-    expect(blocked.code).toBe('scope_conflict')
+    // The owner is never fenced by a grant it issued itself.
+    expect(registry.authorizeWrite(main(), sessionId, ['exclusive']).ok).toBe(true)
     const timeout = registry.timeoutPy(sub(), sessionId)
     expect(timeout.ok).toBe(false)
     if (timeout.ok) return
@@ -242,18 +246,22 @@ describe('3.1 GUI session registry', () => {
     expect(registry.attach(main()).ok).toBe(true)
     expect(registry.attach(sub()).ok).toBe(true)
     expect(registry.detach(sub()).ok).toBe(true)
-    expect(registry.attach(otherSession()).ok).toBe(false)
+    const viewer = registry.attach(otherSession())
+    expect(viewer.ok).toBe(true)
+    if (!viewer.ok) return
+    expect(viewer.viewer).toBe(true)
+    expect((viewer.session.owner as Record<string, unknown>).dshSessionId).toBe('dsh-1')
     const released = registry.detach(main())
     expect(released.ok).toBe(true)
     expect(registry.attach(otherSession()).ok).toBe(true)
   })
 
-  it('reclaims stale ownership after the 120s TTL', () => {
+  it('reclaims stale main ownership after the 30 min TTL', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-11-08T00:00:00Z'))
     const { registry } = setup()
     expect(registry.attach(main()).ok).toBe(true)
-    vi.advanceTimersByTime(121_000)
+    vi.advanceTimersByTime(1_800_001)
     const r = registry.attach(otherSession())
     expect(r.ok).toBe(true)
   })
@@ -266,7 +274,11 @@ describe('3.1 GUI session registry', () => {
     vi.advanceTimersByTime(60_000)
     expect(registry.heartbeat(main()).ok).toBe(true)
     vi.advanceTimersByTime(90_000)
-    expect(registry.attach(otherSession()).ok).toBe(false)
+    const viewer = registry.attach(otherSession())
+    expect(viewer.ok).toBe(true)
+    if (!viewer.ok) return
+    expect(viewer.viewer).toBe(true)
+    expect((viewer.session.owner as Record<string, unknown>).dshSessionId).toBe('dsh-1')
   })
 
   it('records presence and view poses without touching the scene', () => {
@@ -312,5 +324,45 @@ describe('3.1 GUI session registry', () => {
     expect(doctor.ok).toBe(true)
     if (!doctor.ok) return
     expect(doctor.readiness.ready).toBe(false)
+  })
+
+  it('releases a session whose owner heartbeat expired while this agent is still attached', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-08T00:00:00Z'))
+    const { registry } = setup()
+    expect(registry.attach(main()).ok).toBe(true)
+    vi.advanceTimersByTime(1_800_001)
+    // prune 只清 owner，agents 仍在：这正是现场 release 回 released:false、status 仍 ready 的状态。
+    const status = registry.status(main())
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.session.owner).toBeNull()
+    expect((status.session.agents as unknown[]).length).toBe(1)
+    const released = registry.release(main())
+    expect(released.ok).toBe(true)
+    if (!released.ok) return
+    expect(released.released).toBe(true)
+    expect(released.reason).toBe('owner_expired')
+    expect(registry.attach(otherSession()).ok).toBe(true)
+  })
+
+  it('never reports released without releasing: unknown session or unowned outsider is a failure', () => {
+    const { registry } = setup()
+    const missing = registry.release(main(), 'user-gui:does-not-exist')
+    expect(missing.ok).toBe(false)
+    if (missing.ok) return
+    expect(missing.code).toBe('session_not_found')
+    expect((missing.evidence as Record<string, unknown>).released).toBe(false)
+
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-08T00:00:00Z'))
+    const second = setup()
+    expect(second.registry.attach(main()).ok).toBe(true)
+    vi.advanceTimersByTime(1_800_001)
+    const outsider = second.registry.release(otherSession())
+    expect(outsider.ok).toBe(false)
+    if (outsider.ok) return
+    expect(outsider.code).toBe('session_unowned')
+    expect((outsider.evidence as Record<string, unknown>).reason).toBe('owner_expired')
   })
 })

@@ -3,7 +3,7 @@
  * 这条测试锁的是回执原文（旧文案"在 Blender N 面板点 Connect"已判错）。
  */
 import { describe, expect, it } from 'vitest'
-import { formatSessionList } from '../../../src/tools/session/presenter.js'
+import { formatSessionList, formatSessionResult } from '../../../src/tools/session/presenter.js'
 
 const addon = {
   connected: true,
@@ -144,5 +144,24 @@ describe('工单 6 session list copy', () => {
     expect(text).toContain('scanned_at=2026-11-19T13:50:21.417Z')
     expect(text).toContain('gateway=39877 listening pid=7504 matched=true')
     expect(text).toContain('false_positives · []')
+  })
+
+  it('names viewer / is_mine / borrowed in the attach receipt', () => {
+    const text = formatSessionResult('attach', {
+      ok: true,
+      viewer: true,
+      session: {
+        id: 'user-gui:inst-1',
+        kind: 'user-gui',
+        status: 'ready',
+        instanceId: 'inst-1',
+        owner: { agentId: 'session-b6c62cb2' },
+        is_mine: false,
+        borrowed: true,
+      },
+    })
+    expect(text).toContain('viewer=true')
+    expect(text).toContain('is_mine=false')
+    expect(text).toContain('borrowed=true')
   })
 })

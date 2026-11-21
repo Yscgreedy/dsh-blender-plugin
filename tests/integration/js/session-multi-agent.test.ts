@@ -99,8 +99,67 @@ describe('multi-agent session and GUI instance isolation', () => {
     )
     expect(offline.status === 200 ? offline.json.ok === false : true).toBe(true)
     const otherWho = await backend.get('/who', other)
-    const otherSessions = otherWho.json.sessions as Array<{ id: string }>
-    expect(otherSessions.some((session) => session.id === firstSession)).toBe(false)
+    const otherSessions = otherWho.json.sessions as Array<{
+      id: string
+      is_mine?: boolean
+      borrowed?: boolean
+    }>
+    // 反馈 1/3: same-host sessions are visible read-only with attribution, but a
+    // foreign write is still refused (isolation now lives in the write gate).
+    const visible = otherSessions.find((session) => session.id === firstSession)
+    expect(visible).toBeTruthy()
+    expect(visible?.is_mine).toBe(false)
+    expect(visible?.borrowed).toBe(true)
+    const denied = await backend.post('/act', { code: 'print(1)', sessionId: firstSession }, other)
+    expect(denied.status).toBe(409)
+    expect(denied.json.code).toBe('session_in_use')
+  })
+
+  it('4.19 lets a same-host subagent without a parent header be a viewer and use a grant', async () => {
+    const { backend } = await setup()
+    const owner = headers('dsh-owner', 'session-b6c62cb2', 'main')
+    // Worst case: the host labels the child as main and omits the parent header.
+    // Same-host callers still get a read-only viewer; writes need the grant.
+    const child = headers('dsh-child', 'verify-agent-2', 'main')
+    const attached = await backend.post('/lease', { action: 'attach' }, owner)
+    expect(attached.status).toBe(200)
+    const sessionId = String(attached.json.session.id)
+
+    const granted = await backend.post(
+      '/lease',
+      {
+        action: 'grant',
+        sessionId,
+        scopes: ['collection:_probe_grant'],
+        targetAgentId: 'verify-agent-2',
+        ttlMs: 600000,
+      },
+      owner,
+    )
+    expect(granted.status).toBe(200)
+    const grant = granted.json.grant as Record<string, unknown>
+    expect(Number(grant.expiresInMs)).toBeGreaterThan(590_000)
+    expect((grant.holder as Record<string, unknown>).parentAgentId).toBe('session-b6c62cb2')
+
+    const viewer = await backend.post('/lease', { action: 'attach' }, child)
+    expect(viewer.status).toBe(200)
+    expect(viewer.json.viewer).toBe(true)
+    expect((viewer.json.session as Record<string, unknown>).is_mine).toBe(false)
+
+    const inside = await backend.post(
+      '/act',
+      { code: 'print(1)', sessionId, write_scope: ['collection:_probe_grant'] },
+      child,
+    )
+    expect(inside.status).toBe(200)
+    const outside = await backend.post(
+      '/act',
+      { code: 'print(1)', sessionId, write_scope: ['collection:_other'] },
+      child,
+    )
+    expect(outside.status).toBe(409)
+    expect(outside.json.code).toBe('session_in_use')
+    expect(String(JSON.stringify(outside.json.evidence))).toContain('verify-agent-2')
   })
 
   it('4.18 lets two agents share one user-gui session without sharing scopes', async () => {
@@ -159,9 +218,10 @@ describe('multi-agent session and GUI instance isolation', () => {
     expect(conflict.status).toBe(409)
     expect(conflict.json.code).toBe('scope_conflict')
 
-    const denied = await backend.post('/lease', { action: 'attach' }, other)
-    expect(denied.status).toBe(409)
-    expect(denied.json.code).toBe('session_in_use')
+    const viewer = await backend.post('/lease', { action: 'attach' }, other)
+    expect(viewer.status).toBe(200)
+    expect(viewer.json.viewer).toBe(true)
+    expect(viewer.json.session.is_mine).toBe(false)
     expect((await backend.post('/release', {}, main)).status).toBe(200)
     const claimed = await backend.post('/lease', { action: 'attach' }, other)
     expect(claimed.status).toBe(200)

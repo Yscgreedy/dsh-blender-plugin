@@ -112,7 +112,10 @@ function truthy(v: string | null | undefined): boolean {
 function evidenceFor(
   url: URL | undefined,
   gatewayPort: number,
-  extra: { workerPids?: number[]; addonConnected?: boolean } = {},
+  extra: {
+    workerPids?: Array<number | { pid?: number; port?: number }>
+    addonConnected?: boolean
+  } = {},
 ): Record<string, unknown> | null {
   const q = url?.searchParams
   if (!q) return null
@@ -127,16 +130,23 @@ function evidenceFor(
   return collectLocalEvidence({ gatewayPort, ...extra }) as unknown as Record<string, unknown>
 }
 
-/** worker 注册表里活着的 pid（工单 6d：worker 进程必须标 worker，不能按映像名标 addon）。 */
+/**
+ * worker 注册表里活着的 pid + 真实端口（工单 6d）。
+ * 反馈 7: reporting only pids made every worker inherit the default port 9879.
+ */
 function workerPidsOf(engine: {
   worker?: { list?: () => Array<Record<string, unknown>> }
-}): number[] {
+}): Array<{ pid: number; port?: number }> {
   try {
     const rows = engine.worker?.list?.() || []
     return rows
       .filter((w) => w.alive === true)
-      .map((w) => Number(w.pid))
-      .filter((pid) => Number.isInteger(pid) && pid > 0)
+      .map((w) => {
+        const pid = Number(w.pid)
+        const port = Number(w.port)
+        return Number.isInteger(port) && port > 0 ? { pid, port } : { pid }
+      })
+      .filter((row) => Number.isInteger(row.pid) && row.pid > 0)
   } catch {
     return []
   }
@@ -238,15 +248,25 @@ async function doctorRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
   const { PORT, describeConfig, engine, json, stats } = E
   try {
     const opts = doctorOptions(url)
-    const d = objArg(await engine.doctor(opts))
     const attach = attachView(E.addon ?? engine.addon)
-    // 工单 6：no-addon 态也必须给端口证据 —— 证据在路由层合并，engine 不必知道扫描。
-    d.local_evidence = collectLocalEvidence({
-      gatewayPort: PORT,
-      probeFixture: typeof opts.probeFixture === 'string' ? opts.probeFixture : null,
-      workerPids: workerPidsOf(engine),
-      addonConnected: attach.connected === true,
+    // The addon probe waits on a socket (up to its own budget); run the local
+    // process/port scan while that wait is in flight instead of after it, so a
+    // half-open addon does not pay both budgets back to back (doctor-bounded).
+    const evidencePromise = new Promise<Record<string, unknown>>((resolve) => {
+      setImmediate(() => {
+        resolve(
+          collectLocalEvidence({
+            gatewayPort: PORT,
+            probeFixture: typeof opts.probeFixture === 'string' ? opts.probeFixture : null,
+            workerPids: workerPidsOf(engine),
+            addonConnected: attach.connected === true,
+          }) as unknown as Record<string, unknown>,
+        )
+      })
     })
+    const d = objArg(await engine.doctor(opts))
+    // 工单 6：no-addon 态也必须给端口证据 —— 证据在路由层合并，engine 不必知道扫描。
+    d.local_evidence = await evidencePromise
     const evidence = objArg(d.local_evidence)
     evidence.sessions = sessionBriefs(E)
     // verdict 判的是"现场证据是否完整可信"（ok 判 addon 通道，两件事分开）。

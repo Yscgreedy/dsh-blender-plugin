@@ -9,6 +9,7 @@ import { currentCaller } from '../../caller.js'
 import type { AvailabilityFailure } from '../../../core/availability.js'
 import type { SessionRegistry } from '../../../core/sessions/registry.js'
 import type { CallerIdentity, SessionResult, ViewPose } from '../../../core/sessions/types.js'
+import { callerView } from '../../../core/sessions/types.js'
 import {
   approveConsentRequest,
   consentApproveCommand,
@@ -190,6 +191,8 @@ async function runSessionAction(
           evidence: { action },
         }
       return (await control.shutdown(payload)) as unknown as SessionResult<Record<string, unknown>>
+    case 'whoami':
+      return { ok: true, caller: callerView(caller), ...callerView(caller) }
     case 'list':
       return { ok: true, sessions: registry.listFor(caller) }
     case 'attach':
@@ -201,7 +204,9 @@ async function runSessionAction(
     case 'detach':
       return registry.detach(caller, sessionId)
     case 'release':
-      return registry.release(caller, sessionId)
+      return registry.release(caller, sessionId, {
+        force: payload.force === true || payload.force === 'true',
+      })
     case 'status':
       return registry.status(caller, sessionId)
     case 'doctor':
@@ -222,6 +227,7 @@ async function runSessionAction(
         payload.scopes === undefined ? payload.scope : payload.scopes,
         targetCaller(payload, caller),
         Number(payload.ttlMs),
+        payload.force === true || payload.force === 'true',
       )
     case 'revoke':
       return registry.revoke(
@@ -264,7 +270,7 @@ async function runSessionAction(
         code: 'invalid_params',
         stage: 'config',
         root_cause: 'unknown session action: ' + action,
-        fix: 'use list, attach, claim, detach, release, status, doctor, consent, consent_request, consent_status, consent_approve, consent_deny, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
+        fix: 'use whoami, list, attach, claim, detach, release, status, doctor, consent, consent_request, consent_status, consent_approve, consent_deny, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
         fallback: { kind: 'unavailable', summary: 'the session action was not executed' },
         evidence: { action },
       }
