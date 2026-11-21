@@ -19,6 +19,7 @@ const LEGACY_PORT = '9877'
 const LEGACY_PORT_RE = new RegExp('(?<!\\d)' + LEGACY_PORT + '(?!\\d)')
 const SKIP_DIRS = new Set([
   '.git',
+  '.agents',
   '.dsh',
   '.dsh-ops',
   '.review-tmp',

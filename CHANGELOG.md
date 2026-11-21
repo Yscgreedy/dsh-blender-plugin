@@ -2,6 +2,153 @@
 
 ## Unreleased
 
+## v3.3.0（2026-11-21）
+
+### 2026-11-21 发布收口：3.3.0 · 行预算拆分 · 口径统一
+
+- **版本**：3.2.0-alpha.1 → **3.3.0**（`package.json` / `PLUGIN_VERSION` / release workflow 默认值 /
+  全部安装与口径文档 / `BEHAVIOR_MATRIX` / 发布契约测试）。历史条目里的 3.2.0-alpha.1 保留原样
+  （现场复测记录与旧 CHANGELOG 段落是事实记录）。
+- **文件行预算**：把超出 600 行的四个文件按职责拆开，行为不变：`runtime/paths.ts` 682 → 约 250 行
+  （内嵌 Python 前导移到 `runtime/embedded/{gpu-prelude,path-helpers,act-wrapper}.ts`，`paths.ts` 继续
+  原样再导出，消费者与测试 mock 不变）；`runtime/core/queue/spawn-executor.ts` 668 → 约 275 行
+  （参数拼装 / 路径预检 / `//` 解析移到 `queue/job-args.ts`）；`src/tools/run/worker.ts` 628 → 约 400 行
+  （digest / exec 回执移到 `run/worker-digest.ts`）；`src/tools/session/presenter.ts` 610 → 约 490 行
+  （本地进程 / 端口证据段移到 `session/evidence-presenter.ts`）。
+- **行预算门禁修正**：`check-structure` 的 runtime/py 分支此前**不读** `config/exceptions.json` 的
+  `file-budget` 例外（只有 TS/addon 分支读），Python 超 1000 行无处登记。现在两个预算读同一份登记表；
+  `runtime/py/core/worker.py`（1428 行，`blender -b --python` 单文件启动契约）与
+  `runtime/py/render/view.py`（1187 行，按单份源码字符串注入）各登记一条例外，拆分段落在 2027-06-30 前复核。
+- **函数预算**：新入带的 `_hash_node_tree`（81 行，GN / 材质 / 合成器节点树摘要）登记为
+  `linear-pipeline`；`buildJobArgs`（115 行）的归属改到 `runtime/core/queue/job-args.ts`。
+- **parity 门禁补齐**：`check:parity` 的 base 注入补登记 anim（3 op）/ toon（2 op）两个新族，以及三个只读审计
+  op（`anim_rig_report` / `anim_deform_audit` / `toon_outline_audit`）。此前 HEAD 上 `npm run test:parity`
+  就是红的（current 38/269 vs base 36/264），本次随发布收口转绿；显式声明之外仍是逐字严格比对。
+- **计数口径**：`MIGRATIONS.md`、`docs/AI-安装提示词.md`、`docs/给第三方的安装清单.md` 里残留的
+  35 family / 261 op 与 36/264 统一到 **38 family / 269 op**；`docs/DSH-更新适配.md` 的历史括号补一句
+  「v3.3 起 38/269」。`docs/architecture.md` 同步新模块（`runtime/embedded/`、`queue/job-args.ts`）
+  与例外登记数（17 条）。
+- **验收**：typecheck（runtime + src + tests）· lint · format:check · check:structure（360/360 ≤600、
+  178/178 ≤1000）· check:function-budget（111/111 已登记、0 stale）· check:exceptions（17 条）·
+  unit / contract / integration / python / extension-unit / python-static / parity 全绿；扩展 zip 重新构建并与源码一致。
+
+### 2026-11-20 第三阶段装机复测补丁：P1 viewer/grant、TTL、owner 过期口径
+
+> 来源：BlenderProject 装机后真机复测。P4/P6/P7/P8 实测通过；P1 仍不通，并暴露 grant TTL 与 owner 过期两处新问题。
+
+- **P1 仍不通的根因**：宿主不保证发送 `x-dsh-parent-agent-id`，`inOwnerFamily` 只认 parentAgentId，于是 viewer 分支与 family 授权都走不到。现在同 host 的任意非 owner 都可 attach 成 viewer（只读，`is_mine=false`，永不夺 owner）；grant 只给 `target_agent_id` 时按 `hostId + agentId` 匹配，并把授权者记为 holder 的 parent。子 agent 不再能把无主会话 claim 成自己的。
+- **grant TTL 被硬截 30 s**：`GRANT_TTL_MS` 从 30 s 提到 10 min，新增 `GRANT_TTL_MAX_MS=1 h`；`ttl_ms=600000/900000` 原样生效，`expiresInMs` 是真实剩余值。被 grant 覆盖的写操作按原 TTL 续期；主 agent 可用 `heartbeat`/重新 grant 续期。
+- **owner 过期与 grants 自相矛盾**：主 agent owner TTL 从 120 s 放宽到 **30 min**（等一轮子代理不会被夺权），任何 blender_* 调用都会续心跳；owner 过期只清 claim、**不再清 grants**（grant 有自己的 TTL）。`status`/`list` 标 `owner_expired → re-attach`，`grants` 对 owner=null 的会话不再回 `session_in_use`，并显示 `owner_expired` + note；重新 attach 后 grant 仍在。
+- **失败回执**：`session_in_use` / `scope_required` 现在同时给 `caller.agentId`、`owner_agent`、`grant_holders[]`（含 parentAgentId/expiresInMs），不再只给一句 session_in_use。
+- **第三轮复测（P1 写域已通，三项收尾；第四轮补两个回执缺口）**：
+  - **attach 顶层字段**：`blender_session action=attach` 的文本与工具返回值都带 `viewer / is_mine / borrowed / session_id / owner`；写调用不需要 attach 也能用 grant 执行（文档已写明）。
+  - **失败回执顶层**：`blender_py` 的 `scope_violation` 失败把 `changed / faces_* / scope_violations / rolled_back / unrolled / rollback_complete` 放到顶层（不再只藏 `envelope.evidence.detail`）；成功路径同样有。
+  - **session 门禁顶层身份**：`session_in_use` / `scope_required` 的 py 失败回执顶层给完整 `caller:{hostId,dshSessionId,agentId,…}` + `caller_agent_id` / `caller_dsh_session_id` / `owner_agent` / `session_id` / `required_scope` / `grant_holders`，不再被 400 字符的 `evidence.detail` 截断。新增 `blender_session action=whoami`，子 agent 可直接取真实 UUID 发给父 agent 做 grant target。
+  - **attach viewer**：不再依赖 `x-dsh-parent-agent-id` / `role`——同 host 的任意非 owner 都可 attach 成只读 viewer（`viewer:true`、`is_mine:false`、`borrowed:true`）；写仍要 grant。虚拟 GUI 走同一条 `claimExisting` 判定。
+  - **owner 不再被自己的 grant 锁死**：`authorizeMainWrite` 恒放行（grant 是授权 holder，不是 fence granter）；scope_conflict 仍存在于“给两个不同 holder 发重叠 scope”的发 grant 阶段。
+  - **grant `force=true`**：换 target（显示名→真实 UUID）时显式替换重叠 grant，不必先 revoke；失败回执带 `required_scope` + `grant_holders[]`。
+  - **scope 越界清理**：grant scopes 随 `engine.act` 进入 ACT 包装；执行后**新建**的越界对象自动删除（`rolled_back`），其独占 mesh / material datablock 一并清掉（`purged_meshes / purged_materials`，第五轮实测 `_v5m` 不再残留）；**已存在**对象被改则 `unrolled` + `rollback_complete:false` + 清理指令；`scope_violation` 仍是 `ok:false`。真机 5.3 探针：`_inside` 保留、`_outside` 被删、`_outside_mesh` 被清、`changed_objects=['_inside']`。
+  - **`no_scene_change` 口径**：表示**最终**场景没变（`changed=false`），与是否调 ops 无关；纯 `print` 也为 `true`，是否调过 ops 看新增的 `has_ops`。域外回滚后最终一致也是 `true`，越界仍以 `scope_violations/rolled_back/rollback_complete` 判定。
+- **`op_no_effect` 误判只读/烘焙脚本**：旧判据是“源码里出现 `bpy.ops.` + changed=false”，于是 `dir(bpy.ops.fleshy)`、`fleshy.bake_frame`、`wm.bind_proxy` 全被判失败。现在只有**几何/UV 写算子**（bevel/loopcut/bisect/knife/subdivide/extrude/inset/bridge/spin/screw/merge/delete/duplicate/unwrap/smart_project/pack/join/separate）且 `changed=false` 才 `op_no_effect`；其它 ops 只回 `no_scene_change` 警告，`ok:true`。真机 5.3 复测：`dir()` → has_ops=false；`select_all` → ok + no_scene_change；空选择 bevel → CANCELLED（仍 ok:false）。
+- **回归**：session-family 新增「无 parent header 的 viewer」「grant 只给 target_agent_id」「10/15 min TTL + 1 h 上限」「owner 过期保留 grant」「子 agent 不 claim 无主会话」；session-registry 的 TTL 用例改为 30 min 主 owner，并保留 30 s 子 agent 用例。
+### 2026-11-20 第三阶段：多 agent 归属 / 回执自证 / 取帧标定（BlenderProject 工单 P1–P8）
+
+> 4 个子代理 32 个探针实测。A 级 5 条全部修；B 级 3 组按实测口径修；每条都补了回归测试或真机探针。
+
+- **P1 子 agent 拿不到 GUI**：DSH 给子 agent 独立 `dshSessionId`，严格 owner 相等把所有人挡在 `session_in_use`。现在：①同 host + `parentAgentId` = owner 的子 agent 可 `attach` 成 **viewer**（只 presence，不夺 owner）；②`resolveGrantContext` 允许给这种子 agent 发 grant；③`authorizeWrite` **先查覆盖 grant 再判 owner**，所以父会话 `grant collection:_probe_x` 后子 agent 的 `blender_py` 真能跑；④新增同机只读旁路：`list` 里带 `owner / is_mine=false / borrowed=true`，`blender_see` 与只读 op 可用。
+- **P2 僵尸租约（口径修正）**：不是"无回收"，而是"15–20 分钟且条件不可见"。owner 记录新增 `role / heartbeat_age_ms / stale_after_ms`；子 agent owner **30 s** 无心跳即 stale（主 agent 仍 120 s），`prune` 自动回收（有活跃 `blender_py` 时不动）；同机主 agent 可 `release force=true`。`list/status` 直接给 `release ... force=true` 的回收命令。
+- **P3 op 族不查归属**：`/plan` 回执统一补 `source.owner / source.is_mine / source.borrowed / sessionId`（含 receipt.v2 紧凑 source 与正文首行 `is_mine=false · owner=…`）；无会话/非 owner 的写 op 在 `authorizeWrite` 被拒（`session_in_use` + `is_mine=false` + 缺什么 scope 写在 `fix` 里）；`blender_py` 接受 `write_scope`，执行后按 addon 报的 `changed_objects` + collections 对照 grant，越界回 `scope_violation`。
+- **P4 回执与改动脱钩**：`blender_py` / `/act` 回执新增 `changed / faces_before / faces_after / faces_delta / verts_delta / objects_delta / changed_objects / materials_changed / edit_mode / warnings`；`CANCELLED`、**几何/UV 写算子** `FINISHED` 但内容没变、`uv.unwrap 报 Unwrap failed` 降级 `ok:false`（`op_cancelled` / `op_no_effect` / `uv_failed`）；bake/export/bind/选择这类不写场景的 ops 只给 `no_scene_change` 警告，仍是 `ok:true`（装机复测：`dir()`/`fleshy.bake_frame`/`wm.bind_proxy` 曾被误判）。真机 5.3 实测：空选择 bevel → CANCELLED + faces 6→6；选中 bevel → 6→54（+48）；loopcut → CANCELLED；`location.x+=3` / Roughness 0.777 → changed=true。worker digest 纳入 `matrix_basis`、材质 Principled 参数、修改器参数与 UV，剔除 filepath（同内容 `save_as` → `changed=false` + `filepath_changed=true`），并给 `faces_delta/verts_delta/objects_delta`。
+- **P5 revert 改指 AppData**：`bpy.data.filepath` 在 5.3 是只读的，改为 `revert` 后**写回原工作文件**（先留 `pre_revert_*` 备份；回不去时 `file_changed=true` + `next_save_goes_to`），新增 `op=relocate file=<目标>` 显式换工作文件。真机实测 revert 后 `file` 仍是原 `.blend`，digest 与 checkpoint 前一致。
+- **P6 取帧无标定/近摄全白**：`blender_see` 回执每次带 `px_per_mm / visible_threshold_mm（4.5 px）/ frame_width_mm / coverage_estimate`；`custom` 新增 `fit=object|scene|<对象名>`（按 bbox 一次框全，默认正交 margin 1.15，实测覆盖率 0.87）；`clip_start` 暴露到 custom/current/camera；距离 < clip_start 时回 `frame_clipped_by_near_plane` + `suggest_clip_start`（不再误报"瞄空"）；camera 接受 `aspect`（按比例重算分辨率）；`full=true` 省略 area = **整窗口一张图**（`screen.screenshot`），给 area 才截单区域。
+- **P7 status/list 矛盾 + worker 端口**：`status` 改读同一份 `/status?evidence=1` 的 `local_evidence.sessions`，并显示 `mine=yes/no` 与 stale 回收命令；`local_processes` 按 worker 注册表 `{pid,port}` 报**真实端口**（9879/9880/9881…），不再把所有 worker 写成 9879；配置文档同步"workerPort 只是起始端口"。
+- **P8 其它口径**：`kind=render` 的 `####` 不再被当目录（Blender 自己展开帧号；artifact 扫描目录取第一个 `#` 之前的父目录，并有回归）；`DSH_RENDER.applied` 新增 `engine_source=requested|inherit` + `engine_before`；txn 快照默认保留最近 20 档 / 1024 MB，自动 prune（`DSH_TXN_KEEP` / `DSH_TXN_MAX_MB`）；`bpy_api_lookup` 每个命中对象同时给 `identifier/description/parameters` 与 `name/doc/params` 别名。
+- **skill 口径**：`skills/blender-modeling/SKILL.md` 坑四从"headless 慎用 bpy.ops"改为 5.3 实测边界——`mode_set / mesh.bevel / uv.smart_project / object.convert` 在 `-b` 里可用且生效；真正的墙是事件型算子（knife poll、loopcut/bisect CANCELLED、view3d/render.opengl/ed.undo），并要求用 `changed/faces_delta` 自证。
+### 2026-11-20 第二阶段：render 设备 / `//` 输出 / 长回执结构化（BlenderProject 工单）
+
+> 来源：第二阶段 3 条（1 条影响面大）+ 1 条口径澄清。全部按实测修，未改变已通过的 6 条 + BUG-1 行为。
+
+- **P1 `kind=render` 静默跑 CPU**：render 分支此前只拼 `--python-expr` 的 engine/resolution/samples，
+  完全不碰 `compute_device_type`；`--factory-startup` 下它是 `NONE`，即使 .blend 设了
+  `scene.cycles.device='GPU'` 也绑定失败、静默回落 CPU（实测 480²/128spp 3.04 s/帧 vs OPTIX 0.80 s/帧）。
+  新增 `device=auto|gpu|cpu` 与 `compute_device_type=OPTIX|CUDA|HIP|ONEAPI|METAL|NONE`：
+  `auto` 默认按 OPTIX→CUDA→HIP→ONEAPI→METAL 试，只启用所选后端对应的设备；
+  实际结果写 `result.parsed.applied{engine,samples,scene_device,compute_device_type,devices_used,fell_back_to_cpu,warnings}`，
+  status/wait/collect 顶层也给 `applied`，文本多一行 `applied …`；绑不上 GPU 回
+  `warning gpu_unavailable / gpu_not_bound`（不再静默）。同时修正 `samples` 只在显式 engine 时才落地的旧问题：
+  现在按**场景实际 engine** 设 Cycles / EEVEE 采样，`applied.samples` 回读。真机 Blender 5.3 实测
+  bench.blend 480² 默认 `device=auto` → `compute_device_type=OPTIX · scene_device=GPU · devices_used=[RTX 4060]`。
+- **P2 `output="//…"` 把 `//` 当绝对路径根**：`path.dirname('//x')` 得到 `'//'`，`ensureDir('//')`
+  在 Windows 上 `mkdir 'C:\'` → EPERM，且 stage=spawn 的错误不含路径语义。现在 `//` 按
+  `dirname(file)` 解析成绝对路径（保留末尾分隔符），`outdir` 也随之正确；没有 `file` 时在**参数校验阶段**
+  直接拒（`output 以 // 开头…需要同时给 file=<.blend>`），一个作业都不提交。输出目录创建失败时把
+  `output` 原文带进错误（`render 输出目录不可创建：<dir>（output="…"）…`）。
+- **P3 长回执截断后 source/file_load/cleanup 不可见**：`blender_op` 的 receipt.v2 信封新增紧凑
+  `source{file,scene,scope,session_file,objects,…,objects_count}`、
+  `file_load{ok,path,loaded,mesh,non_mesh,missing,tmp_collection}`、
+  `cleanup{ok,failed,removed:<每类数量>,note}`；正文首行也加 `source=<file> · cleanup=ok`。
+  即使 audit_mesh 正文 22k 在 12,292 处被截断，判据仍可从信封与首行读到，不必先想到 `summary_only`。
+- **口径澄清（samples 生效）**：不修行为，只补 `applied.samples` 回显；device 与 samples 现在都能从回执直接判，
+  不再需要靠耗时反推。
+- **回归**：job-queue 新增 `//` 输出、无 file 拒绝、DSH_RENDER 前导三条；run-render-channels 新增
+  DSH_RENDER → `parsed.applied` 与回落 warning 呈现；run-receipt 新增信封 `source/file_load/cleanup`
+  与首行可见性；tool-execution 新增 host 侧 `//` 早拒。真机 Blender 5.3 用
+  `D:/works/BlenderProject/out/render_speed/bench.blend` 实测 `//` 输出、`applied` 与 OPTIX 绑定；
+  `device=gpu + compute_device_type=NONE` 实测 `fell_back_to_cpu=true + gpu_not_bound`。
+
+### 2026-11-20 多 agent 并发反馈：作业句柄 / 会话释放 / audit 来源（BlenderProject 工单）
+
+> 来源：3 agent × 12 件几何 × 全 headless 的实测清单（P1×3 / P2×3 / P3×1）。本轮只改被证据支持的行为，
+> 每条都在对应位置补了回归测试；P3 以 `headless=true` 的显式车道作答，不改 GUI 归属模型。
+
+- **P1-1 `blender_run` 回执结构化**：submit 不再只有一个 `text`；顶层给
+  `jobId / id / state / slot / priority / kind / queued_ahead`，并带
+  `envelope{contract:"receipt.v2", op:"blender_run", action:"submit", job_id, state, next[], provenance}`
+  （与 `blender_op` 同一份契约）。status / wait / collect / cancel 同样回 `jobId/state` + 信封；
+  list 回 `jobs[]`（含 owner/decision）与 `count`。`queued_ahead` 由队列在 submit 时派生（不落盘）。
+- **P1-2 队列枚举口径**：`blender_run(action="list")` 的 text/help 明确写清它是 Blender 队列的唯一枚举；
+  DSH 宿主 `job_list` 只列宿主后台作业。空列表文案与 submit 的 `next` 行都点名这条路。
+- **P1-3 `blender_session release` 不再静默**：owner 心跳过期（120 s）被 prune 清成 `owner=null`、
+  agents 仍在时，旧实现回 `{"ok":true,"released":false}`。现在：未知会话 → `session_not_found`；
+  owner 被别人持有 → `session_in_use`；owner 过期但调用方仍在该会话 agents 里 → **真的释放**
+  （`released=true, reason="owner_expired"`）；其余 unowned 情况 → `session_unowned` + 证据。失败一律 `ok=false`。
+- **P2-4 `audit_mesh(file=…)`**：与 connectivity / gate / measure 共用 `_load_file_objects` 的
+  临时加载 → 跑 → finally 删净语义（回执带 `file_load / cleanup`，对象名按文件原名上报）；
+  `audit_help` / catalog 的 audit key / dispatcher 的定向提示同步。GUI 会话存在时走临时 append；
+  无会话时走既有本地无头车道（白名单未变）。
+- **P2-5 `audit_mesh` 来源与空列表**：`objects=[]` 改为**显式空列表 → ok=false**（要全场景用 `audit_scene`）；
+  `audit_mesh` / `audit_scene` 回执固定带 `source{mode,file,scene,scope,objects,requested,session_file}`。
+  本地车道的 `file + objects=[]` 仍表示"文件内全部 mesh"（车道把 file 交给队列打开，不把空列表传给 op）。
+- **P2-6 catalog 机器可读**：`op="catalog", args={format:"json"}` → `families[].ops[].{name,needs_gui,headless,read_only}`
+  （`needs_gui` 由 READ_ONLY 集合 + `gui_frame/gui_shading` 特例推导；`headless` 由本地车道白名单推导）；
+  `blender_op` 把结构化目录放在回执的 `catalog` 字段（不受 12k 文本截断影响），默认文本目录只多一行指引。
+- **P3-7 并发主力场景**：`blender_op(action="plan", headless=true, args={file:…})` 强制走本地无头车道 ——
+  有 ready GUI 会话也不再抢占 GUI，回执 `verdict=degraded + job_id`；缺 file 或非白名单 op 直接
+  `invalid_params`（不偷偷回落 GUI）。
+- **回归**：新增 `tests/unit/js/run-receipt.test.ts`、session-registry 两条 release 用例、
+  job-queue 的 `queued_ahead` 用例、catalog format=json 用例、op-local-lane 两条 `headless=true` 用例、
+  `tests/unit/python/test_audit_mesh_scope.py`（纯逻辑：空列表/来源块 + mesh.py 静态契约）。
+  `tests/e2e/blender/native/audit_file.py` 的 ⑦ 段改为"mesh 接受 file + source + cleanup + objects=[] 失败"，
+  真机 Blender **5.3.0** 跑该模块 **58 checks 全过**（顺带抓到并修掉 cleanup 后访问 Object 的
+  `ReferenceError: StructRNA ... has been removed`）。typecheck / unit 116 文件 / integration /
+  python 492 / lint / format / structure / routes / python-static 全绿（`doctor-bounded` 有一次
+  3018 ms 的负载抖动，单跑复现 2951 ms 通过）。
+- **BUG-1（验收复测）· `audit_mesh(file=)` 在含 Library 的 .blend 上崩**：真因是
+  `_capture_mine` 只存了 Library 引用，cleanup 先 `remove` 第一条、再读第二条的 `lib.name` 时
+  该条目已被同批删除连带失效 → `ReferenceError: StructRNA of type Library has been removed`。
+  现在在**删除前**把 `(ref, name, filepath)` 快照成纯 Python 值（`scope.library_meta`），
+  删除用 `scope.purge_libraries`：同批 `ReferenceError` 记为已删而不是失败，真正的删除异常仍进
+  `cleanup.failed`。实测 `D:/works/BlenderProject/blends/sub_hats_v001.blend`（libraries=2，
+  geometry_nodes_essentials.blend + .001）从崩溃变为 `ok=true`，`cleanup.removed.libraries` 两条都列、
+  `counts_after.libraries=0`；legwear / outfit 两个无库文件不受影响。新增纯逻辑回归
+  `test_audit_mesh_scope.py::test_library_meta_* / test_purge_libraries_*`（不需要 Blender）。
+- **runtime stale 的可见性（复测观察）**：`blender_session status` 在 `runtime modules verdict=stale`
+  时多打一行：下一次业务调用会先重注入，首调用结果可能来自旧代码、重跑一次再定论。
+  没有做隐式 warmup —— status 只读，不该为"提前注入"触发一次业务调用；调用方现在至少能看见这件事。
+- **多 agent 工作区门禁隔离**：`config/plan-ids.json` 与 `scripts/check-ports.mjs` 跳过 `.agents`
+  （worktree 里的仓库副本会被当成当前源码），`eslint.config.mjs` 跳过 `.agents/**` 并固定
+  `tsconfigRootDir`（否则第二个 TSConfigRootDir 候选让整个 lint 解析失败）。
+
 ### 2026-11-20 收口：无 GUI 本地执行 · render 通道 · anim/toon 两族 · CI 5.3
 
 - **list 文案同源（工单 6e）**：`blender_session action=list` 的会话数与“未认领”措辞改由
@@ -31,7 +178,7 @@
 
 ### M1 收口（2026-11-20）
 
-> 判定：BlenderProject 侧子代理 p6a 独立复验；版本仍 `3.2.0-alpha.1`，工作树未提交。
+> 判定：BlenderProject 侧子代理 p6a 独立复验；当时版本仍 `3.2.0-alpha.1`，本批随 v3.3.0 提交。
 
 - **P6（环境证据）**：`list` / `doctor` 带 `local_processes / ports / ports_evidence / false_positives`；
   `forceNoAddon`、`probeFixture` 注入点真激活；worker 角色按 **worker 注册表 pid** 识别（P6-d），
@@ -317,7 +464,7 @@
 - `blender_rt_worker` 不再是对模型暴露的工具：GUI 内的「改一步看一眼」用 `blender_py` + `blender_see`；没有 GUI 时用 `blender_run(kind="headless")` 后台作业。`session="auto"`、`preload="…worker…"` 与 worker see/watch 不再出现在工具面。
 - 计数不变：34 family / 228 op / 25 addon commands（+ping = 26 wire）/ 29 routes / protocol 12；工具数 15 → 6 是本版唯一计数变化。
 
-## v3.0.5（2026-11-04）—— 修复源码注入 __file__ 缺失
+## v3.0.5（2026-11-04）—— 修复源码注入 **file** 缺失
 
 - 修复 #73：源码注入的 Python 模块现在会收到真实模块路径作为 `__file__`，`audit` / `qc` / `contract` 等高层算子不再报 `NameError`。
 - `preloadChunk` 与 `injectModule` 统一注入 `__file__`；`qc_render` 的 asJob 路径改用 `preloadChunk`。
@@ -357,10 +504,10 @@
 ### Breaking changes
 
 - **npm 包名改为 `dsh-blender-plugin`**：此前仓库内使用的 `@dsh-external/dsh-blender-plugin` 未被发布到 npm；v3.0.0 起 npm 包名统一为 `dsh-blender-plugin`，安装命令为 `dsh plugin --profile <profile> add dsh-blender-plugin@3.0.0`。旧 CHANGELOG 条目中的 `@dsh-external/...` 是历史名称。
-- **addon 安装方式改为 zip 包**：发布物是 addon/dsh_blender_bridge.zip（包内 __init__.py、bl_info v1.11、protocol 11）；旧的单文件 addon/dsh_blender_bridge.py 不再随包发布，也不再是安装入口。升级时必须先在 Blender Preferences 里停用并移除旧单文件，再安装 zip、启用、N 面板 Connect。
+- **addon 安装方式改为 zip 包**：发布物是 addon/dsh_blender_bridge.zip（包内 **init**.py、bl_info v1.11、protocol 11）；旧的单文件 addon/dsh_blender_bridge.py 不再随包发布，也不再是安装入口。升级时必须先在 Blender Preferences 里停用并移除旧单文件，再安装 zip、启用、N 面板 Connect。
 - **Premium / Tripo 生成通道移除**：删除 Premium 许可、额度、Supabase 客户端与 Tripo 开关；Hyper3D 与 Hunyuan3D 只保留自有 API key 通道。Tripo 无 BYOK 通道，因此整条命令与面板入口一并删除（addon command 39 → 38）。
-- **lib/ 不再入库**：源码运行时由 runtime/**/*.ts strict 编译到 lib/runtime/**/*.js；从 git 使用先 npm ci --legacy-peer-deps && npm run build，prepack 会自动构建。npm 安装包仍自带 lib/。
-- **runtime 不再有 .mjs**：旧 runtime/*.mjs 的 require 用法不再成立；请用包入口或构建后的 lib/runtime/*.js。
+- **lib/ 不再入库**：源码运行时由 runtime/**/\*.ts strict 编译到 lib/runtime/**/*.js；从 git 使用先 npm ci --legacy-peer-deps && npm run build，prepack 会自动构建。npm 安装包仍自带 lib/。
+- **runtime 不再有 .mjs**：旧 runtime/_.mjs 的 require 用法不再成立；请用包入口或构建后的 lib/runtime/_.js。
 - **扁平 Python 模块移除**：删除 runtime/*.py 的 38 个 re-export shim，generator.py / uv_tools.py 移入 runtime/py/geometry/；模块只按 runtime/py/modules.json 解析，旧式 import runtime.<name>（或直接按 runtime/<name>.py 加载）不再可用。preload / module 的公开模块名不变。
 
 ### 结构、类型与测试
@@ -379,9 +526,9 @@
 
 ### runtime TypeScript 迁移
 
-- 原 60 个 runtime/*.mjs（7,307 行）迁为 strict TypeScript，编译到 lib/runtime/*.js；T5b 与 finalization 又拆出 headless、plan-dispatch、execution 等子模块，当前 runtime TS 为 133 个模块。
+- 原 60 个 runtime/_.mjs（7,307 行）迁为 strict TypeScript，编译到 lib/runtime/_.js；T5b 与 finalization 又拆出 headless、plan-dispatch、execution 等子模块，当前 runtime TS 为 133 个模块。
 - SERVER_PATH 指向 lib/runtime/server.js；JSON / 子进程 / 路径 / Python 桥边界补齐解析函数；构建顺序 runtime → host → client（architecture guide）。
-- npm pack 产物含 lib/runtime/**/*.js 与 runtime/**/*.py，不含 .ts；clean clone / tarball 安装 smoke 均过。
+- npm pack 产物含 lib/runtime/**/\*.js 与 runtime/**/*.py，不含 .ts；clean clone / tarball 安装 smoke 均过。
 
 ### CI、覆盖率与发布工程
 
@@ -436,6 +583,7 @@
 - 修正 skill / 操作教程里残留的 `33 family / 217 op` 旧口径。
 
 ### 新增（v2.6.1 之后合入）
+
 - **headless：`opts.hardExit`（默认开启）**——无头脚本在 `done` 标记之后显式冲刷 stdout/stderr，
   随即 `os._exit(0)` 跳过 Blender 自身退出拆解。现场：Blender 5.2.3（Steam）在 .blend 加载材质带
   Value→Material Output.Thickness 连线时，glTF 导出**成功、产物完整、done 已打出**之后，
@@ -444,7 +592,9 @@
   作业路径与同步路径同一份实现（`runtime/hard_exit.mjs`）；
   新增 `tests/headless_hard_exit_selftest.mjs`（顺序契约 / 开关语义 / 接线断言，已入 `npm test` 主链，
   `npm run test:hardexit`）。
+
 ### 修复
+
 - **headless：`file=` 缺失/空串/参数名误写不再静默成功**（旧症状：`file=""` 或 `blend=<路径>` →
   `ok=true / exitCode=0 / inputFile=null / 零警告`，脚本拿到出厂空场景）：
   引擎侧 `file=` 显式校验（空串→`file-empty`、非字符串→`file-type`，直连 `/headless` 的兜底）；
@@ -468,6 +618,7 @@
 > 模型工具仍 **15 个**；plan catalog 仍 **33 family / 217 op**；addon 仍 **v1.10 / protocol 11**。
 
 ### 性能（真实成品文件实测）
+
 - **选中轮询 1200 ms → 100 ms**（Web 客户端 + dsh-TUI 宿主半边）：端到端 p50 ~993 ms → ~156 ms
   （本机回环，8 次选中变化；CAS consume 语义不变）。
 - **`audit._tris` 大网格快路径**：面数 ≥256 时批量 `foreach_get("loop_total")`；
@@ -479,11 +630,13 @@
   选中变化继续用 `depsgraph_update_post`（0.3–0.7 ms）。
 
 ### 功能（v2.6.0 之后合入）
+
 - **#35 工具卡片**：15 个工具的 `presentCall` / `presentResult`，宿主不再显示整段 JSON。
 - **#36 dsh-TUI 宿主半边**：选中上下文 chip、页脚状态字段、`@` 提及、`/blender status|doctor|jobs`；
   按接缝能力检测启用，新增只读 `GET /host/state`。
 
 ### 修复
+
 - **#38 / #39 / #43 Windows 终端弹窗**：三处 blender `spawn` + 两处 `execFileSync` 补 `windowsHide: true`，
   并加 `tests/windows_hide_selftest.mjs` 静态自检（进 `npm test`）。
 - **#40 / #41 capability lock**：发布 tarball（无 `src/`）不再 ENOENT，降级工具维度并显式打印 SKIP。
@@ -945,17 +1098,17 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 
 **全部走独立 `/host/*` 路由，不进 `/plan` op 目录、不加模型工具 ⇒ 能力面零变更**
 
-| 能力 | 实现 |
-|---|---|
-| 视口状态机 | `runtime/viewstore.mjs`（新）：`seq`/`source`/`captured_at`/`origin(file,scene)`/`stale`/`pickable`/`blender_quiet`；场景变更计数；在飞计数；`AUTO_CAPTURE_QUIET_S=0.8`；最近 50 帧相机矩阵 |
-| 五条宿主路由 | `GET /host/view/latest` · `GET /host/view.png` · `POST /host/view/capture` · `POST /host/view/pick` · `GET /host/scene-items`（`runtime/server.mjs`） |
-| CORS | 仅对 **loopback** Origin 回显 `Access-Control-Allow-Origin`；`OPTIONS` 预检 204 |
-| 反投影 pick | `runtime/view.py::host_pick` —— 复用已有 `make_view_matrix`/`make_proj_matrix` 反投影 → `scene.ray_cast` → 灯光/相机/空物体按屏幕距离兜底；**先校验 `.blend`/场景错配并拒绝**（`file_mismatch`/`scene_mismatch`），绝不把点击投到当前场景 |
-| 客户端半边 | `src/client/index.js`（新，手写 bundle，零打包器/零新增依赖）+ `scripts/build-client.mjs`；`package.json` 加 `dsh.client` 与 `exports["./client"]` |
-| 视口面板 | 注册到 `conversation.view` 槽位；轮询 1500ms（陈旧 600ms）；`seq` 变化才换图 |
-| 点击入上下文 | 点击 → 归一化坐标 → `/host/view/pick` → 命中加标记（再点取消）；「加入消息」把整帧作为**草稿附件** + 一句对象说明**写进草稿**（`ctx.conversation.createDrafts` + `inputActions.addAttachments/insertText`）—— **不自动发送** |
-| 自动重拍（上游 A8） | `stale && blender_quiet` → `POST /host/view/capture {auto:true}`；**1200ms 节流**、同一 `seq` 不重复、**连续 3 次无进展停手**并在状态行说明、`visibilityState==="hidden"` 停手、pick 在飞不并发 |
-| `@` 提及 | `ctx.inputTriggers.registerSource({trigger:'@'})`，数据源 `/host/scene-items`，按 对象/材质/集合 用 `section` 分组；候选失败返回 `[]` 不抛 |
+| 能力                | 实现                                                                                                                                                                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 视口状态机          | `runtime/viewstore.mjs`（新）：`seq`/`source`/`captured_at`/`origin(file,scene)`/`stale`/`pickable`/`blender_quiet`；场景变更计数；在飞计数；`AUTO_CAPTURE_QUIET_S=0.8`；最近 50 帧相机矩阵                                               |
+| 五条宿主路由        | `GET /host/view/latest` · `GET /host/view.png` · `POST /host/view/capture` · `POST /host/view/pick` · `GET /host/scene-items`（`runtime/server.mjs`）                                                                                     |
+| CORS                | 仅对 **loopback** Origin 回显 `Access-Control-Allow-Origin`；`OPTIONS` 预检 204                                                                                                                                                           |
+| 反投影 pick         | `runtime/view.py::host_pick` —— 复用已有 `make_view_matrix`/`make_proj_matrix` 反投影 → `scene.ray_cast` → 灯光/相机/空物体按屏幕距离兜底；**先校验 `.blend`/场景错配并拒绝**（`file_mismatch`/`scene_mismatch`），绝不把点击投到当前场景 |
+| 客户端半边          | `src/client/index.js`（新，手写 bundle，零打包器/零新增依赖）+ `scripts/build-client.mjs`；`package.json` 加 `dsh.client` 与 `exports["./client"]`                                                                                        |
+| 视口面板            | 注册到 `conversation.view` 槽位；轮询 1500ms（陈旧 600ms）；`seq` 变化才换图                                                                                                                                                              |
+| 点击入上下文        | 点击 → 归一化坐标 → `/host/view/pick` → 命中加标记（再点取消）；「加入消息」把整帧作为**草稿附件** + 一句对象说明**写进草稿**（`ctx.conversation.createDrafts` + `inputActions.addAttachments/insertText`）—— **不自动发送**              |
+| 自动重拍（上游 A8） | `stale && blender_quiet` → `POST /host/view/capture {auto:true}`；**1200ms 节流**、同一 `seq` 不重复、**连续 3 次无进展停手**并在状态行说明、`visibilityState==="hidden"` 停手、pick 在飞不并发                                           |
+| `@` 提及            | `ctx.inputTriggers.registerSource({trigger:'@'})`，数据源 `/host/scene-items`，按 对象/材质/集合 用 `section` 分组；候选失败返回 `[]` 不抛                                                                                                |
 
 **两条设计纪律（与上游同源）**
 
@@ -1110,19 +1263,20 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 
 ### 验收（全部在最终改动之后实测）
 
-| 门 | 结果 |
-|---|---|
-| `npm test`（16 步） | **EXIT=0** |
-| `print_selftest`（真机 Blender 5.2.2） | **ok=true** · 8 形状 |
-| `gate_selftest` | **ok=true**（新增真机用例：`warnings` 非空 ⇒ 该门 degraded） |
-| A1–A5 集成自检（真机无头） | **128 / 0 失败** |
-| gate 复审回归（真机无头） | **52 / 0 失败** |
-| issue #14 复现（默认 Cube） | 修前 `4000000 / 0.1667 / ok=false` → 修后 **`0 / 0 / ok=true`**；`exclude_bed=False` 仍复现老数字 |
-| 变异测试（故意改坏实现） | 忽略 `bed_horiz_deg` → 红；`overhang_ratio` 分母写错 → 红；法线退回 `M@n` → 红；面积退回 `_scale_avg` → 红；拆掉 `bed_band_mm` → 红 |
+| 门                                     | 结果                                                                                                                                |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`（16 步）                    | **EXIT=0**                                                                                                                          |
+| `print_selftest`（真机 Blender 5.2.2） | **ok=true** · 8 形状                                                                                                                |
+| `gate_selftest`                        | **ok=true**（新增真机用例：`warnings` 非空 ⇒ 该门 degraded）                                                                        |
+| A1–A5 集成自检（真机无头）             | **128 / 0 失败**                                                                                                                    |
+| gate 复审回归（真机无头）              | **52 / 0 失败**                                                                                                                     |
+| issue #14 复现（默认 Cube）            | 修前 `4000000 / 0.1667 / ok=false` → 修后 **`0 / 0 / ok=true`**；`exclude_bed=False` 仍复现老数字                                   |
+| 变异测试（故意改坏实现）               | 忽略 `bed_horiz_deg` → 红；`overhang_ratio` 分母写错 → 红；法线退回 `M@n` → 红；面积退回 `_scale_avg` → 红；拆掉 `bed_band_mm` → 红 |
 
 ## v1.0.4（2026-10-05）—— 原生 Linux 成为一等平台：修 `wslToWin()` 把"非 Win/mac 的宿主"一律当成 WSL（取帧恒报 `frame http 502`）
 
 ### 修（issue #11，报告人 @mlfc666，Manjaro 原生 Linux）
+
 - **症状**：原生 Linux（Blender 与宿主同机）上 `blender_rt_see` 恒报 `Error: frame http 502`，`/frame.png` 回
   `ENOENT … /home/<u>/.dsh-blender-rt/dsh_live_viewport.png`；而帧 PNG **确实写出来了**，只是落在一个
   **字面量反斜杠目录** `/home/<u>/\wsl.localhost/Ubuntu/home/<u>/.dsh-blender-rt/` 里。旁证：`/doctor` 在 Manjaro 上把 `distro` 报成 `Ubuntu`。
@@ -1138,23 +1292,24 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 - **实测对照**（在 WSL 里用**私有挂载命名空间**把 `/proc/version` 绑成 Manjaro 内核串 + 清掉 `WSL_DISTRO_NAME/WSL_INTEROP`，
   于是真走到"原生 Linux"分支；同一台机器上跑修前 / 修后两份代码对拍）：
 
-  | 探针 | 修前 | 修后 |
-  |---|---|---|
-  | `wslToWin('/home/u/.dsh-blender-rt')` | `\\wsl.localhost\Ubuntu\home\u\.dsh-blender-rt` | `/home/u/.dsh-blender-rt` |
-  | `CFG.workDirWin` | `\\wsl.localhost\Ubuntu\tmp\dsh-blender-rt` | `/tmp/dsh-blender-rt`（与 `workDirWsl` 同构） |
-  | `PATHS.livePngWin` | `\\wsl.localhost\Ubuntu\tmp\dsh-blender-rt/dsh_live_viewport.png` | `/tmp/dsh-blender-rt/dsh_live_viewport.png` |
-  | `describeConfig().distro` | `Ubuntu` | `Ubuntu 24.04.4 LTS`（读 os-release） |
-  | `PATH_GUARD` | 非空（假警告） | `''` |
+  | 探针                                  | 修前                                                              | 修后                                          |
+  | ------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------- |
+  | `wslToWin('/home/u/.dsh-blender-rt')` | `\\wsl.localhost\Ubuntu\home\u\.dsh-blender-rt`                   | `/home/u/.dsh-blender-rt`                     |
+  | `CFG.workDirWin`                      | `\\wsl.localhost\Ubuntu\tmp\dsh-blender-rt`                       | `/tmp/dsh-blender-rt`（与 `workDirWsl` 同构） |
+  | `PATHS.livePngWin`                    | `\\wsl.localhost\Ubuntu\tmp\dsh-blender-rt/dsh_live_viewport.png` | `/tmp/dsh-blender-rt/dsh_live_viewport.png`   |
+  | `describeConfig().distro`             | `Ubuntu`                                                          | `Ubuntu 24.04.4 LTS`（读 os-release）         |
+  | `PATH_GUARD`                          | 非空（假警告）                                                    | `''`                                          |
 
 - **回归门**：新增 `tests/linux_selftest.mjs`（`npm run test:linux`，25 断言；已挂进 `npm test`）—— `detectWsl()` 判据决策表
   （任何平台可跑，含"假内核串不能误判成 WSL"/"读不到 /proc/version 不硬猜"）+ 本平台分支自洽 + 源码回归保护（UNC 分支仍在）
-  + 原生 Linux 端到端恒等。同一份自检打在**修前**代码上是 **11 红 / 16**，修后 **25 全绿**。
+  - 原生 Linux 端到端恒等。同一份自检打在**修前**代码上是 **11 红 / 16**，修后 **25 全绿**。
 - **WSL / Windows / macOS 三条既有路径逐字节不变**：`wslToWin('/home/x/f.png') === '\\wsl.localhost\Ubuntu\home\x\f.png'`、
   `/mnt/d/… → D:\…`；真机上 `lease_stale_selftest`（含拉起 Windows 版 `blender.exe`、拿回 `resultJson.ok=true` 的 D2）20/0、
   `mac_selftest` 7/0，`npm test` 与修前**逐条一致**、无新增失败。（唯一红的 `shape_search_selftest` 是本机 **Windows 侧
   DSH 主进程占用了它默认的 9895 端口**，与本次改动无关：换端口单独跑 24/24 全过。）
 
 ### 已知未修（与 issue #11 报告人的附注一致，留给后续）
+
 - `wslPathShared()` 在原生 Linux 上仍按 WSL 判据（`/tmp`、独立挂载一律判"不共享"）⇒ `/doctor` 的 `workDir.shared=false`、
   无头脚本走"替换 / 降级"分支并带 `WORKDIR_NOT_SHARED` 提示。功能不挡事（同机 Blender 读得到），但语义要重新表述；
   `workdir_shared_selftest` 的 A1/A2/A3 把 WSL 语义写成了硬断言，得跟着一起改。
@@ -1164,6 +1319,7 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 ## v1.0.3（2026-10-05）—— 内环从"存在"到"真能用"：修 `ns` 未绑定（内环 6 个版本跑不通一次迭代）+ 新 op `shape_search`（声明式搜索）+ 描述改任务型触发词
 
 ### 修（P0 · 这才是"没人用 rt_loop"的真正原因）：`step`/`measure` 里 `ns[...]` 一跑就 NameError
+
 - **症状**：`blender_rt_loop(op="start", …)` 回 `start_ok: true`，但**第一个 tick 就 error 收工** ——
   `stop_reason="error"` / `i=0` / `best=null` / `board_n=0`，`error` 尾部是
   `File "<dsh_loop.step>", line 1, in <module>\nNameError: name 'ns' is not defined. Did you mean: 'np'?`
@@ -1172,17 +1328,18 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
   全部食谱**一律**写 `ns["params"]` / `ns["score"]` —— 谁照文档写谁炸，于是"内环存在但没人用得上"。
 - **修法**：注入 `ns["ns"] = ns` 与 `ns["st"] = st`（后者也是文档 preloaded 列表里承诺过的名字）。
 - **实测对照**（真 Blender 无头，手动驱动 tick；无头下 timers 不触发）：
-  | | 修复前 `run-muu3oj9hlcjh` | 修复后 `run-muu3ppkr6508` |
-  |---|---|---|
-  | `stop_reason` | `error` | `iterations` |
-  | `i` | 0 | 5 |
-  | `best` | `null` | `{score: 0.0687…}` |
-  | `board_n` | 0 | 3 |
-  | `ns_bound` | **false** | **true** |
+  |               | 修复前 `run-muu3oj9hlcjh` | 修复后 `run-muu3ppkr6508` |
+  | ------------- | ------------------------- | ------------------------- |
+  | `stop_reason` | `error`                   | `iterations`              |
+  | `i`           | 0                         | 5                         |
+  | `best`        | `null`                    | `{score: 0.0687…}`        |
+  | `board_n`     | 0                         | 3                         |
+  | `ns_bound`    | **false**                 | **true**                  |
 - **回归门**：`dsh_loop_selftest` 从"只读 status/help、不真起循环"升级为**真起一个最小循环并手动驱动 4 个 tick**，
   硬判 `ns_bound / iters_done / best_present / no_error`（旧自检的结构性盲区正是这条回归活了 6 个版本的原因）。
 
 ### 改 1：`blender_rt_loop` 描述从「次数门槛」改成「任务形状」
+
 - 触发词：对齐 / 拟合 / 反推尺寸 / 参数扫描 —— 判据能写成一个数（轮廓 IoU、包围盒尺寸误差、剖面差，或自写 score）。
 - 明写硬前提：**只在 GUI 会话有效**；`op=board` 看候选；`op=export` 落可复现脚本；收敛后换通路复核；跑完场景停在**最后一次迭代**而非 best。
 - 长尾（spec 字段 / `K.dsh_measure` 三签名 / 可照抄骨架 / 4 条纪律）搬进 catalog 详情：`blender_rt_plan(op="catalog", args={tool:"rt_loop"})`（1,834 字符，按需取）。
@@ -1190,6 +1347,7 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 - 旧文案里的 `≥20 次才用` 是"自我否决"：模型读完就跳过 —— 换成任务型触发词后，§0 路由表 + 描述 + catalog 三级都能命中。
 
 ### 新 op：`blender_rt_plan(op="shape_search", args={…})` —— 声明式搜索
+
 - **你只给目标与区间，机器去搜**：`objective`（`silhouette_iou` / `profile_err` / `aabb_err`）+ `params`
   （`{dy_mm:{min:-30,max:30,step:5}}` 或 `{values:[…]}`）+ `apply`（每轮把 `ns["params"]` 落到场景的代码；
   建议在 setup 里定义 `apply(p)` —— 与 `op=export` 的复现口径一致）。
@@ -1204,14 +1362,17 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
   不会生成 `IndentationError` —— 由测试里"用 python3 真编译三段代码"这条断言守住。
 
 ### 配套 skill（`dsh-skill-blender-modeling`，另一仓库，同步发布）
+
 - §0 路由表补 `rt_loop` 行；§0.7 增**第四条硬规则**（可标量化 + 要试几十~几千组 ⇒ 不许手工拍参数）；
   新增 **Recipe 24**（可复制 spec + 现成目标函数表 + 5 条纪律 + 3 种不该用的场景）+ 声明式 `shape_search` 的用法与分工；
   front-matter 描述补"参数搜索内环"、配方计数 23 → 24。
 
 ### 测试
+
 - 新增 `tests/shape_search_selftest.mjs`（**24 项**）：目录面 / spec 生成（grid · random · aabb_err · 多视平均 · pyLit 布尔）/
   **python3 真编译三段代码（含嵌套块）** / 校验面（缺参 · 非法目标 · 组合爆炸都必须给骨架）/ 真路由（隔离后端 POST `/plan`）。
 - 能力锁更新为 **28 family / 184 op**（+1 op，原因即本节）；`npm test` **16 步全绿**。
+
 ## v1.0.2（2026-09-30）—— 门禁合规（去 eval）+ issue #10 修复 + S10 自愈一并发布
 
 > 触发：本插件投稿 [awesome-ai-plugins](https://github.com/hashgraph-online/awesome-ai-plugins)（PR #539）时，上游"必需的
@@ -1219,6 +1380,7 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 > 本版把三件事一起发出去：**去 eval** · **issue #10 修复** · **S10 现场补丁回灌**，外加门禁缺分项的仓库卫生。
 
 ### 1. `runtime/gate.py`：动态求值 → 逐节点白名单 AST 求值器（门禁 high 项）
+
 - 原实现把编译后的 AST 交给内置动态求值入口执行。语义上它早已被 `_check_ast` 限死（不许下划线属性、调用只许
   `ALLOWED_FUNCS`），但"名字+左括号"这个形态本身会被扫描器判 high（`DANGEROUS_DYNAMIC_EXECUTION`）。
 - 现在新增 `_eval_node()` **逐节点按白名单求值**（BoolOp / UnaryOp / Compare / BinOp / Name / Constant /
@@ -1228,18 +1390,22 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
   已接入 `npm test`。它不需要 Blender（给 `bpy` 与共享内核 `dsh_rt_kernel` 打桩，只测纯求值器）。
 
 ### 2. issue #10 修复：schemastery 解析改 ESM 优先 + 顶层不再 throw
+
 明细见下一节 `v1.0.1+S11`（含新增 `tests/schema_resolve_selftest.mjs`，14 项）。
 
 ### 3. S10 现场补丁**回灌进 `src/`**
+
 原先只打在 `lib/index.js`，一 `npm run build` 就丢；本次补齐 src 侧，明细见 `v1.0.1+S10`。
 
 ### 4. 仓库卫生（门禁缺分项）
+
 - 新增 `SECURITY.md`（私密上报口径 + 本插件的执行面/凭据面声明）
 - 提交 `package-lock.json`（修 `DEPENDENCY_LOCKFILE_MISSING`）
 - 新增 `.github/dependabot.yml`（npm 周更）
 - `package.json` 的 `files` 增加排除：`!runtime/*.bak-*`、`!runtime/*.v1-*` —— 现场备份不再进包
 
 ### 验证
+
 - `npm test` 全链绿（含新增 `tests/schema_resolve_selftest.mjs` 与 `tests/gate_eval_selftest.py`）
 - `python3 tests/gate_eval_selftest.py` → **32 项 ALL PASS**
 - 全仓文本扫描（含注释）：被判 high 的那条**动态求值调用形态** **0 处**；用 exec 加载源码再执行的既有写法
@@ -1252,15 +1418,18 @@ Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条
 > 里确实还是 `createRequire()` 双名解析 + 模块顶层 `throw`。
 
 ### 现象
+
 profile 里同时装 `dshmarket` 或 `dsh-context`（两者都以带 scope 名 `@deepseek-ai/schemastery` 走 ESM loader）时，
 插件 entry 报 `failed to import`、**15 个工具整体消失**、后端也不起；宿主**只回一句** `failed to import`，真异常被吞。
 顺序无关、包本身逐字节一致、`--dump-config-schema` 里该 entry 反而是 `schema`（导入成功）—— 故障现象与真因不在同一层。
 
 ### 根因
+
 解析只用 `createRequire()`，且**在模块顶层 `throw`**：该 require 在多插件共存时的宿主模块解析拦截下失败 ⇒
 模块**载入期**抛错 ⇒ entry 的 `fiber` 始终 `undefined` ⇒ 整体消失。本仓 `docs/DSH-更新适配.md` 早已点过这个失效模式。
 
 ### 改法（`src/index.ts`，3 处）
+
 1. **顺序**：ESM `await import()` 优先（`@deepseek-ai/schemastery` → `schemastery`），失败再退回 `createRequire`；
    形态判定要求真拿得到 `.object()`（拿不到就判为不可用，不赌）。
 2. **失败语义**：**顶层不再 `throw`** ⇒ 降级加载：`Config` 为 `undefined`，`apply()` 只注册一个
@@ -1270,23 +1439,27 @@ profile 里同时装 `dshmarket` 或 `dsh-context`（两者都以带 scope 名 `
    `op=doctor` 各加一行（"走了哪条通道 / 为什么失败"）。
 
 ### 顺带修：S10 补丁**回灌进 src**（否则一 build 就丢）
+
 S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`killBackendByCmd` 的 `signal` 参数、argv token
 精确匹配（防自伤）、看护"先清尸再重生"（连续 2 次探活失败 → SIGTERM → 1.2s → SIGKILL）。一旦 `npm run build`
 这些逻辑就会被抹掉。本次已补齐 src 侧，**src 与 lib 重新同源**，S10 的 `runtime/server.mjs` 部分本就在树里。
 
 ### 回归自检（新增，不需要 Blender）：`tests/schema_resolve_selftest.mjs`
+
 已接入 `npm test`，另有 `npm run test:schema`。四组 fixture 各自真 `import()` 一份 `lib/` 拷贝，只改它上方
 `node_modules` 里"有哪些名字"：
-| 组 | fixture 提供的名字 | 断言 |
-|---|---|---|
-| A | 只有 `@deepseek-ai/schemastery` | import 成功、走 `esm:` 通道、`Config` 正常构建 |
-| B | 只有 `schemastery` | import 成功、`Config` 正常构建 |
-| C | 两个都没有 | **不抛**；`Config === undefined`；注册的是诊断占位且回报原因/修法 |
-| D | 本包真身（真 node_modules） | 可 import、`__internals.schemaResolve.via` 有值 |
+
+| 组  | fixture 提供的名字              | 断言                                                              |
+| --- | ------------------------------- | ----------------------------------------------------------------- |
+| A   | 只有 `@deepseek-ai/schemastery` | import 成功、走 `esm:` 通道、`Config` 正常构建                    |
+| B   | 只有 `schemastery`              | import 成功、`Config` 正常构建                                    |
+| C   | 两个都没有                      | **不抛**；`Config === undefined`；注册的是诊断占位且回报原因/修法 |
+| D   | 本包真身（真 node_modules）     | 可 import、`__internals.schemaResolve.via` 有值                   |
 
 实测 **14 项全过**；C 组正是旧版"整体消失"的那条路径。
 
 ### 附带
+
 - **能力锁**：`tools_count` 从"数组长度"改为**集合去重**（降级分支会复用同一个 tool 名；本测试口径本来就是
   "只看集合（工具名）"）。工具面仍是 **15 个**，不是 16。
 - issue #10 里第 3 条（`tests/protocol_selftest.mjs` mock 端口随机到 >65535 触发 `ERR_SOCKET_BAD_PORT`）**未能复现**：
@@ -1303,6 +1476,7 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 > 本次把它做成自愈，改 2 个文件、6 处；实测红绿对照见下。
 
 ### 修 1：`runtime/server.mjs` —— EADDRINUSE 时"先判定死活，死了就夺回端口"（P0）
+
 - 原来只在 `server.on('error')` 里打印结论然后 `process.exit(1)`；现在：探活占用者（1200 ms），
   **能应答就不夺**（避免把"只是忙"的后端踢掉），**真死则 `SIGTERM` → 600 ms → `SIGKILL` 清场后重试 `listen`**（最多 2 次）。
 - 为什么必须升级到 SIGKILL：实测事件循环被占死的进程**收不到也处理不了 SIGTERM**。
@@ -1310,6 +1484,7 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
   于是那句"可执行结论"其实一直被 `catch (e2)` 吞掉、**从没写进 `backend-listen-error.txt`**；现已补 import。
 
 ### 修 2：`lib/index.js` —— 看护"先清尸再重生" + SIGKILL 升级
+
 - 看护原先探活失败就直接 `startBackend()`，**从不调用已有的 `killBackendByCmd()`**（它只被 `op=stop/restart` 用到）
   ⇒ 端口被僵死进程占着时每次重生都注定 EADDRINUSE。
 - 现在：连续 **2 次**（≈30 s，`probe` 超时仅 1500 ms，故不用单次判定）探活失败 →
@@ -1317,6 +1492,7 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 - `killBackendByCmd(port, signal='SIGTERM')` 增加信号参数，默认值保持既有调用点行为不变。
 
 ### 修 3：两处"杀进程"都改成 **argv token 精确匹配**（自伤修复）
+
 - 原判据是**整条 cmdline 子串匹配**（`cmd.includes('server.mjs') && cmd.includes('--port 9877')`）。
   实测自伤：调用方 `bash -c "... node runtime/server.mjs --port 9899 ..."` 的命令行同样含这两个串
   ⇒ 新版抢端口时把**调用方自己的 shell 一起 SIGKILL 掉**（本补丁首版即踩，被 A/B 测试当场抓出）。
@@ -1325,18 +1501,21 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 - 回归证据：同样带该字面量的 bash 调用**不再被杀**（修复前会被杀）。
 
 ### 修 4：`runtime/server.mjs` —— 信号处理强制退出兜底
+
 - `SIGTERM/SIGINT` 处理改为 `try{engine.stop()}catch{}` + `try{server.close()}catch{}` +
   `setTimeout(()=>process.exit(0),400)`：任一环节抛错/挂住都不会再让"占着端口的僵尸"活下来。
 - 实测：发 SIGTERM 后 **510 ms** 内退出。
 
 ### 红绿对照（本机实测，隔离端口 9898/9899，替身 = 占端口 + 忽略 SIGTERM + 永不应答）
-| | 旧版 | 新版 |
-|---|---|---|
-| 启动结果 | `exit 1`，日志 `已被占用（EADDRINUSE）…` | `僵死后端占着 9899：SIGTERM=[37258] SIGKILL=[37258] → 重试 listen` + `[blender-rt] http://…:9899/` |
-| `/health` | 无应答 ❌ | `{"ok":true,…}` ✅ |
-| 替身进程 | 仍活着（需人工 kill） | 已被 SIGKILL 清掉 ✅ |
+
+|           | 旧版                                     | 新版                                                                                               |
+| --------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 启动结果  | `exit 1`，日志 `已被占用（EADDRINUSE）…` | `僵死后端占着 9899：SIGTERM=[37258] SIGKILL=[37258] → 重试 listen` + `[blender-rt] http://…:9899/` |
+| `/health` | 无应答 ❌                                | `{"ok":true,…}` ✅                                                                                 |
+| 替身进程  | 仍活着（需人工 kill）                    | 已被 SIGKILL 清掉 ✅                                                                               |
 
 ### 未随包发布 / 升级注意
+
 - 这是**现场补丁**：插件包升级会覆盖 `lib/index.js` 与 `runtime/server.mjs`。原件与可重打 diff 在
   `tmp/patch-backup-20260929/`（`index.js` / `server.mjs` 原件 + `S10-selfheal.diff`，`patch -p0 < S10-selfheal.diff` 重打）。
 - **生效范围**：`runtime/server.mjs` 的部分**重启后端即生效**（`blender_viewport op=restart`）；
@@ -1345,6 +1524,7 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 ## v1.0.1（2026-09-28）—— 修 blender_rt_perf / blender_rt_opt 每个 op 都崩（perf API 从未注册）+ 描述按平台改写
 
 ### 修：perf / opt 两个工具全 op 报 AttributeError（P0）
+
 - **症状**：`blender_rt_perf`（status/analyze/apply/revert/help）与 `blender_rt_opt`（analyze/opt_analyze/opt_join）
   每一个 op 都回 `AttributeError: module 'dsh_rt_kernel' has no attribute 'dsh_perf_api'`（内核里只有
   `dsh_perf_api_fp`，那是 engine 写的内容指纹，容易被误读成"注册过"）。
@@ -1361,13 +1541,14 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 - 验证：隔离无头实测 status / help / opt_analyze / apply 全通（status 回 `engine=BLENDER_EEVEE`）；`npm test` 全绿。
 
 ### 改：`blender_rt_headless` 的路径提示改按平台分支
+
 - 原文案写死 `cwd 是 \\wsl.localhost\…\DSH，WSL 绝对路径必须带开头 /`，在 Windows 宿主上指向错误空间。
 - 现按新增的模块级 `IS_WIN` 分支：Windows 提示"给 Windows 路径"，WSL 保留原提示。
 - 描述预算门仍绿：rt_headless 1556（< 1600），15 个工具合计 11944（<= 12000）。
 
 ### 含
-- 本版以 v1.0.0 之后的 `13a10bd`（ext 安装提示文案修复）为基线。
 
+- 本版以 v1.0.0 之后的 `13a10bd`（ext 安装提示文案修复）为基线。
 
 ## v1.0.0（2026-09-28）—— 首个 1.0 发布：macOS 全 GUI 路径打通 + 对外能力冻结
 
@@ -1378,7 +1559,7 @@ S10 现场补丁原先只打在 `lib/index.js`（`src/index.ts` 里没有）：`
 >
 > **仓库同一提交的另两个动作**：
 > ① 删除本地与远端分支 `backup/v0.9.6-local-0926-2005`（独有 commit `0f99949`，删除后不再有 ref 指向它；
->   本地回看用 `git show 0f99949`，远端若已被 GC 则取不回）—— 此后只保留并推送 `main`；
+> 本地回看用 `git show 0f99949`，远端若已被 GC 则取不回）—— 此后只保留并推送 `main`；
 > ② 版本号 0.9.6 → 1.0.0（`package.json` / `src/index.ts` / `lib/index.js` 的 `PLUGIN_VERSION`），并重建 `lib/`。
 
 macOS 上宿主与 Blender 同机同 OS，跨 OS 路径改写退化为恒等。
@@ -1426,7 +1607,6 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 `npm test` 既有回归（协议 / 租约）不受影响。
 
-
 ## v0.9.6（2026-09-26）—— 上游整合 A1–A5（雕刻/修复/UV/制造/扫掠）+ addon 升 v1.7 + D1 工具可发现性
 
 来源：`docs/上游整合评估-mcp-for-blender与blend-ai.md`（对 ahujasid/mcp-for-blender 与 HoldMyBeer-gg/blend-ai 的实测盘点）。
@@ -1435,13 +1615,13 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 新增 5 个 runtime 模块（21 个 op，全部走 `blender_rt_plan`，不新增工具）：
 
-| 模块 | op | 说明 |
-|---|---|---|
-| `sculpt.py` | scan / setup / apply / filter / mask / remesh / selftest / help | **numpy 位移笔刷**（draw·inflate·pinch·flatten·smooth·crease）+ 体素/multires/subdiv/dyntopo + 遮罩 + GUI 滤镜 |
-| `mesh_fix.py` | repair / decimate / selftest / help | audit 只诊断，这里负责治：合并重复点 / 消零面积面 / 删孤立点 / 重算法线 / 可选封洞 |
-| `uv_tools.py` | stats / smart_project / unwrap / project / pack / selftest / help | UV 四件套；枚举从算子 RNA 读，不写死 |
-| `printcheck.py` | walls / overhang / report / selftest / help | BVH 射线测壁厚 + 法线锥测悬垂（不依赖 3D Print Toolbox 插件） |
-| `sweep.py` | analyze / build / selftest / help | 平行移动标架扫掠（拐弯不扭转）+ 弯折半径先算后建 |
+| 模块            | op                                                                | 说明                                                                                                           |
+| --------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `sculpt.py`     | scan / setup / apply / filter / mask / remesh / selftest / help   | **numpy 位移笔刷**（draw·inflate·pinch·flatten·smooth·crease）+ 体素/multires/subdiv/dyntopo + 遮罩 + GUI 滤镜 |
+| `mesh_fix.py`   | repair / decimate / selftest / help                               | audit 只诊断，这里负责治：合并重复点 / 消零面积面 / 删孤立点 / 重算法线 / 可选封洞                             |
+| `uv_tools.py`   | stats / smart_project / unwrap / project / pack / selftest / help | UV 四件套；枚举从算子 RNA 读，不写死                                                                           |
+| `printcheck.py` | walls / overhang / report / selftest / help                       | BVH 射线测壁厚 + 法线锥测悬垂（不依赖 3D Print Toolbox 插件）                                                  |
+| `sweep.py`      | analyze / build / selftest / help                                 | 平行移动标架扫掠（拐弯不扭转）+ 弯折半径先算后建                                                               |
 
 ### 实测数字（本机 Blender 5.2.2 LTS）
 
@@ -1525,9 +1705,10 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 ### A6/A7 · 材质节点图 + 渲染状态跟踪（对着真实用量做的两块）
 
-**A6 材质（material_*，6 个 op）** —— 实测动机：工作区 7,182 个脚本里 `nodes.new()/ShaderNode` 命中
+**A6 材质（material\_*，6 个 op）** —— 实测动机：工作区 7,182 个脚本里 `nodes.new()/ShaderNode` 命中
 **2,732 次 / 204 个文件**，每个 build 脚本都各自手写一遍 TexCoord→Mapping→Noise→ColorRamp→Principled；
 且 OBJ/MTL 交付会丢程序化节点。
+
 - `material_build`：10 个 preset（metal_brushed / metal_paint / rust / plastic / glass / fabric / wood /
   concrete / emission / hologram / unlit），一次调用建图并连线，参数可覆盖（base_color / scale / bump / ior…）
 - `material_scan`（只读）：节点数/类型分布/贴图依赖/procedural/needs_uv/被谁用
@@ -1539,6 +1720,7 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 **A7 渲染状态跟踪（render_state / render_wait / render_reset / render_guard_install / render_guard_selftest）**
 —— 实测动机：111 条失败里 **76 条是超时**，渲染占满主线程是主因之一；工作区 `render.render` 362 次 / 334 个文件。
+
 - **设计**：不"问 Blender"（渲染时问了也排队），改由 `bpy.app.handlers`（render_init / render_complete /
   render_cancel / load_post）在渲染开始时**写磁盘标记**、结束时删；后端（Node）读文件即可**秒判** busy
 - **行为**：渲染中主线程写命令**秒回 `BUSY_RENDER`** 并给出"用 render_wait 或改走 rt_job"的下一步
@@ -1555,15 +1737,15 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 现场结论是"方法论层撑得住、运行时层拖后腿"。逐项：
 
-| # | 现场问题 | 本批改动 | 验证 |
-|---|---|---|---|
-| ① | `/mnt/d` 变只读 ⇒ 后端写不了 status/ledger 起不来；报错只说"看后端日志"；9877 被僵死进程占着(EADDRINUSE) | `config.mjs` 新增 **workDir 探写 + 回退**（原候选 → 包内 `tmp` → OS tmpdir，**回退必留痕** `CFG.workDirFallback{requested,why,used,errs}`）；`server.mjs` 加 `EADDRINUSE` 明确文案（明说"僵死后端占端口"+ 处置）并落盘 `backend-listen-error.txt` | 模拟不可写：`DSH_BLENDER_WORKDIR=/etc/hostname/nope` ⇒ 自动回退到 `dsh-blender-plugin/tmp`、`writable=true`、`why=ENOTDIR…` ✅ |
-| ② | 后端一挂 headless/job/do 全废；没有官方离线通道（用户手搓 15 行恢复能力） | 新增 **`runtime/offline_bootstrap.py`**：建 `dsh_rt_kernel` → 注入 kit → 按名加载模块，`kapi(name)` 取 API；支持 `blender -b --python … -- vehicle audit` 与脚本内 `ob.boot([...])`（契约与在线路径一致） | 真机：`blender -b --factory-startup --python runtime/offline_bootstrap.py -- vehicle audit` ⇒ **`OFFLINE_BOOTSTRAP ok · 已加载：audit, vehicle`** ✅ |
-| ③ | `K` 在 import 进来的 `lib/*.py` 里不可见（推荐用法与实现冲突） | `kit.py` 新增 **`kapi(name)`** 与 **`install_kernel(ns=None)`**；文档给官方一行式 `import sys; K = sys.modules["dsh_rt_kernel"]` | 离线路径已实测 `kapi("generator")` → `Api` ✅ |
-| ④ | preload 模块名靠猜 | `kapi` 报错列已加载模块；engine 的 `preload 找不到模块` 报错**列全部可用模块名**并给 `preload="vehicle,audit"` 示例 + 指向离线逃生口 | 语法/单测通过 ✅ |
-| ⑤ | 返回类型不统一（`dsh_audit_api` 回 dict，skill 示例写 JSON 字符串） | skill 新增 **§0.71 调用约定**：`api(op,args)`→dict；`api["dispatch"](op,json_str)`→str（要自己 loads）；给 `kapi()`/`install_kernel()`/`preload` 命名规则/离线逃生口 | skill 已写入 ✅ |
-| ⑥ | `audit_gate` 装配语义没写清（222 件车必然过不了连通门） | catalog 的 audit 族 `not` 明确写：**连通门是「单体船」口径（默认 0.3 mm）**；多零件请调 `micro_gap_mm`(1–2 mm) 或走 `gate_plan(preset="assembly")`；skill §0.71 同口径 | discoverability 51/51 ✅ |
-| ⑦ | Blender 5.2 合成器漂移（`scene.node_tree` 已移除；Glare `mix`、Mix `blend_type` 改名）从插件助手深处爆 AttributeError | `kit.comp_tree(scene)` **版本容错取合成器树**（5.2 `compositing_node_group` → 旧 `node_tree`），拿不到时明确写清版本口径与改名清单 | 真机 5.2 上注册可用（`material.py`/`qc_render.py` 本身用的是材质 `node_tree`，未受影响） |
+| #   | 现场问题                                                                                                              | 本批改动                                                                                                                                                                                                                                          | 验证                                                                                                                                                 |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ①   | `/mnt/d` 变只读 ⇒ 后端写不了 status/ledger 起不来；报错只说"看后端日志"；9877 被僵死进程占着(EADDRINUSE)              | `config.mjs` 新增 **workDir 探写 + 回退**（原候选 → 包内 `tmp` → OS tmpdir，**回退必留痕** `CFG.workDirFallback{requested,why,used,errs}`）；`server.mjs` 加 `EADDRINUSE` 明确文案（明说"僵死后端占端口"+ 处置）并落盘 `backend-listen-error.txt` | 模拟不可写：`DSH_BLENDER_WORKDIR=/etc/hostname/nope` ⇒ 自动回退到 `dsh-blender-plugin/tmp`、`writable=true`、`why=ENOTDIR…` ✅                       |
+| ②   | 后端一挂 headless/job/do 全废；没有官方离线通道（用户手搓 15 行恢复能力）                                             | 新增 **`runtime/offline_bootstrap.py`**：建 `dsh_rt_kernel` → 注入 kit → 按名加载模块，`kapi(name)` 取 API；支持 `blender -b --python … -- vehicle audit` 与脚本内 `ob.boot([...])`（契约与在线路径一致）                                         | 真机：`blender -b --factory-startup --python runtime/offline_bootstrap.py -- vehicle audit` ⇒ **`OFFLINE_BOOTSTRAP ok · 已加载：audit, vehicle`** ✅ |
+| ③   | `K` 在 import 进来的 `lib/*.py` 里不可见（推荐用法与实现冲突）                                                        | `kit.py` 新增 **`kapi(name)`** 与 **`install_kernel(ns=None)`**；文档给官方一行式 `import sys; K = sys.modules["dsh_rt_kernel"]`                                                                                                                  | 离线路径已实测 `kapi("generator")` → `Api` ✅                                                                                                        |
+| ④   | preload 模块名靠猜                                                                                                    | `kapi` 报错列已加载模块；engine 的 `preload 找不到模块` 报错**列全部可用模块名**并给 `preload="vehicle,audit"` 示例 + 指向离线逃生口                                                                                                              | 语法/单测通过 ✅                                                                                                                                     |
+| ⑤   | 返回类型不统一（`dsh_audit_api` 回 dict，skill 示例写 JSON 字符串）                                                   | skill 新增 **§0.71 调用约定**：`api(op,args)`→dict；`api["dispatch"](op,json_str)`→str（要自己 loads）；给 `kapi()`/`install_kernel()`/`preload` 命名规则/离线逃生口                                                                              | skill 已写入 ✅                                                                                                                                      |
+| ⑥   | `audit_gate` 装配语义没写清（222 件车必然过不了连通门）                                                               | catalog 的 audit 族 `not` 明确写：**连通门是「单体船」口径（默认 0.3 mm）**；多零件请调 `micro_gap_mm`(1–2 mm) 或走 `gate_plan(preset="assembly")`；skill §0.71 同口径                                                                            | discoverability 51/51 ✅                                                                                                                             |
+| ⑦   | Blender 5.2 合成器漂移（`scene.node_tree` 已移除；Glare `mix`、Mix `blend_type` 改名）从插件助手深处爆 AttributeError | `kit.comp_tree(scene)` **版本容错取合成器树**（5.2 `compositing_node_group` → 旧 `node_tree`），拿不到时明确写清版本口径与改名清单                                                                                                                | 真机 5.2 上注册可用（`material.py`/`qc_render.py` 本身用的是材质 `node_tree`，未受影响）                                                             |
 
 **回归**：`npm test` **exit=0**（13 步）· discoverability 51/51 · guidance 通过 · `py_compile` 全过 · 离线逃生口真机通过。
 
@@ -1575,11 +1757,11 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 **根因（我的锅）**：S3-c 把 `launchBlender` 从 engine.mjs 搬到 `launch.mjs` 时，**只搬了函数体，没搬它的依赖**。逐个暴露出来的是：
 
-| 依赖 | 定义处 | 处理 |
-|---|---|---|
-| `tcpProbe` | engine.mjs | 复用 `runtime/backend_probe.mjs` 的 `probeTcp`（同语义，单一实现） |
-| `BLENDER_EXE` / `USER_CONFIG_WIN` / `USER_SCRIPTS_WIN` | paths.mjs | 补导入 |
-| `writeHeadlessScript` | engine.mjs | **抽出**到 `runtime/staging.mjs`；engine 具名导入 + 重导出（导出面不变） |
+| 依赖                                                                     | 定义处     | 处理                                                                                          |
+| ------------------------------------------------------------------------ | ---------- | --------------------------------------------------------------------------------------------- |
+| `tcpProbe`                                                               | engine.mjs | 复用 `runtime/backend_probe.mjs` 的 `probeTcp`（同语义，单一实现）                            |
+| `BLENDER_EXE` / `USER_CONFIG_WIN` / `USER_SCRIPTS_WIN`                   | paths.mjs  | 补导入                                                                                        |
+| `writeHeadlessScript`                                                    | engine.mjs | **抽出**到 `runtime/staging.mjs`；engine 具名导入 + 重导出（导出面不变）                      |
 | `baseChildEnv` / `withWslEnv` / `readJsonSafe` / `workdirStagingWarning` | engine.mjs | **抽出**到 `runtime/proc_env.mjs`；engine 导入（`readJsonSafe` 仍是 engine 本地，不进导出面） |
 
 **防复发**：新增 `tmp/dep_scan.py`（机械扫描：把 launch.mjs 用到的、定义在 engine/config/paths/staging/proc_env/backend_probe 里的顶层名，减去它的 import 与本地声明 ⇒ 列出缺依赖）。
@@ -1592,6 +1774,7 @@ dry_run   → LAUNCH ok · 给出 blender.exe 路径 + boot 脚本路径（不�
 真实 launch → LAUNCH ok · 已 spawn pid=2607071 · addon 端口 9876 已监听（5689ms）
 doctor    → ok
 ```
+
 （顺带把用户当时已退出的 Blender 拉回来了。）
 
 回归：`npm test` **exit=0**（13 步）· Blender 侧 **263 断言**全绿。
@@ -1602,12 +1785,12 @@ doctor    → ok
 
 修 `op=start` 时顺手把 `npm test` 用**退出码**判了一遍（之前我用 `grep 失败|✗` 判，漏掉了三类静默失败），挖出 4 个真问题：
 
-| # | 问题 | 根因 | 修法 |
-|---|---|---|---|
-| 1 | `/plan op=catalog args={verify:true}` 抛 `ReferenceError: ENGINE_SOURCE_PATH is not defined` | **S3-a** 把 `probeDiskCatalog` 搬进 `catalog.mjs` 时，`ENGINE_SOURCE_PATH` / `pathToFileURL` / `execFileSync` 三个导入都没跟过去 | catalog.mjs 补齐三处（`ENGINE_SOURCE_PATH` 由本模块位置解析，与 engine.mjs 同目录） |
-| 2 | 纯 python 导入 `generator.py` 直接 `NameError: _KIT` | **S1** 统一内核时，`_KIT` 只定义在 **POSTLUDE 字符串里**（注入生成脚本用的），模块顶层却在用它 —— Blender 侧靠 preload 命名空间串味掩盖了 | 模块顶层显式解析 + 缺失即明确报错；`tests/generator_dispatch_selftest.py` 在伪内核里先注入 kit（纯 python 路径） |
-| 3 | `catalog` 默认页 10,410 字符（守卫上限 9,600） | **S6** 给 13 族加的硬警告 + 提示行把一页索引撑长了 | 默认页只显示可操作那句警告、骨架封顶 160 字符（完整内容仍在 `args={family:…}` 与 handoff 块里）；现 **9,442 字符** ✓ |
-| 4 | `mac_selftest` 的 `/mnt/` 守卫、`provenance_stale_selftest` 的 C 系列失败 | **S3-b** 把 PATH_HELPERS 搬到 `paths.mjs`、**S3-a** 把目录搬到 `catalog.mjs`，而这两条守卫还在改/读 `engine.mjs` | 守卫改为读 engine + paths；provenance 改的是 **catalog 副本**，族数 27 → 28 |
+| #   | 问题                                                                                         | 根因                                                                                                                                      | 修法                                                                                                                 |
+| --- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | `/plan op=catalog args={verify:true}` 抛 `ReferenceError: ENGINE_SOURCE_PATH is not defined` | **S3-a** 把 `probeDiskCatalog` 搬进 `catalog.mjs` 时，`ENGINE_SOURCE_PATH` / `pathToFileURL` / `execFileSync` 三个导入都没跟过去          | catalog.mjs 补齐三处（`ENGINE_SOURCE_PATH` 由本模块位置解析，与 engine.mjs 同目录）                                  |
+| 2   | 纯 python 导入 `generator.py` 直接 `NameError: _KIT`                                         | **S1** 统一内核时，`_KIT` 只定义在 **POSTLUDE 字符串里**（注入生成脚本用的），模块顶层却在用它 —— Blender 侧靠 preload 命名空间串味掩盖了 | 模块顶层显式解析 + 缺失即明确报错；`tests/generator_dispatch_selftest.py` 在伪内核里先注入 kit（纯 python 路径）     |
+| 3   | `catalog` 默认页 10,410 字符（守卫上限 9,600）                                               | **S6** 给 13 族加的硬警告 + 提示行把一页索引撑长了                                                                                        | 默认页只显示可操作那句警告、骨架封顶 160 字符（完整内容仍在 `args={family:…}` 与 handoff 块里）；现 **9,442 字符** ✓ |
+| 4   | `mac_selftest` 的 `/mnt/` 守卫、`provenance_stale_selftest` 的 C 系列失败                    | **S3-b** 把 PATH_HELPERS 搬到 `paths.mjs`、**S3-a** 把目录搬到 `catalog.mjs`，而这两条守卫还在改/读 `engine.mjs`                          | 守卫改为读 engine + paths；provenance 改的是 **catalog 副本**，族数 27 → 28                                          |
 
 另外修了路由契约测试的**分类口径**：`参数不匹配 + did_you_mean` 恰恰证明**路由是通的**（只是空参不对），此前被误判成"路由失败" ⇒ 现在先排除参数类错误，真机 **70/70** 恢复。
 
@@ -1622,6 +1805,7 @@ npm test > /tmp/nt.log 2>&1; echo "exit=$?"     # exit=0 才算绿
 ### D27 · 修 bug：`blender_viewport op=start` 信陈旧句柄，端口没监听也回"已在跑"
 
 **现象（现场两次）**：
+
 - ① `op=start` 回「后端已启动（already-spawned）」→ 紧接着 `doctor` 失败、`curl /doctor` 4 s 超时：**9877 根本没有监听**；
 - ② 另一次真拉起来了，却因为等待窗口太短回「启动失败：spawned pid=…」。
 
@@ -1680,15 +1864,15 @@ npm test > /tmp/nt.log 2>&1; echo "exit=$?"     # exit=0 才算绿
 
 **改动**：7 个门槛常量默认值改为 `0 = 不设上限`，并在每处判断加 `cap > 0` 前置（**显式**设 env / 参数时才启用上限，那时行为与老版本一致）：
 
-| 常量 | 旧默认 | 新默认 | 位置 |
-|---|---|---|---|
-| `SHELL_MAX_FACES` | 300,000 | **0（不限）** | `audit.py:181`（逐壳朝向）|
-| `CONN_MAX_TRIS` | 4,000,000 | **0** | `audit.py:792`（连通/浮块）|
-| `BVH_MAX_TRIS` | 500,000 | **0** | `audit.py:1799`（网格级复核 / 干涉 BVH）|
-| `PAIRS_BBOX_CAP` | 200,000 | **0** | `audit.py:2205`（交叠对统计）|
-| `MATE_MAX_TRIS` | 2,000,000 | **0** | `contract.py:59`（配合门）|
-| `INSIDE_MAX_TRIS` | 200,000 | **0** | `contract.py:60`（射线内测试）|
-| `VOL_MAX_TRIS` | 60,000 | **0** | `contract.py:62`（体积估计）|
+| 常量              | 旧默认    | 新默认        | 位置                                     |
+| ----------------- | --------- | ------------- | ---------------------------------------- |
+| `SHELL_MAX_FACES` | 300,000   | **0（不限）** | `audit.py:181`（逐壳朝向）               |
+| `CONN_MAX_TRIS`   | 4,000,000 | **0**         | `audit.py:792`（连通/浮块）              |
+| `BVH_MAX_TRIS`    | 500,000   | **0**         | `audit.py:1799`（网格级复核 / 干涉 BVH） |
+| `PAIRS_BBOX_CAP`  | 200,000   | **0**         | `audit.py:2205`（交叠对统计）            |
+| `MATE_MAX_TRIS`   | 2,000,000 | **0**         | `contract.py:59`（配合门）               |
+| `INSIDE_MAX_TRIS` | 200,000   | **0**         | `contract.py:60`（射线内测试）           |
+| `VOL_MAX_TRIS`    | 60,000    | **0**         | `contract.py:62`（体积估计）             |
 
 **规模实测（1.57M 三角面：cube + subsurf 8 双层）**：
 
@@ -1748,7 +1932,6 @@ interference   ok=true analyzed=true      运行      ← 旧行为：门里这�
 现在：**静态 28/28 · 真机 70/70 可路由**（正常回执 47 · 空参被拒 22 · degraded 1）。
 后端/Blender 不在时**跳过**（exit 0），不阻塞离线 `npm test`。
 
-
 ### D23 · kit 按需执行：每次调用省 7.45ms（实测）
 
 `kit.py`（10.7KB）原本嵌在 `KERNEL_BOOTSTRAP` 里**每次 execute_code 都 exec 一遍**。在 Blender 里直接量：
@@ -1794,17 +1977,17 @@ if getattr(K, "dsh_kit", None) is None:
 
 每个自检都是**自包含**的：造临时对象/数据 → 验核心机制 → 清理。
 
-| 模块 | 验的是什么（evidence 摘录） |
-|---|---|
-| contract | 复位 → 登记真组件 → status 计数 ≥1 → 复位 |
-| deliver | 建临时立方体 → 导出 OBJ → 文件真的落盘 → verify 对 md5 |
-| montage | 造两张 8×8 PNG → 拼成 2 列 → 产物落盘 |
-| perf | ops 齐备 + status/apply/revert 可跑（**该模块由 engine 直调，不注册 K API** —— 如实标注） |
-| planner | status / diag / graph 都给结构化回执 |
-| presets | 存 → 取 → 套到真对象 → **值真生效**（location 1,2,3）→ 删 |
-| qc | **IoU 用已知答案验**（50/50 掩码交集 25、并集 75 ⇒ 1/3）+ resize + profile |
-| runner | status 空闲可读 + help 结构化（不真起循环） |
-| txn | mark → 真改变换 → revert → **变换真还原** + 列表可读 |
+| 模块     | 验的是什么（evidence 摘录）                                                               |
+| -------- | ----------------------------------------------------------------------------------------- |
+| contract | 复位 → 登记真组件 → status 计数 ≥1 → 复位                                                 |
+| deliver  | 建临时立方体 → 导出 OBJ → 文件真的落盘 → verify 对 md5                                    |
+| montage  | 造两张 8×8 PNG → 拼成 2 列 → 产物落盘                                                     |
+| perf     | ops 齐备 + status/apply/revert 可跑（**该模块由 engine 直调，不注册 K API** —— 如实标注） |
+| planner  | status / diag / graph 都给结构化回执                                                      |
+| presets  | 存 → 取 → 套到真对象 → **值真生效**（location 1,2,3）→ 删                                 |
+| qc       | **IoU 用已知答案验**（50/50 掩码交集 25、并集 75 ⇒ 1/3）+ resize + profile                |
+| runner   | status 空闲可读 + help 结构化（不真起循环）                                               |
+| txn      | mark → 真改变换 → revert → **变换真还原** + 列表可读                                      |
 
 **新套件** `tests/modules_selftest.py`（9 项，独立回归）：`HEADLESS {pass:9, fail:0}`。
 
@@ -1864,7 +2047,7 @@ S4 的机器直接用上了 —— 一条命令刷新能力锁与计数（**28 f
 **A. workdir 测试前提修正（账目校正）**：`tests/workdir_shared_selftest.mjs` 原先把「`/tmp` 不与 Windows 共享 ⇒ 必须被替换」写死，
 但本机 `/tmp` 就在 WSL 根文件系统上（可经 `\\wsl.localhost\Ubuntu\tmp\…` 访问）⇒ 插件判 `shared=true` 是**正确**的，测试却失败 4 项。
 改法（环境无关）：A1 改判「**判定自洽**」（`shared=true ⇒ why=distro-root-fs`；`false ⇒ why 点名独立挂载）；
-C 段按 `requestedShared` **分支验替换契约**；探针目录**动态选到真正的非共享挂载**（本机 `/dev/shm`）⇒ 替换分支照样真跑到。
+C 段按 `requestedShared`**分支验替换契约**；探针目录**动态选到真正的非共享挂载**（本机`/dev/shm`）⇒ 替换分支照样真跑到。
 实测 **10/4 → 14/0**。
 
 **B. 验收文档补「现状口径」**（`docs/插件与技能优化验收.md` §-1）：本机口径 = Blender 侧 237 断言全绿（107+78+52）+ Node 侧全绿（workdir 14/14）；
@@ -1929,7 +2112,7 @@ inset_lines=[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]   # 门�
 **实测**：肩线折痕 10 条环边 · 横向分缝 20 条边（整圈）· 凹陷 A/B 同带宽度 **868.9 → 850.2mm（−18.7mm）**。
 
 **两个必须记下的坑**：① **不能按 z 带匹配边** —— 环上顶点是离散的，目标高度上常常根本没有边（实测 `frac=0.55` 标到 **0 条**）；
-改用**环索引**标记（纵向线 = 各环最近点的连线）后稳定命中；② 横向特征线要求那个 x **有站位**，否则同样 0 条 —— 
+改用**环索引**标记（纵向线 = 各环最近点的连线）后稳定命中；② 横向特征线要求那个 x **有站位**，否则同样 0 条 ——
 现在 `vehicle_loft` 会在横向线处**自动插站**（实测 `stations_inserted: 1`，边数 0 → 24）。
 
 诚实口径：`z_mm` 只在几何确实存在该高度处中标（数量偏少是正常的）；要一条连续的腰线请用 `frac`。
@@ -1982,7 +2165,7 @@ inset_lines=[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]   # 门�
   阈值自适应（z_min + 0.35×(中位底边 − z_min)）。实测：合成跑车侧视（1px=10mm）⇒ 车长 **4300** 精确、
   轴距 **2687.5**（真值 2600，误差 3.4%）、前轴 860（真值 900）。
 - **`vehicle_loft`**：站表 → 逐站超椭圆环 → 放样；截面性格由 `n_top/n_bot/tumblehome/beltline_frac/
-  shoulder_inset/sill_tuck` 控制；`flare_mm` 做轮眉外扩（默认落在**底边被抬起**的站位 = 轮拱）；
+shoulder_inset/sill_tuck` 控制；`flare_mm` 做轮眉外扩（默认落在**底边被抬起**的站位 = 轮拱）；
   `crease_shoulder` 给腰线环边加 SubD 折痕（面感来源）。**折痕走 Blender 4+ 的 `crease_edge` attribute**
   （`e.crease_weight` 已不存在 —— 实测第一次 crease_edges=0）。实测：41 站 → 4295×611×723mm、3242 顶点、**134 条折痕**。
 - **`vehicle_panels`**：在给定 x 处**减去薄板**（缝宽 = 真几何）并可 `separate(type=LOOSE)` 成多件。
@@ -2071,17 +2254,18 @@ inset_lines=[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]   # 门�
 **最终：baseline_pass=true、capture_rate=1.0（8/8）、missed=[]**。
 但它第一次跑出来的是 **7/8**，并且顺着 `thin_wall` 这条漏网查出了 **4 个真 bug**：
 
-| # | bug | 症状 | 修法 |
-|---|---|---|---|
-| 1 | `print_walls` 射线起点偏移 `0.25×面尺寸` | 40×30×**0.3mm** 板采样为 0，报 30mm、thin=0（薄板根本测不到） | 起点只避开本面片（`1e-3×面尺寸`） |
-| 2 | 同一表面片的判定用"距离阈值" | 体素重构球出现 26% 假薄壁（此前用面尺寸阈值压着，一改就复现） | 改用**命中面法线**区分同片（同向）/对壁（反向），8 次重试 |
-| 3 | `_scale_avg(ob)` 用于各向异性缩放 | 底板 z 缩 0.1（3mm→0.3mm）被算成 2.1mm ⇒ 薄壁漏判 | 命中点与面心都用 `matrix_world` 变换后量**世界距离** |
-| 4 | gate 的 `pass_if` 优先级 | 子 op `ok=false`（如 print_report 的"某件悬垂不过"）压过显式判据，判据为真也判 fail | **写了 `pass_if` 就以它为准**，只有 degraded 例外（不许把降级读成通过） |
+| #   | bug                                      | 症状                                                                                | 修法                                                                    |
+| --- | ---------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 1   | `print_walls` 射线起点偏移 `0.25×面尺寸` | 40×30×**0.3mm** 板采样为 0，报 30mm、thin=0（薄板根本测不到）                       | 起点只避开本面片（`1e-3×面尺寸`）                                       |
+| 2   | 同一表面片的判定用"距离阈值"             | 体素重构球出现 26% 假薄壁（此前用面尺寸阈值压着，一改就复现）                       | 改用**命中面法线**区分同片（同向）/对壁（反向），8 次重试               |
+| 3   | `_scale_avg(ob)` 用于各向异性缩放        | 底板 z 缩 0.1（3mm→0.3mm）被算成 2.1mm ⇒ 薄壁漏判                                   | 命中点与面心都用 `matrix_world` 变换后量**世界距离**                    |
+| 4   | gate 的 `pass_if` 优先级                 | 子 op `ok=false`（如 print_report 的"某件悬垂不过"）压过显式判据，判据为真也判 fail | **写了 `pass_if` 就以它为准**，只有 degraded 例外（不许把降级读成通过） |
 
 — 顺手：`print_report` 增加门友好顶层字段（`walls_ok / overhang_ok / thin_samples_total / worst_min_mm /
 **worst_p05_mm**`）；门判据改用**稳健分位 p05**（实测体素球有 0.05% 近零离群样本，判 min 会假报薄壁）。
 
 **② 参考图量具 `img_scan / img_crop / img_annotate / img_diff`** —— 把"看不清"变成"不用看"：
+
 - `img_scan`：轮廓 bbox / 长宽比 / 填充率 / 主轴角 / 主要直线角度 / ROI 前景率 / 指定点取色（Otsu 自分割，
   并给 `mask_warning`：前景 >95% 就明说"没分出背景，数字不可信"）
 - `img_crop`：ROI 裁剪 + 最近邻上采样落盘（**中央凹式看图**：一次一块，尽量占满视觉输入）
@@ -2101,11 +2285,11 @@ inset_lines=[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]   # 门�
   无从成立 ⇒ `attached=True`、`evidence="single-body"`，并在 `confirm_note` 里指路
   `audit_mesh(island_split=true)` 查内部壳贴合。
 - **三种相邻关系回归**（各 1 单位立方体两块，同一 mesh）：
-  | 关系 | 修前 | 修后 |
-  |---|---|---|
-  | 互插 0.1（工艺要求） | pass（micro 容忍 2） | **pass**（不变） |
+  | 关系                     | 修前                          | 修后                   |
+  | ------------------------ | ----------------------------- | ---------------------- |
+  | 互插 0.1（工艺要求）     | pass（micro 容忍 2）          | **pass**（不变）       |
   | **正好相贴 gap=0.00 mm** | **fail（误报 1 个可见浮块）** | **pass**（可见浮块 0） |
-  | 相距 5 单位（真孤立块） | fail | **fail**（不变） |
+  | 相距 5 单位（真孤立块）  | fail                          | **fail**（不变）       |
 - **② 灯组可发现性**：`qc_render_views` 的 `lights={key,fill,rim}` / `lights=false` /
   `lights_mode="add"|"only"` 一直支持，但 qc 家族目录里没提（现场为此自己补了一盏背光）。已补进家族条目。
 - 回归：无头整合自检 **61 → 63 断言**（新增"相贴 ⇒ pass 且可见浮块=0""孤立块仍 fail"）；`npm test` 全绿。
@@ -2116,6 +2300,7 @@ inset_lines=[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]   # 门�
 
 **③ 规格驱动门包（`gate_plan / gate_run / gate_selftest / gate_help`）** —— 现场为这三个门自写了
 interference / redcheck / selfint_diag ≈600 行，现在由插件执行与取证：
+
 - spec 三形态：.json / .py 模块（`SPEC` 或 `NAME/UNITS/TOLERANCE_MM/GATES`）/ 内联 dict，另带 3 个 preset
   （assembly / print / delivery）
 - **三态显式**：每门 pass/fail/degraded/error；整包 `verdict` = 任一 fail → fail，否则任一 degraded → degraded，
@@ -2127,6 +2312,7 @@ interference / redcheck / selfint_diag ≈600 行，现在由插件执行与取�
 - 插曲：真机验证顺带发现你当前场景是 **103 个对象 / 0 个 mesh**（audit_scene 如实拒绝："场景里 0 个 mesh"）
 
 **① `audit_mesh` 自交分岛（`island_split` / `min_island_verts`）** —— 现场手工做过的归因实验内置：
+
 - 边连接并查集 → 连通岛；自交对分**同岛 / 跨岛**；`min_island_verts=N` 滤掉"任一侧面属于 <N 顶点小岛"的相交
 - 新字段：`islands{count, small_islands}` / `self_intersections_same_island` / `_cross_island` /
   `_filtered_small_island` / `_kept`，进 `summary_only` 白名单
@@ -2134,6 +2320,7 @@ interference / redcheck / selfint_diag ≈600 行，现在由插件执行与取�
   一条边把两块壳连起来 ⇒ 认 1 岛且记同岛自交（**真互穿 vs 良性压入**从此可分开读数）
 
 **② 连通性逐对象 + verdict（`per_object=true`）** —— 3 M 面整体只能 bbox-only 的那个坑有正解了：
+
 - `audit_connectivity(per_object=true)` 逐件跑，每件通常在上限内 ⇒ 拿回 mesh(BVH) 级结论，
   回 `objects[{object,state,verdict,tris,mesh_mode,real_floaters,reason}]` + `"failed_objects"/"degraded_objects"`
 - `_gate_from` 与 `audit_gate` 都补 `verdict`；degraded 一定带 `warn: "DEGRADED ≠ 通过…"`
@@ -2334,6 +2521,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 并逐条补上 §8 的验收测试（`tests/acceptance_v093.mjs`，62 条断言 / 真机 Blender 5.2.2）。
 
 ### 路线决定（§5）：**headless 批处理 = 第一路径**，直连 GUI = 交互式增益
+
 - 证据：7/7 协作者全程 headless、9876 addon 从未 Connect、`rt_do/rt_see/rt_watch/rt_cmd` 0 调用；
   而 `audit_*/qc_*/deliver_*` 本来就能在 headless 直调（`preload=` 通道），只是描述里没写。
 - 落地：见 `docs/headless优先-路线决定.md`（含 17 行 op→preload 对照表 + 5 段 copy-paste + 任务模板）；
@@ -2341,6 +2529,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - **不删任何工具**：GUI 工具仍是「改一步看一眼」的增益，只是不再是默认入口。
 
 ### P0-1 · D1/F3：超时不再吞结果（promoted 语义）
+
 - **客户端等待窗口**（`DSH_HEADLESS_WAIT_MS`，默认 100 s）：到点或宿主取消 → 回
   `{kind:"promoted", jobId:"run-…"}`，服务端子进程照跑，`blender_rt_job(op="collect"|"wait", id=…)` 收结果。
 - **runId 由客户端生成**并随请求下发 → 窗口到点时**立刻**有可用句柄（旧版只能去猜 /status 里的最近一条）。
@@ -2351,6 +2540,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   另有 `DSH_HEADLESS_AUTO_JOB_MS`（默认 0=关）把「预计预算 ≥ 阈值」的调用直接后台化。
 
 ### P0-2 · D5：长任务可观测（PYTHONUNBUFFERED + stage 心跳）
+
 - 三处 spawn（headless / job / worker）统一走 `baseChildEnv()` → 注入 **`PYTHONUNBUFFERED=1`**；
   实测：job 的 `stdout.log` 在**运行期**就有增量（旧版全程 0 字节，退出才落盘）。
 - 新增 stage 心跳契约：脚本里 `dsh_stage("building")` / `K.progress("building", i=3)` →
@@ -2358,6 +2548,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - `op=status` 新增 `stage / stageName / stageAt / stageAgoMs / lastOutputAt / idleMs / lines / logBytes / pidAlive`。
 
 ### D2/D3 · 回执结构化（一次重构）
+
 - 工具返回**两个 text block**：block 0 = 单行 JSON 信封（可直接 `JSON.parse`），block 1 = 人读摘要。
   信封字段：`kind/status/ok/runId/jobId/resultJson/resultTruncated/resultPath/resultPathWsl/resultBytes/`
   `resultParseError/stdoutTail/stderrTail/logs/artifacts/shots/inputFile/pathWarnings/stage/...`。
@@ -2366,6 +2557,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - 大结果：>4 KB 自动落盘并给 `resultPath` + `resultPathWsl`（`resultTruncated=true`）；`out_json=` 显式指定亦可。
 
 ### D6 · 作业层接口补齐
+
 - `op=start` 与 headless 同形参：`script_file` / `args` / `env` / `factory_startup` / `bootstrap` / `workdir` / `include_noise` / `out_json`。
 - 新增 **`op=wait`**（阻塞到完成或超时，默认 120 s/次、上限 600 s，服务端走流式心跳）——
   不必再连发 `op=status`（会撞外层 harness 的重复调用检测）。
@@ -2375,19 +2567,22 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - 租约门禁：`wait` / `kill` 不再受**写租约**阻塞（它们是读/终止自己的作业，不碰 live 场景）。
 
 ### D4/F4/F6 · 路径空间与指纹
+
 - `outdir` / `out_json` / `file` 收 WSL 路径（`/home/…` → `\\wsl.localhost\<distro>\home\…`），回执给 Windows + WSL 两种真实路径。
 - **`winToWsl()` 补 UNC 分支**（`\\wsl.localhost\…` → `/…`）：旧版原样返回 → workDir 用 WSL 路径时台账/results/trajectory 全落在一个 Node 打不开的串上（实测）。
 - 路径体检（`pathWarnings`）：脚本把 POSIX 绝对路径交给 Windows API（`scene.render.filepath` / 日志里 `Saved: 'C:home…'`）会被抓出来并给 `K.win_path()` 修法。
-  *口径说明*：D4.3 原文建议「显式报错」；这里落成**可审计的告警 + hint**（不中断脚本）—— 因为脚本中途硬失败会让「已经渲好的图」一起丢掉。
+  _口径说明_：D4.3 原文建议「显式报错」；这里落成**可审计的告警 + hint**（不中断脚本）—— 因为脚本中途硬失败会让「已经渲好的图」一起丢掉。
 - `inputFile`（F6）：`file=` 回执带 `{path,size,mtimeMs,mtime,md5}`（>512 MB 只哈希前 64 MB 并标 `md5Partial`）。
 
 ### F1/F2 · 多视角渲染一体化 + 取景自诊断
+
 - `blender_rt_headless(shots=[{name, from, look_at, lens, res, samples, ortho, ortho_scale, margin}], outdir=…)`：
   走 `qc_render.py` 的 `qc_render_views`（自动三点光 / 渲染锁 / 逐张 md5 / 设备回读），回执 `res.shots =
-  [{name, path, ms, bytes, md5, coverage_estimate, warning?}]`；主体占画面 <5% → `warning.code="subject_too_small"`。
+[{name, path, ms, bytes, md5, coverage_estimate, warning?}]`；主体占画面 <5% → `warning.code="subject_too_small"`。
 - `shots` 也支持对象形态 `{views:[…], res, samples, tag, warmup, margin}`；与 `script` 可同给（先跑脚本再出图）；`as_job=true` 同样有效。
 
 ### 顺手修掉的静默失败（验收过程中实测发现）
+
 - **`blender_viewport(op=status)` 在 addon 未连接时也能用**：旧版第一句 `addon.send` 就 throw → 本地信息
   （版本自证 / 台账 / workDir 可写性）全都看不到，而这恰恰是最需要它们的时候。
 - **workDir 可写性自证**：`status.ledger` 增 `writable / workDir{wsl,win} / lastError / hint`，`doctor` 直接打印「工作目录：…（⚠️ 不可写 …）」+ 修法；
@@ -2395,9 +2590,11 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - `jobStart` 的引擎前导与 headless 对齐（`engine="none"` 不再被塞进 EEVEE 前导）。
 
 ### 验收
+
 - 新增 `tests/acceptance_v093.mjs`（`npm run test:acceptance`）：**62 条断言全绿**（真机 Blender 5.2.2 / EEVEE），
   逐条对应 §8：D1/D2/D3/D4/D5/D6/D6-stale/F1/F6/F5-doc。
 - 回归：`npm test`（协议自检 28 项）全绿。
+
 ## v0.9.2（2026-09-23）—— DSH 更新适配：取消/超时契约 + 宿主 API 自证 + 图片静默失败 + bundle 声明
 
 来源：对「DSH 更新后本插件会不会坏」做的一次逐包 diff + 实测核查（宿主 0.1.6-alpha.1 ↔ npm 最新
@@ -2406,6 +2603,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 本版修的是**契约之外的四个面**：
 
 ### R3 宿主取消/截止信号贯通（曾经会"假死"）
+
 - 新增 `EXEC_CTX`（AsyncLocalStorage）+ `execSignal()`：`vTool()` 统一把宿主的 `exec` 放进
   异步上下文，`withTimeout()` 用 `AbortSignal.any` 合并 `exec.signal` —— **15 个工具体一行没改**。
 - 取消时的措辞固定为 `ABORT_HINT`（只说"等待被取消"，不谎称任务失败；提示长任务按 `runId` 回收）。
@@ -2415,6 +2613,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   不声明 = 上游一旦给默认值，就会出现"Blender 侧还在跑、工具已被判超时"的静默错位。
 
 ### R2 宿主 API 自证（解析链是活的，不是副本）
+
 - 本机解析链：插件 `node_modules/@deepseek-ai/dsh-tools` → `~/dsh-harness`（fake checkout 软链）→
   `/usr/lib/node_modules` 的**全局安装**。好处是与宿主同版本（无陈旧副本），代价是全局安装位置一变
   就在载入期 `ERR_MODULE_NOT_FOUND`（15 个工具全消失，看不出原因）。
@@ -2422,11 +2621,13 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   `op=status` 的 JSON 增加 `hostApi` / `toolVersion` 字段。
 
 ### R8 图片回传不再静默（`toAttachment`）
+
 - 旧行为：附件服务不可用/超限一律 `catch → undefined`，模型只看到纯文本、没有任何告警。
 - 新行为：返回 `{ref}` 或 `{why}`；`rt_see`（视口/自定义视角）、`rt_do`、`rt_watch` 在未回传时把
   `⚠ 图片未回传：<原因>` 写进工具文本。
 
 ### R5/R1 按 `dsh.bundle` 约定声明 bundle，并**实际切到 bundle 式装配**（2026-09-23）
+
 - `package.json` 加 `dsh.bundle.patch = ./cordis.patch.yml`；新增 `cordis.patch.yml`（insert 自己的行）。
   `@deepseek-ai/dsh-plugin-manager` 用该字段判定"能否作为 profile layer 管理/装配"，没有它只能靠
   super-injector 运行时注入（注入器一坏，插件整体消失）。
@@ -2436,6 +2637,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - 装配变更记录、迁移表、回滚与新自检命令见 `docs/DSH-更新适配.md §4`。
 
 ### 可复跑回归
+
 - 新增 `tests/dsh_api_compat_probe.mjs`（`npm run test:dsh-api`）：用宿主或**指定版本**的 dsh-tools
   跑一遍注册，断言 15 工具 / 15 timeoutMs / 0 报错，可输出基线 JSON 供跨版本 diff；`--smoke` 还会
   用已 abort 的信号真调一次 `blender_viewport`，验证取消链路。
@@ -2449,6 +2651,7 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 本版给它加了自诊断（见 D2）。
 
 ### P0-A1 未知名视角不再静默替换（qc_render v3）
+
 - `views` 非空且**一个都没解析成功** → `ok:false` + `unknown_views` + `available_views`（22 名目录）+ `hint`；
   **一张都不渲**（旧行为：静默兜底渲 4 视角且 `ok:true` → "文件名对、角度错"的图混进证据链）。
 - `views` 省略/空 → 与 v0.8.11 一致的默认 **3 视角**（iso/front/right）。要 Procedura 的 4 视角集就显式传那四个名字
@@ -2460,36 +2663,43 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   实测：`["front","totally_bogus","side_left"]` → 3/2/1，实际渲 `front`+`left`。
 
 ### P0-A2 无头 QC 默认 `view_transform="Standard"`（qc_render v3）
+
 - 缺省 = `"Standard"`（去掉 AgX/Filmic 洗淡，阈值判读才可靠）；传 `"scene"` = 沿用场景（旧行为，beauty 图用）；传具体名 = 用那个。
 - 返回体与**每行 jsonl** 都带实际用的 `view_transform`；出图后**逐项还原**场景（实测：缺省返回 Standard 而场景仍是 AgX）。
 - ⚠ 行为变更：依赖"跟随场景色彩变换"的老调用请显式传 `view_transform="scene"`。
 
 ### P0-A3 结构化结果不再只能从 stdout 切片
+
 - `blender_rt_headless` 新增 `out_json=<path>`；**>4KB 的结果自动落到工作目录 `results/<runId>.json`**（返回体 `resultPath`/`resultBytes`）。
 - 工具文本里 `result` 显示上限 2 KB → **6 KB**；已有结构化结果时 stdout 块只留头尾（不再重复放大）。
 - plan 通道结果上限 **4 KB → 12 KB**（量测表/探针输出不再被砍）。
 
 ### P0/P1-A4 假失败分档 + 按 runId 回收
+
 - 返回体新增 `status`（`finished / script_error / blender_error / timeout / gpu_required_missing / blender_exe_missing`）+ `failure_hint`。
   **实测坑**：脚本 `raise ValueError("boom")` 时 Blender **退出码仍是 0**，旧判据只看 exit 会漏判 → 现在按"回执缺失 + stderr 异常标记"判 `script_error`。
 - `runId` + `how_to_recover` 进返回体：客户端断连**不代表失败**，用 `blender_rt_job(op="status"/"collect", id=runId)` 回收。
 
 ### P1-B1/B2 API 一致性
+
 - `K.dsh_*_api` 从普通 dict 换成**可调用 dict 子类**：`api("op", {…})` / `api({…})` → **已解析的 dict**；`api.call(...)` 同义；
   `api["dispatch"](op, json_str)` **仍返回 str**（引擎契约不变）。覆盖 audit / contract / txn / deliver / generator / motion / planner / presets / perf / runner + qc_render + view。
 - 顺带记一个坑：`dict` 是静态类型，`instance.__class__ = 子类` 会 `TypeError`（实测）→ 实现改成"换成新实例"。
 
 ### P1-B3 headless 收脚本文件
+
 - 新增 `script_file=<.py>`（Windows `D:\…` 与 WSL `/home/…` 都收）；`file=` 传 `.py` 时**自动识别为脚本**并标 `auto_from_file:true`
   （旧版直接 `File format is not supported in file "…py"` —— 实测复现）。
 
 ### P1-B4 参数/环境契约
+
 - 新增 `env={…}` 入参；插件自动注入 `DSH_RUN_ID / DSH_OUTDIR / DSH_ARGS / DSH_SESSION / DSH_PLUGIN_VERSION`，
   脚本里可读 `K.args / K.run_id / K.session / K.outdir_env / K.env`。
 - **实测坑**：从 WSL 侧 spawn Windows 的 blender.exe 时 **env 不自动跨界**（Node 传了 6 个 DSH_*，子进程 `os.environ` 一个都看不到）
   → 自动声明 `WSLENV` **并**在脚本里再注入一次（双保险）。实测 `K.args == ["delta","echo"]` 且脚本内能看到 `DSH_*`。
 
 ### P2-C1 文件级干涉/重叠算子（audit v3：AUDIT_VERSION 2→3）
+
 - `audit_overlap(file_a, obj_a, file_b, obj_b)`：BVH 三角面对 + **真交线段长度** + 交叠 bbox（场景单位与 mm 都给）；
   两端都可以是"当前会话对象"或"另一个 .blend 文件"，不必先 `register_component`。
 - `audit_interference(...)`：**交集体积估计（mm³）+ 95% 置信区间 + 三态**（supported / refuted / unresolved）；
@@ -2501,20 +2711,24 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   ⚠ 误差口径修正：我 brief 里那句"n=200k、占比 10% 时约 ±0.4%"偏乐观，正确值 **±1.31%**（公式已写进返回体 `error_caliber`）。
 
 ### P2-C2 audit 类 op 支持 `file=`
+
 - `audit_connectivity / audit_gate / audit_measure` 都接受 `file=<.blend>`：临时加载 → 同一分析链路 → **无论成败都清理**；
   返回体带 `source: "file:<path>"` 与 `cleanup` 明细（实测 file= 结果与会话侧 objects/tris/bbox 逐项相等，对象名保持文件原名）。
 
 ### P3-D1 GUI 原语（view v2）
+
 - `gui_frame(object=…)` / `gui_shading(mode=…)` / `gui_open(path=…)` / `gui_help()` —— 由插件侧在**真 UI 上下文**执行
   （`rt_do` 里 `bpy.context.screen` 是 None）。实测 `gui_frame(object="Cube")` → `framed:"Cube", mode:"selected"`。
 
 ### P3-D2 自定义视角自诊断（view v2）
+
 - 返回体带 `coverage_estimate`（底色取**众数**，`background=true` 也不会误判）与 `objects_in_frame`（把物体 bbox 投到画面里数）+ `scene_bbox`；
   数不到几何时给 `warning{code:"frame_looks_empty", scene_bbox, suggest:{from,look_at,lens}}`。
   实测：瞄空帧 → 覆盖 0.00% + 告警 + suggest；照 suggest 再出一次 → **覆盖 68.11%**（不必自己按 Home）。
 - 顺带修：`x-dsh-view` 头过去只带 5 个字段且截 500 字符；**非 ASCII（中文告警）直接 502 "Invalid character in header content"** → 头值改 URL 编码。
 
 ### P2-E1 渲染队列/锁（qc_render v3）—— 替代成员自建的 `render_lock.py`
+
 - 跨进程文件锁 `<工作目录>/locks/render.lock`（TTL + 持有者 + 等待毫秒）：`blender_rt_plan(op="render_lock", args={action:"acquire"|"release"|"status"})`；
   `qc_render_views` 渲染前后**自动** acquire/release（`lock=false` 可关），`waited_ms` / holder / stale 写进返回体与每行 jsonl（**计时口径可审计**）。
 - holder 缺省 `DSH_SESSION#<pid>`（同一会话里并发多进程也彼此唯一）；断锁**只认 `acquired_at` 时间戳 + TTL**，不看进程存活。
@@ -2522,9 +2736,11 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   线上真锁现场：一个被掐掉的进程留下锁 → 600s TTL 到期后被下一个 acquire 打破。
 
 ### P3-E2 默认产物路径带会话
+
 - 会话名 `DSH_SESSION`（缺省 `plugin-pid-<pid>`）：evidence 默认路径 → `dsh_evidence_<session>.png`（实测）；`status` 里给 `session` / `resultsDir`。
 
 ### 顺带修掉的工具层真 bug（本轮实测发现）
+
 - **plan 工具的 `args` 会被静默丢弃**：harness 的 `type:"json"` 有时把对象给成**字符串**，旧代码 `typeof x === 'object'` 判空 →
   **任何 plan op 的参数被无声忽略却返回 `ok:true`**（本轮 `gui_frame` / `gui_shading` 踩到；给 `bogus_key` 也不报"参数不匹配"）。
   现在 `jsonPayload()` 容错解析（对象/JSON 字符串都收），非法 JSON 明确报错。
@@ -2532,11 +2748,11 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - `perf`/`opt` 无参 op 传了 `{}` → python 侧多收一个位置参数（实测 `_dsh_perf_status_cycles() takes 0 positional arguments but 1 was given`）→ 空参回退 `undefined`。
 
 ### 自检与回归
+
 - 新增 `tests/engine_probe.sh`（**16 项**后端 HTTP 探针）→ **16/16**；新增 `tests/view_diag_selftest.py`（**16 项**）→ **16/16**；
   `qc_render` 自检 → **29/29**（v3）；`tests/audit_file_selftest.py` → 见下；既有 9 个自检全部复跑。
 
 ---
-
 
 ## v0.9.0（2026-09-17）—— Procedura 融合：装配级判据 + 数值化改动度量 + 判定随几何失效
 
@@ -2552,10 +2768,10 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   判据：可见浮块 = 最长 bbox 边 ≥ 全模型最长边 **1%**；相接口径 `micro_gap_mm`（默认 0.3）。
   **与上游两处有意分歧**（都写进返回体，不藏）：
   ① 不再用「最大体积分量=主体、其余都是浮块」—— 两个等大零件时那条规则会随便挑一个当浮体（自检抓到过，A/C 体积都是 1.0）；
-     改成**每个分量都问「你有没有跟别的分量相接」**（`attached` 三分类：floaters / tolerated / unconfirmed）。
+  改成**每个分量都问「你有没有跟别的分量相接」**（`attached` 三分类：floaters / tolerated / unconfirmed）。
   ② 上游靠 bbox 间隙判 micro（单网格够用；**多对象装配里 bbox 普遍重叠 → 间隙恒为 0 → 一律放行**），本版补**网格级复核**：
-     BVH `find_nearest_range` + **面上采样**（≤400 点，取顶点会漏 —— 大平面间的 0.2mm 缝顶点可能相距几米）。
-     自检用例 F（bbox 与 A 重叠、面到面 1.32 mm）被判浮块；用例 C（0.2 mm 缝）判真 micro。
+  BVH `find_nearest_range` + **面上采样**（≤400 点，取顶点会漏 —— 大平面间的 0.2mm 缝顶点可能相距几米）。
+  自检用例 F（bbox 与 A 重叠、面到面 1.32 mm）被判浮块；用例 C（0.2 mm 缝）判真 micro。
   大网格（>50 万三角面）跳过网格复核 → `attached=None` → 门**降级 ok=null**，未确认不得读作已通过。
   口径与分布随返回回传（`gate_caliber` / `gap_histogram` / `floater_gap_range_mm`）。
   **真机实测（COCKPIT_DELIVERY，14 对象 / 97,438 面）**：0.3 mm 口径 → 178 个可见浮块（与最近邻相距 0.33–1.14 mm）+ 970 个确认相接；
@@ -2610,10 +2826,11 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - **生成器 `generator_*`（新模块 generator.py）—— #18 代码化建模通道的 Blender 原生轻量版**。
   本机两侧都没装 OpenSCAD（真接它要 Manifold 后端：同一 `hull()` CGAL 1774 s vs Manifold 1.77 s），所以把那四件事用 Blender 原生方式拿到：
   **程序即形状**（注册一段 python 生成器）+ **编译门**（在全新无头进程里从零复现）+ **模块级缓存**（源码 hash + 参数 hash 都没变就不重跑）
-  + **源码一变回执过期**。自检实测：3 个方块 supported（805 ms）→ 再跑命中缓存（ms=0）→ expect 不符 refuted → 没给 expect unresolved →
-  改源码后 diff.changed=true/verdict=refuted → 坏脚本 refuted。
+  - **源码一变回执过期**。自检实测：3 个方块 supported（805 ms）→ 再跑命中缓存（ms=0）→ expect 不符 refuted → 没给 expect unresolved →
+    改源码后 diff.changed=true/verdict=refuted → 坏脚本 refuted。
 
 **顺带修掉的两个基础设施问题（都来自本版实测）**：
+
 - **preload 多模块互相覆写 helper**：engine 把多个模块源码拼进**同一 globals**，而每个 runtime 模块都定义 `_j/_kernel/_store/_now` →
   实测 `preload="txn,deliver"` 直接把 txn 打崩（`KeyError: 'marks'`）。现在每个模块 exec 到**自己的命名空间**
   （私有名不外泄，公开名与常用 import 照旧拷回 globals → 向后兼容），两个路径（headless / 作业层）都改。
@@ -2622,7 +2839,6 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
   见 `contract._features_path()`）。
 
 ---
-
 
 ## v0.8.9（2026-09-16）—— 修「>15 s 的调用静默失败」等 6 条（外部会话反馈，批次 1）
 
@@ -2650,29 +2866,30 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 ## v0.8.8（2026-09-15）—— 内置多视角渲染 harness（P2-1，外部反馈 #4 最后一项）
 
 外部反馈要的形态：入参 {file, views[], res, samples, thr, outdir} → 自动按 bbox 精确取景 + 固定三点光
-+ 逐张 jsonl 计时 + 不超过 budget 的判定（"这是任何建模任务都要重写一遍的东西"）。本轮把它收敛成通用能力。
 
-- **新模块 `runtime/qc_render.py`**（挂 `K.dsh_qc_render_api`），入口 `blender_rt_plan(op="qc_render_views", args={...})`；
+- 逐张 jsonl 计时 + 不超过 budget 的判定（"这是任何建模任务都要重写一遍的东西"）。本轮把它收敛成通用能力。
+
+* **新模块 `runtime/qc_render.py`**（挂 `K.dsh_qc_render_api`），入口 `blender_rt_plan(op="qc_render_views", args={...})`；
   也支持 `args.asJob=true` 直接转作业层（无头进程天然隔离场景）。qc.py 侧同时注册 `render_views` 转接（只注入 qc.py 也能用）。
-- **自动取景**：合并所有可见 mesh 的 AABB（`targets` 可限定）→ 逐角解算相机距离 + `margin` 留白；具名视角
+* **自动取景**：合并所有可见 mesh 的 AABB（`targets` 可限定）→ 逐角解算相机距离 + `margin` 留白；具名视角
   front/back/left/right/top/bottom/iso/iso_l/iso_back/front_high/right_high，也支持 `az=35,el=20` 与显式 `from/look_at`、正交。
-- **固定三点光**：SUN 灯 key 3.2 / fill 1.0 / rim 2.4（角度固定、相对相机方位角：+35°/45°、-50°/8°、+165°/30°），
+* **固定三点光**：SUN 灯 key 3.2 / fill 1.0 / rim 2.4（角度固定、相对相机方位角：+35°/45°、-50°/8°、+165°/30°），
   **只在本进程内临时建**，出图后删除并把 scene 渲染设置全部还原（GUI 实测：对象数 95、相机 1、灯 4、无残留、视口帧 hash 不变）。
-- **逐张渲染 + jsonl**：每张 PNG 记录 `{view, ms, bytes, hash, path, res, engine, samples, camera, frame{bbox,margin_px,coverage,pred_bbox_px,proj_err_px}}`，
+* **逐张渲染 + jsonl**：每张 PNG 记录 `{view, ms, bytes, hash, path, res, engine, samples, camera, frame{bbox,margin_px,coverage,pred_bbox_px,proj_err_px}}`，
   写 `<outdir>/render_views.jsonl`（一行一张，预算中途停下也保留已完成的行）。
-- **预算判定**：`budget_s`（别名 `thr`）累计渲染毫秒超限立即停 → `within_budget=false` + `stopped_early` + `skipped_views`，已出的图保留。
-- **可选参考比对**：`ref_path`/ref_box（可按视角给字典）逐张调 qc.py 的 `compare`（默认固定对齐），IoU/Dice/边界距离/剖面差写进 jsonl。
-- **引擎语义**：默认 `engine="keep"` 跟随进程（无头/作业由引擎前导保证 EEVEE+光追）；`samples` 同时写 EEVEE taa_render_samples 与 Cycles samples；`view_transform` 可选。
-- 顺带：路径常量注入 `K.runtime_dir`（qc.py 据此现场加载同目录模块）；`bpy.types.Camera.calc_matrix_camera` 在 Blender 5.2 已移除，
+* **预算判定**：`budget_s`（别名 `thr`）累计渲染毫秒超限立即停 → `within_budget=false` + `stopped_early` + `skipped_views`，已出的图保留。
+* **可选参考比对**：`ref_path`/ref_box（可按视角给字典）逐张调 qc.py 的 `compare`（默认固定对齐），IoU/Dice/边界距离/剖面差写进 jsonl。
+* **引擎语义**：默认 `engine="keep"` 跟随进程（无头/作业由引擎前导保证 EEVEE+光追）；`samples` 同时写 EEVEE taa_render_samples 与 Cycles samples；`view_transform` 可选。
+* 顺带：路径常量注入 `K.runtime_dir`（qc.py 据此现场加载同目录模块）；`bpy.types.Camera.calc_matrix_camera` 在 Blender 5.2 已移除，
   改用 `bpy_extras.object_utils.world_to_camera_view` 作投影真值对拍。
 
 **实测（`D:/DSH/blender/out/preserve_scene_before_orca.blend` / 350 个可见 mesh / 512×512 / 64 采样 / EEVEE+RT）**：
 
-| 视角 | 渲染 ms | bytes | 出图 alpha bbox | 画面 margin（px） |
-|---|---|---|---|---|
-| iso（-45°,25°） | 2124（首张含着色器编译） | 154604 | [83,96,428,458] | L83 T96 R83 B53 |
-| front（-90°,0°） | 798 | 162515 | [36,36,475,475] | 36 / 36 / 36 / 36 |
-| right（0°,0°） | 565 | 192160 | [36,36,475,475] | 36 / 36 / 36 / 36 |
+| 视角             | 渲染 ms                  | bytes  | 出图 alpha bbox | 画面 margin（px） |
+| ---------------- | ------------------------ | ------ | --------------- | ----------------- |
+| iso（-45°,25°）  | 2124（首张含着色器编译） | 154604 | [83,96,428,458] | L83 T96 R83 B53   |
+| front（-90°,0°） | 798                      | 162515 | [36,36,475,475] | 36 / 36 / 36 / 36 |
+| right（0°,0°）   | 565                      | 192160 | [36,36,475,475] | 36 / 36 / 36 / 36 |
 
 总计 3 张 **3487 ms**（in-process 3571 ms）· jsonl 3 行 · `within_budget=true`（预算 120 s）；
 预算 1.0 s 的对照跑：只出 1 张即停、`within_budget=false`、`skipped_views=["front","right"]`、已出的图保留；
@@ -2693,7 +2910,6 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 
 根因：v0.8.3 给 perf 加引擎感知时，把 dsh_perf_status 改名为 _dsh_perf_status_cycles 并把包装函数**追加到文件末尾**，而注册字典（第 323 行）在包装函数（第 338 行）之前引用了它 → 模块导入即 NameError → 整个 perf 模块注入失败（'PERF status 失败 · name dsh_perf_status is not defined'）。
 修法：注册字典改为延迟求值 lambda，调用时才解析名字。验证：status 返回 engine/engine_mode/eevee 详情；apply 返回 preset=eevee-rt（rt false → true）。
-
 
 ## v0.8.5（2026-09-14）—— 作业层 + 模块热重载 + QC 掩膜区间（已实现并验证；工具与文档待补）
 
@@ -2734,11 +2950,9 @@ AGENTS 3.7k ≈ **23–29k tokens**，而且**每轮重付**；真正的门调�
 - README 双语新增「致谢 / Credits」，点名感谢 @lurenjia-l 的 EEVEE 实测踩坑与技能分层法。
 - 两树一致：14 工具、presets.py、部署SOP、cookbook、配置参考、EEVEE-工作要点。
 
-
 ## v0.8.1（2026-09-14）—— 修复 v0.7.0 起 /act 路由回归（Issue #4，感谢 @yihefeikong-rgb）
 
 engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/traceback/mainThreadMs），但 server.mjs 的 /act 路由仍读旧的 out.result，导致：rt_do 恒无 stdout、rt_do(file=...) 静默空跑、异常被当成成功。影响 v0.7.0 与 v0.8.0 的仓库版/分享包。修复：/act 路由转发结构化字段并把 file 透传给 engine.act。本机实测：print(123) 得到 stdout=123、抛异常得到 ok=false + error + traceback、file= 的脚本真正执行。
-
 
 ## v0.8.0（2026-09-14）—— 默认渲染引擎改为 EEVEE + 光追（Cycles 可选）
 
@@ -2750,7 +2964,6 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 - QC 记录引擎：比对结果新增 engine_at_qc（如 BLENDER_EEVEE+RT）——判据只在同一引擎内可比。
 - 文档瘦身：删除 docs/作者自用版-README.md、docs/AI实时交互Blender-通道说明.md、docs/AI建模双层循环-方案.md（有效内容并入 操作教程.md / 配置参考.md），自用版与仓库版文档集一致。
 
-
 > 其他会话/agent 请先读这里，再看 `MIGRATIONS.md`（路径变更）与 `README.md`（用法）。
 
 ## v0.7.0（2026-09-14）—— 事务/回滚 + 内置 QC（含算法优化）+ 异常可观测性 + 路径桥接
@@ -2758,6 +2971,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 > 来源：plush-build 会话（从零重建毛绒玩偶）的使用反馈；逐条核实见 `反馈分析-毛绒线-plush-build.md`，算法细节见 `QC算法优化-说明.md`。**工具数 12 → 13**（新增 `blender_rt_txn`）。
 
 **① 异常可观测性（反馈里的第 1 痛点）**
+
 - `rt_do` / `/act` 用 `DSH_ACT_OK`/`DSH_ACT_ERR` 包裹：**异常时也回传 partial stdout / stderr / traceback**。实测 `print(DIAG-1) … raise` → `stdout="DIAG-1 …"` + traceback 尾行（此前只剩一句 error）。
 - 修掉误导性诊断：`diagnosis` 只在**传输/超时类**错误上附加，执行类错误给 `errorKind:"execution"`（此前抛错会被误报成 `main-thread-busy`）。
 
@@ -2768,6 +2982,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 **④ 事务 / 回滚**：新增 `runtime/txn.py` + 工具 **`blender_rt_txn`** —— 文件级 `snapshot/restore`（`copy=True` 不动当前 filepath；300 对象工程实测 **96.7MB / 824ms**）、对象级 `mark/revert`（实测 移动到 (5,0,0) → revert → **回到 (0,0,0)**）。对象级**不含拓扑/UV/顶点改动**（工具描述里写明）。
 
 **⑤ 内置 QC + 算法优化**（`runtime/qc.py`，以 plush-build 的 539 行脚本为原型）
+
 - 四项优化：**自适应掩膜**（alpha 智能判定 / 边框估背景 + Otsu，不再手调阈值）、**质心对齐 + 尺度平移搜索**、**可行动指标**（Dice / 缺面积 / 多面积 / 边界距离 / 剖面差）、**防刷分**（`iou` 与 `iou_fixed` 双报 + 尺度漂移告警 + 内环强制固定对齐 + 并集显式计入越界像素）。
 - 验证：合成自检 自比 **1.0000**、平移 12px 仍 **1.0000**；真图扰动 直接比 **0.534** → 搜索后 **0.866**；五视图 **0.776–0.890**（对照他们的 0.688–0.790；未完全复现其数字的原因见说明文档）。
 - 入口：`blender_rt_plan(op="qc_compare" / "qc_compare_basic" / "qc_self_check" / "qc_robustness_check" / "qc_help")`；产物 = 叠加图 + 三联对照图。
@@ -2782,6 +2997,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 > 工具数 11 → 12（新增 `blender_rt_worker`）。
 
 **① GPU 语义（★★★，最贵的一条）**
+
 - 无头进程默认读不到用户偏好 → Cycles **静默回落 CPU**。本机实测（1821 对象工程，480×270/32spp）：
   CPU 2.78 s vs GPU 首帧 1.43 s / 预热 **0.18 s = 15.4×**（外部反馈报 5×，实际更悬殊）。
 - 新增 `gpu` 参数（`auto` 默认 / `true` 强制 / `false` 关闭）：`auto` 会按 OPTIX→CUDA→HIP→ONEAPI→METAL 顺序配好
@@ -2790,25 +3006,30 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 - 新增 `use_user_config` 参数：透传 `BLENDER_USER_CONFIG` / `BLENDER_USER_SCRIPTS`（配合 `factory_startup:false` 才有意义）。
 
 **② 热无头会话 `runtime/worker.py` + 工具 `blender_rt_worker`（★★★）**
+
 - 常驻 `blender -b` 进程：**阻塞 accept 跑在主线程**（无头下 `bpy.app.timers` 实测 0 次触发，主线程执行 bpy 才安全），
   复用**持久内核 K**（同一套 `sys.modules["dsh_rt_kernel"]` 语义），op：`start / exec / status / stop / restart`。
 - 起步即带 GPU 前导；串行语义（一次一个请求，长代码会占住 worker —— 这是"热"的代价也是安全的来源）；与 GUI 通道互不干扰。
 - 实测：`start` → pid/port/GPU 就绪；`exec ×2` → `K.n` 1→2（**跨调用状态保留**）；`status` 给出 uptime/calls/objects/kernel 模块；`stop` 干净退出。
 
 **③ 长任务流式（★★）**
+
 - 根因实测：客户端 `fetch` 的响应头超时 **300 s**（独立实验：延迟 330 s 才发响应头的服务 → `fetch failed after 300.9s，cause=UND_ERR_HEADERS_TIMEOUT`）。
 - `/headless`、`/worker` 改为 **ndjson 流式**：响应头立刻返回 + 每 15 s 心跳 + 最后一行才是结果 → 任意时长（心跳 < 300 s）不再被客户端超时掐断。
 - 另一个实测结论：客户端断开**不等于任务失败** —— 服务端子进程继续跑完，产物仍落在 outdir（文档与工具描述都写明了）。
 
 **④ 结构化失败（★★）**
+
 - 全量 stdout/stderr **落盘**并返回路径（`logs.stdout` / `logs.stderr`，默认写在 outdir）；
 - 抽 `lastException`（stderr 最后一条异常行）与 `traceback` 段；`reason` 给出被杀/GPU 不可用/退出码原因；
 - 转义坑友好提示：脚本里出现**字面量 \n**（应写 \\n）导致 `SyntaxError: unexpected character after line continuation character` 时直接点破。
 
 **⑤ 产物清单过滤（★）**
+
 - `outdir` 产物默认过滤 `__pycache__ / *.pyc / *.blend1|2 / tmp*`，并回传 `noiseFiltered` 计数；`include_noise:true` 可关闭过滤。
 
 **⑥ 文档（★）**
+
 - 工具描述写清 `blender_rt_cmd`（30 条固定命令，适合查状态/资产集成）与 `blender_rt_do`/headless/worker（任意 Python，适合重几何生成）的各自适用面；
 - 新增「GPU 语义」「长任务」「热无头会话」三节，并把"客户端超时≠失败"写进工具描述与教程。
 
@@ -2819,6 +3040,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 > 工具数 10 → 11（新增 `blender_rt_plan`）。
 
 **① 假设驱动建模 cookbook（S0，零代码）**
+
 - `docs/假设驱动建模-cookbook.md`：假设/区间/禁止项/推翻条件的模板、两种区间搜索跑法（GUI 内环 / 无头阻塞）、
   **可辨识性**判据、三态判定（supported / refuted / unresolved）、探针设计与 provenance 表、7 条实测踩坑。
 - `docs/examples/chair-backrest/run.py`：纯无头可复现实验（约 3 s）。实测结论：外部证据下 attach 与 insert 残差**完全相同（184 / 184）**
@@ -2826,6 +3048,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
   → attach refuted、insert supported。结果与证据图归档在 `docs/examples/chair-backrest/`（含 results.md/json 与 5 张证据图）。
 
 **② 契约层 `runtime/contract.py`（S1+S2，API 挂 `K.dsh_contract_api`）**
+
 - S1：`register_component` / `register_connection`（候选/参数区间/禁止项/置信度/所需证据）/ `register_envelope`、
   `check_envelope`（越界清单）、`check_interference`（AABB 按 x 扫描剪枝 + BVH 精查，含耗时分解）、`check_interface`（两组件间隙/侵入）、
   `destructive_guard`（**未判别连接上的 boolean_union / weld / merge / apply_transform 直接拦下**，给 `Unsupported Destructive Merge`）、
@@ -2834,6 +3057,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 - 实测（无头，`tests/contract_selftest.py`）：**24/24 通过**（含"未判别连接 → Boolean 被拦"、"tenon_len 不可辨识 → unresolved"、"探针达标 → supported"）。
 
 **③ 规划器 `runtime/planner.py`（S3，API 挂 `K.dsh_plan_api`）**
+
 - 对象图：Component（box / cylinder / sphere / mesh_copy）+ Connection（候选/状态/禁止项/偏移）+ Feature（array / grid / mirror）。
 - 诊断码（IDE 式）：`MissingComponent` / `MissingObject` / `UnresolvedConnection` / `UnsupportedDestructiveMerge` /
   `Cycle` / `ParamOutOfRange` / `UnknownKind` / `PlanInvalid`（硬错误直接拒绝编译）。
@@ -2843,6 +3067,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
   `ParamOutOfRange`、`Cycle` 检测、硬错误拦编译、与契约层联动的包络检查）。
 
 **④ 工具与路由**
+
 - 新工具 **`blender_rt_plan`**（11 个工具）：契约 op 直接调用；规划器 op 用 `plan_` 前缀；`report` 支持 `path` 落盘。
 - 后端新增 `POST /plan`（写路由受租约门禁；只读 op 白名单：status/help/ledger/check_*/plan_status/plan_validate/plan_order/plan_graph），
   `stats.plan` 计数。
@@ -2867,6 +3092,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 > 状态：**已实现并逐条实测**（下方每条都带实测值，不是计划稿）。工具数 9 → 10。
 
 **① 可观测性（诊断）**
+
 - 工具报错不再只有 `connect timeout`：超时/连不上时自动三级判定并给出人话原因（`kind` + `summary` + `fix`）：
   - TCP 不通 → `blender-unreachable`（Blender 没跑 / addon 没监听 9876）
   - TCP 通 + `ping` 通 → `main-thread-busy`（主线程被占：渲染/模态操作）
@@ -2876,6 +3102,7 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 - `/status` 带 `metrics`，且**只在有 lastError 时**才带 `diagnosis`（成功即清零，不显示过期结论）；各写/读路由的错误体统一带 `diagnosis`。
 
 **② 自定义视角取帧（新增 `runtime/view.py`）**
+
 - `blender_rt_see` 新增 `from / look_at / lens / ortho / ortho_scale / view_size / shading / overlays / view_mode`；给 `from+look_at` 即走自定义视角，**不建相机对象、不动 `scene.camera`、不动用户视口**；`shading/overlays` 临时改写、出图即还原。
 - 矩阵自建并与 `calc_matrix_camera` 对拍：landscape / portrait / ortho 三种 **最大偏差 1.2e-7**（前向/正交/位移参数与相机语义一致）。
 - PNG 手写（zlib+CRC）：帧缓冲读回已是 sRGB 8bit，直写字节避免二次 gamma（用 `bpy.data.images` 那条路会二次编码）；读出 `memoryview(tex.read())` 展平 1920×1080 仅 **1 ms**。
@@ -2884,18 +3111,21 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 - Blender 5.2 的 `gpu.init()` 让 `-b` 无头进程也能离屏绘制 → 批量多角度出图可完全离线做。
 
 **③ 写通道租约（`/lease` `/release` `/who` + `{op:"lease|release|who"}`）**
+
 - 语义：**无租约时零阻力**；有租约时别的会话的写路由（`/act /cmd /loop /perf /opt /headless`）返回 `409 {error:"leased", holder, expiresInMs, hint}`；`force:true` 抢占；`renewOnly:true` 只续期不抢。
 - **只读 op 豁免**：`perf status/help`、`loop status/board/help`、`opt analyze`（看现状不该被挡）。
 - 插件自动带 `holder`（`plugin-pid-<pid>`，`DSH_BLENDER_HOLDER` 可覆盖）；15 s 看护仅在**本来就持有**时心跳续期。
 - 实测 9 条路径：别人持有→409 · 无 holder→409 · force 抢占并写成功 · who 显示 holder/TTL/续期 · 自己心跳续期 · 别人心跳不抢 · release 后可写。
 
 **④ 独立渲染进程（新工具 `blender_rt_headless`）**
+
 - WSL 侧 `spawn` Windows 的 `blender.exe -b`（binfmt 互操作），stdout/stderr 直连回传；`file` 收 WSL 路径（`/mnt/d/...` 自动映射 `D:\\...`）或 Windows 路径（内部路径→UNC）。
 - 默认 `--factory-startup`（快、**不抢 9876 端口**）；`file / outdir / args / timeout_ms / factory_startup / bootstrap` 可控；`print("HEADLESS {json}")` 解析成 `result`；`outdir` 新文件按时间列出；超时 SIGKILL。
 - `preload:"view,perf"` 把 `runtime/*.py` 源码拼到脚本开头 → 无头进程也能用 `K.dsh_view_api` / `K.dsh_perf_api`。
 - 实测：建 3 方块场景 + view.py 自检 + 出 2 张自定义视角图 = **2.66 s**；打开 1821 对象的 `FISTONE_v3.9_S5_master_delivery.blend` 读设置 = **1.24 s**。
 
 **文档**
+
 - `README.md` 新增 §4 三批次增强（含全部实测值与 9 条租约用例）、工具表 9 → 10、已知限制补 3 条、移植说明补环境变量。
 - 旧版写的「顾问式租约 / `require_lease` / `{op:"render"}` / `resolution` 参数名」与实际实现不符，本版已按实现改写（见 §①③④）。
 - `MIGRATIONS.md` 追加 v0.4.0 API 变更条目。

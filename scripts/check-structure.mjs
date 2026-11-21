@@ -154,6 +154,7 @@ const TARGET_FILES = [
   'src/tools/session/index.ts',
   'src/tools/session/execute.ts',
   'src/tools/session/presenter.ts',
+  'src/tools/session/evidence-presenter.ts',
   'src/tools/session/txn.ts',
   'src/tools/session/txn-response.ts',
   'src/tools/session/reload.ts',
@@ -183,6 +184,7 @@ const TARGET_FILES = [
   'src/tools/run/index.ts',
   'src/tools/run/execute.ts',
   'src/tools/run/worker.ts',
+  'src/tools/run/worker-digest.ts',
   'src/tools/run/presenter.ts',
   'src/tools/inspect/index.ts',
   'src/tools/inspect/execute.ts',
@@ -328,7 +330,7 @@ const pyBudgetViolations = []
 for (const file of pyBudgetFiles) {
   const key = rel(file)
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).length
-  if (lines > PY_LINE_BUDGET) {
+  if (lines > PY_LINE_BUDGET && !BUDGET_EXEMPT.has(key)) {
     pyBudgetViolations.push({ path: key, lines })
     failures.push('单文件行预算: ' + key + ' ' + lines + ' > ' + PY_LINE_BUDGET)
   }

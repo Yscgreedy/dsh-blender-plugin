@@ -1,12 +1,12 @@
 ---
 name: blender-modeling
-description: Blender 建模与交付教程（v3.2.0-alpha.1，GUI 优先，后台作业备用）——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → 白模 → 粗形精修 → 修改器栈 → 清理 → 装配/验收 → 交付）。覆盖参考图量测（img_digest/probe/measure/calib）、无头多视轮廓拟合（shapesolve）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout_*，含 4 视图与转台 MP4）、同机位 QC（visualreport_report）、缺陷注入评估（eval_run）、GUI 会话内 Python 与取帧（blender_py / blender_see）、后台作业（blender_run，render/headless）与强制门（gate_/deliver_export require_gate）。用于做 3D 物体、按参考图还原、量比例、装配体检、修穿模/浮空、批量白模、交付导出与验收。
+description: Blender 建模与交付教程（v3.3.0，GUI 优先，后台作业备用）——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → 白模 → 粗形精修 → 修改器栈 → 清理 → 装配/验收 → 交付）。覆盖参考图量测（img_digest/probe/measure/calib）、无头多视轮廓拟合（shapesolve）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout_*，含 4 视图与转台 MP4）、同机位 QC（visualreport_report）、缺陷注入评估（eval_run）、GUI 会话内 Python 与取帧（blender_py / blender_see）、后台作业（blender_run，render/headless）与强制门（gate_/deliver_export require_gate）。用于做 3D 物体、按参考图还原、量比例、装配体检、修穿模/浮空、批量白模、交付导出与验收。
 license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，见 NOTICE.md）
 ---
 
 # Blender 建模流程
 
-> **v3.2.0-alpha.1 · 2026-11-17**：配套插件 dsh-blender-plugin v3.2.0-alpha.1，6 个模型工具，plan 通道 38 个 family / 269 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
+> **v3.3.0 · 2026-11-17**：配套插件 dsh-blender-plugin v3.3.0，6 个模型工具，plan 通道 38 个 family / 269 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
 > 旧版按 v2/v3/v7 记录的“哪段是哪次实测加的”不再写在正文；需要追溯看 CHANGELOG。下面只写**当前有效口径**。
 
 先定形状，再走流程，改一步看一眼。**不要一口气写完整个模型再回来看**——每一步都要有画面或数字证据。
@@ -29,7 +29,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 2. **写操作先声明写作用域**（blender_session(action="grant", scopes=...)）；只读 op 豁免；多会话并行时必须先声明。
 3. **回执先读 verdict，不读 ok**：gate/audit/asm/visualreport/eval 都是 pass|fail|degraded 三态；degraded ≠ 通过；ok 只表示“跑完了”。
 4. **数字必须可复算**：尺寸、px_per_mm、bbox、md5、IoU 要带来源；没有标定就不许把像素当毫米。
-5. **headless 里优先 bpy.data/bmesh，慎用 bpy.ops**：依赖 screen/context 的 GUI 型 ops 在无头会话可能失败；必须用时先小步验证。
+5. **headless 不必躲 bpy.ops，要躲的是事件型算子**：5.3 的 `blender -b` 有虚拟 window/screen，`object.mode_set` / `mesh.bevel` / `uv.smart_project` / `object.convert` 都 FINISHED 且真生效；真正会失败的是 `mesh.knife_tool`（poll）、`mesh.loopcut_slide` / `mesh.bisect`（CANCELLED 且几何不变）、`view3d.*` / `render.opengl` / `ed.undo`。每步用回执的 `changed` / `faces_delta` 自证，别只看 FINISHED（坑四）。
 6. **交付先选 use_case**：`asm_export(use_case="unity"|"unreal"|"godot"|"web")` 一次定好轴向/缩放/叶骨/动画烘焙；默认 `none` 保持旧 kwargs（fbx 不烘焙动画，带绑定资产会静默丢动作）。`print` 用 `deliver_export(fmt="stl")`，`ar` 走 USD——asm_export 对这两个回 `ok:false`，不会静默降级。
 7. **外部资产走 asset 族**：`asset_search(query=…)` → `asset_fetch(id=…, resolution="1k")` → **必须** `audit_mesh` 复检。只接 PolyHaven（免 key）；Sketchfab / Poly Pizza 用 `blender_py`，模板见 `references/资产与生成.md`。
 
@@ -264,7 +264,7 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
 - 生成器/plan op 已经给出基线，只做局部精修。
 
 写 bpy 的约束：
-- headless 里优先 bpy.data/bmesh，慎用依赖 screen/context 的 bpy.ops；
+- headless 里 bpy.ops 可用，但要避开事件型算子（knife/loopcut/bisect/view3d/render.opengl/ed.undo）；每步用 `changed` / `faces_delta` 自证（坑四）；
 - 每段代码要可重跑、少依赖选择状态；对象按名字取，不要靠“当前选中”；
 - 写完立刻回 audit_mesh 或对应门，不许跳过；
 - 拓扑改动前 snapshot/checkpoint；不要在没有回退点的情况下 Boolean/合并。
@@ -341,7 +341,7 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
 
 **判据**：能用第一选择就不用第二选择；第二选择必须在回执里写明“为什么不用插件 op”。
 
-## 4. 当前 plan 通道速查（v3.2.0-alpha.1 · 38 个 family / 269 个 op）
+## 4. 当前 plan 通道速查（v3.3.0 · 38 个 family / 269 个 op）
 
 先 blender_op(op="catalog") 看“什么时候用 / 别用 / 最小骨架”，再单族展开。常用家族：
 
@@ -609,14 +609,14 @@ blockout_batch 出 N 件 → blockout_refsheet（4 视图 + 拼图 + refsheet.js
 | 坑二 **穿模 / 隐藏交叠** | ✅ | **验收门**：`audit_interference`（三态 + `volume_mm3`；`unresolved` = 判不了）、`audit_overlap`（`pair_count`；**贴合会给 ≥1**）、`audit_measure` 的 `pairs[].axis_overlap_mm`（**逐轴 AABB：仅当接口法线与世界轴一致且轴对齐盒对该几何适用时才作粗筛**；旋转接口沿接口局部坐标量真实表面，见坑二 ③） |
 | 坑一 长轴 / 宽轴 / 薄轴语义 | ❌ 语义，机器判不了 | **写代码前 checklist** |
 | 坑三 收尖压中线再合并 | ❌ | **写代码前 checklist** |
-| 坑四 headless 慎用 bpy.ops | ❌ | **写代码前 checklist** |
+| 坑四 headless 的 ops 边界 | ⚠ 半（`changed` / `faces_delta` / CANCELLED 可机械判） | **写代码前 checklist + 回执自证** |
 | 坑六 预览光照 / 材质 / 机位 | ⚠ 半（参数进 `lib/preview.py`；出图后看 `coverage_estimate` 与 `warning.frame_looks_empty`） | 装置默认值 + 门⑨ |
 
 **写代码前 checklist（不可机械判定的三条，动手前逐条念一遍）**：
 
 1. **长轴 / 宽轴 / 薄轴**：这个件哪个轴是长？哪个轴是"看得出形状"的宽面？相机在哪一侧？—— 先在注释里写下 `(长, 宽, 薄) = (局部?, 局部?, 局部?)` 再动手（坑一）。
 2. **收尖**：要收尖的那一圈顶点，是不是**先压到中线（x=y=0）再 `remove_doubles`**？只按比例缩放一定得到平头（坑三）。
-3. **headless**：这段脚本里有没有 `object.mode_set` / `mesh.*` / `loopcut` / `transform.*` / `uv.*`？有 ⇒ 改 bmesh 或 data API（坑四表 + 配方 3b/8）。
+3. **headless ops**：这段脚本里有没有**事件型**算子（`mesh.knife_tool` / `mesh.loopcut_slide` / `mesh.bisect` / `view3d.*` / `render.opengl` / `ed.undo`）？有 ⇒ 改 bmesh/data API；普通 `mesh.bevel` / `mode_set` / `uv.*` / `object.convert` 可以直接用，但必须用回执的 `changed` / `faces_delta` 自证（坑四）。
 
 **怎么验**：checklist 三条各自能在代码里指出对应的一行（轴注释 / 压中线那两行 / 没有 ops 调用）；
 机械判定的三条则必须出现在交付回执里（§0.5.5）。
@@ -705,21 +705,28 @@ bpy.ops.object.mode_set(mode='OBJECT')
 print(f"tapered:{obj.name}")
 ```
 
-### 坑四：headless 下慎用 bpy.ops（★ 能省掉很多"不明原因失败"）
+### 坑四：headless 的 bpy.ops 边界（5.3 实测口径，★ 别躲错东西）
 
-`bpy.ops` 的很多算子是**context 依赖**的：要求"当前是编辑模式 + 活动对象是它 + 有选择集 + 有合适的区域（VIEW_3D）"。
-在 `blender -b`（无窗口、无区域）里，这些前置条件经常不成立，于是你拿到的是
-`RuntimeError: Operator bpy.ops.mesh.xxx.poll() failed, context is incorrect` 这种**看不出原因**的失败。
+老版本写"headless 慎用 bpy.ops"，**这个口径已经过时**。5.3 的 `blender.exe -b --factory-startup` 有
+**虚拟 window/screen**（`ctx={area:null, screen:"Layout", window:true}`），所以：
 
-| 类别 | headless 下的表现 | 建议 |
+| 类别 | 5.3 headless 实测 | 怎么用 |
 |---|---|---|
-| `primitive_*_add`（加基本体） | ✅ 稳 | 直接用 |
-| `object.modifier_apply` / `modifier_add` | ✅ 基本稳（给 `view_layer.objects.active` 就好） | 直接用，注意 apply 前把对象设为 active |
-| `object.mode_set` + `mesh.*`（挤出 / 内插 / 环切 / remove_doubles…） | ⚠ 常见 poll 失败 | **改 bmesh**（配方 3b / 8） |
-| `mesh.loopcut_slide`、`transform.*`、`uv.*` | ⚠ 依赖区域 / 模态输入 | 不要用；用 bmesh 或直接改 data |
-| `object.shade_smooth` / `object.select_all` | ⚠ 依赖 view_layer | 用 data API（见下） |
+| `primitive_*_add` / `object.modifier_apply` | ✅ 稳 | 直接用 |
+| `object.mode_set` / `mesh.bevel` / `mesh.remove_doubles` / `uv.smart_project` / `object.convert` | ✅ FINISHED 且**真生效**（实测 faces 6→54、UV 层建立、204 面转 mesh） | 直接用；对象设为 active + 需要时进 EDIT |
+| `mesh.knife_tool` | ❌ `poll() failed` | 改 bmesh（`bmesh.ops.bisect_plane` / 自写刀路） |
+| `mesh.loopcut_slide` / `mesh.bisect` | ❌ 回 `{'CANCELLED'}`，几何不变、**不抛异常** | 改 bmesh（`bmesh.ops.subdivide_edges` / `bisect_plane`） |
+| `view3d.*` / `render.opengl` / 后台 `ed.undo` | ❌ 不可用 | GUI 通道或 `blender_run(kind=render)` |
 
-替代写法（**推荐**）：
+**纪律（比"禁用 ops"更硬）**：
+
+1. 每次 ops 之后读回执的 `changed` / `faces_delta` / `cancelled_ops`；
+   `CANCELLED` 一律 `ok:false`（插件侧已降级），别把"跑过"当"改好"。
+2. 空选择下 `mesh.bevel` 会 FINISHED 但面数不变（6→6）→ 回执 `changed=false`，同样 `ok:false`。
+3. EDIT 模式里读 `len(mesh.polygons)` 是旧值；用 `bmesh.from_edit_mesh(me)` 或先回 OBJECT 模式。
+4. `uv.unwrap` 的失败只印在 stdout（`Unwrap failed to solve`）→ 回执现在会把它升成 `uv_failed` 失败。
+
+替代写法（**不是必须，只在事件型算子/批量清理时用**）：
 
 ```python
 # 平坦/平滑着色：直接改面属性，不碰 ops
@@ -733,8 +740,8 @@ bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
 bm.to_mesh(obj.data); bm.free(); obj.data.update()
 ```
 
-必须用 ops 时：用 `bpy.context.temp_override(...)` 补齐 context，或者**改走 GUI 通道**（`blender_py`，那里有真的窗口与区域）。
-判据：**同一段脚本在 headless 里报 poll/context 错、在 GUI 里正常 → 就是这个坑**，不要去怀疑几何数据。
+判据从"有没有 ops"改成"**回执有没有数字证明几何真的变了**"：同一段脚本在 headless 与 GUI 都应给出相同的
+`faces_delta`；只有事件型算子的 `CANCELLED` / `poll` 才是环境差异。
 
 ### 坑五：法线方向是一切"穿模 / 内含"判据的前提（★ 会给出反向结论）
 
@@ -836,7 +843,7 @@ panel 级根本没法 QC —— 最后是组员自己改成"**灰材质 + 单侧
 | **网格里有看不见的内部面 / 埋在实体里的面** | ★ **不是 `Delete Loose`**（它只删"不属于任何面的点/边"，一个面都不删）→ 见下方专条 |
 | 细分后发皱 / 塌陷 | 缺支撑边：加环切固定结构，别继续加细分层级 |
 | 阵列首尾对不上（履带 / 链节） | 本配方口径的 `FIT_CURVE` 阵列给不了精确闭环节距 → 配方 6b 参数化**销轴弦长**路径 |
-| headless 里 ops 报 context/poll 错 | 坑四：改 bmesh / data API，或用 temp_override |
+| headless 里 ops 报 poll 错或回 CANCELLED | 坑四：事件型算子（knife/loopcut/bisect）改 bmesh；普通 bevel/mode_set/uv 可用但要看 `changed` / `faces_delta` |
 
 ### A.5.1 「删除内部面」的正确做法（★ 老版本这里教错了）
 

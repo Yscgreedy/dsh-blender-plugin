@@ -1,6 +1,6 @@
-# MIGRATIONS —— 从旧版本迁到 v3.1
+# MIGRATIONS —— 从旧版本迁到 v3.3
 
-> **当前版本（2026-11-17）**：插件 **v3.2.0-alpha.1** · **6 个模型工具** · plan catalog **35 family / 261 op** ·
+> **当前版本（2026-11-21）**：插件 **v3.3.0** · **6 个模型工具** · plan catalog **38 family / 269 op** ·
 > addon command **25**（+ping = 26 wire）· addon **v2.0.0**（protocol **12**）· Gateway `127.0.0.1:39877` · addon 主动连接 Gateway（无入站监听）。
 > **旧 `MCP for Blender` 自 v2.3 起不再支持**；v3.0 是工程重构 + addon 安装方式 breaking，按下文 §0/§1 迁。
 
@@ -17,7 +17,7 @@
 2. Blender 里停用并移除旧 addon（含旧的单文件 `dsh_blender_bridge.py`）→ 安装本仓 `extension/dsh_blender_bridge.zip`（**v2.0.0**）→ 启用 → N → Connect。
 3. `blender_inspect(command="get_addon_info")` → `addon_version=[2,0,0]`、`protocol=12`；
    GUI 路线 `curl http://127.0.0.1:39877/doctor` → `kind=ok`（纯无头路线用 `blender_run(action="submit", kind="headless", …)` + `wait`/`collect` 取产物自证）；
-   `blender_op(op="catalog")` → **35 family / 261 op**。
+   `blender_op(op="catalog")` → **38 family / 269 op**。
 4. 选中入口：Blender 原生选中 → `N` →「Selection → DSH」→ 发送（多选 / 集合）；编辑模式选点/面、姿态选骨骼也会一起发。
 5. 新能力（交互式无头、`img_*`、`asm_*`、`blockout`、`visualreport`、`shapesolve`、`eval_run`、强制门等）用
    `blender_op(op="catalog")` 查骨架；除 v3.0 明确移除的 Premium/Tripo 通道外，旧 op 不删除、只增不改。
@@ -96,7 +96,7 @@ v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N
 | `blender_run`                                | 只有 submit/render/调参                                            | 新增 `action="worker"`：持久无头内核（同进程连续 `exec`/`see`/`watch`）+ `checkpoint`/`revert`/`checkpoints` 文件级 undo                                                                              |
 | worker `start` / `stop` 回执                 | 成功也写 `FAIL`（快照没有 `ok` 字段）；stop 睡 300 ms 就断言"已停" | 判据取信封；`start` 等 ready（未就绪写 `pending` + `next_action=status`），`stop` 等真退出（`stopped/alive/signaled`），并发 start 共享同一次启动（`joined:true`）                                     |
 
-计数不变：6 tools / 35 families / 261 ops / 25 registered addon commands（+ping=26 wire）/ 29 routes / protocol 12。
+计数不变：6 tools / 38 families / 269 ops / 25 registered addon commands（+ping=26 wire）/ 29 routes / protocol 12。
 没有新增工具、没有新增路由（consent 走 `/lease` 的 query-string 形式，worker ops 走已有 `/worker`）。
 
 ## 3. 配置文件清理（可选）

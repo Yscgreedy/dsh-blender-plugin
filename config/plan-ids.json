@@ -28,7 +28,8 @@
       ".review-tmp",
       "openspec",
       "runtime/ext",
-      ".dsh-ops"
+      ".dsh-ops",
+      ".agents"
     ],
     "skipFiles": [
       "package-lock.json",
@@ -387,6 +388,13 @@
         "P"
       ],
       "reason": "3.2.0-alpha.1 复测（2026-11-19）：P1a/P2 是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
+    },
+    {
+      "path": "runtime/core/queue/job-args.ts",
+      "prefixes": [
+        "P"
+      ],
+      "reason": "3.3.0（2026-11-21）：参数拼装从 spawn-executor.ts 拆出，P1/P2 仍是外部验收缺陷编号（BlenderProject 复测清单的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
     },
     {
       "path": "src/host/workspace.ts",

@@ -1,19 +1,19 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-20T03:15:58.304Z",
+  "generatedAt": "2026-11-21T02:54:06.665Z",
   "mode": "warn",
   "totals": {
-    "all": 1484,
-    "exempt": 1484,
+    "all": 1516,
+    "exempt": 1516,
     "residual": 0
   },
   "byPrefix": {},
   "byKind": {},
   "files": {
     "CHANGELOG.md": {
-      "count": 239,
-      "exempt": 239,
+      "count": 268,
+      "exempt": 268,
       "residual": 0
     },
     "MIGRATIONS.md": {
@@ -76,6 +76,11 @@
       "exempt": 52,
       "residual": 0
     },
+    "docs/操作教程.md": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
     "docs/证据分级与读图纪律.md": {
       "count": 5,
       "exempt": 5,
@@ -121,9 +126,9 @@
       "exempt": 2,
       "residual": 0
     },
-    "runtime/core/queue/spawn-executor.ts": {
-      "count": 1,
-      "exempt": 1,
+    "runtime/core/queue/job-args.ts": {
+      "count": 4,
+      "exempt": 4,
       "residual": 0
     },
     "runtime/execution/headless/process.ts": {
@@ -289,11 +294,6 @@
     "skills/blender-modeling/references/验收清单.md": {
       "count": 2,
       "exempt": 2,
-      "residual": 0
-    },
-    "src/host/workspace.ts": {
-      "count": 1,
-      "exempt": 1,
       "residual": 0
     },
     "src/tools/run/worker.ts": {

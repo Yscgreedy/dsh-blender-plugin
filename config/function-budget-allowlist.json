@@ -4,15 +4,6 @@
   "generatedAt": "2026-11-20T01:29:26.599Z",
   "functions": [
     {
-      "file": "extension/dsh_blender_bridge/commands/core/bpy_lookup.py",
-      "name": "bpy_api_lookup",
-      "lines": 115,
-      "classification": "integration-io",
-      "reason": "Reflective bpy API lookup: the length is the attribute/method surface probed, not nested branching.",
-      "owner": "addon",
-      "reviewBy": "2027-06-30"
-    },
-    {
       "file": "extension/dsh_blender_bridge/commands/core/describe.py",
       "name": "describe_node_type",
       "lines": 119,
@@ -130,9 +121,9 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "file": "runtime/core/queue/spawn-executor.ts",
+      "file": "runtime/core/queue/job-args.ts",
       "name": "buildJobArgs",
-      "lines": 100,
+      "lines": 115,
       "classification": "parsing",
       "reason": "Headless job prelude + argv assembly: POSIX-style args splitting, env merge, KERNEL_BOOTSTRAP inline and the -- separator; the length is the string surgery, not nested branching.",
       "owner": "host",
@@ -207,15 +198,6 @@
       "lines": 100,
       "classification": "dispatch-table",
       "reason": "Gateway app factory: the route-dependency table (29 routes worth of deps) plus transport/engine assembly and the close exit.",
-      "owner": "runtime",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/http/routes/act.ts",
-      "name": "createActRoutes",
-      "lines": 81,
-      "classification": "dispatch-table",
-      "reason": "Act route: parse body, run the session write + py lock gate, then one engine call and one response shape.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },
@@ -639,6 +621,15 @@
       "lines": 111,
       "classification": "linear-pipeline",
       "reason": "Headless see op: ordered camera/render/restore stages.",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/py/core/worker.py",
+      "name": "_hash_node_tree",
+      "lines": 81,
+      "classification": "linear-pipeline",
+      "reason": "Digest pass over GN/material/compositor node trees: one ordered walk of node identity, socket values and links, with per-tree node/link budgets that report digest_limited.",
       "owner": "runtime",
       "reviewBy": "2027-06-30"
     },

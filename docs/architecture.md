@@ -56,7 +56,11 @@ lib/runtime/**/*.js. Published packages contain built JavaScript, not backend Ty
 
 Layout:
 
-- runtime/core/: dispatch, kernel, scripts, catalog, engine;
+- runtime/core/: dispatch, kernel, scripts, catalog, engine; queue argument construction lives
+  in `queue/job-args.ts` and the process lifecycle in `queue/spawn-executor.ts`;
+- runtime/embedded/: the Python preludes and templates embedded into Blender command lines (GPU
+  setup, kernel path helpers, the `blender_py` act wrapper), kept as data modules so `paths.ts`
+  stays inside its line budget;
 - runtime/execution/: headless, jobs, workers (the hot headless kernel), recovery, and
   `input-paths.ts` (the submit-time input preflight shared by headless and jobs);
 - runtime/http/: routes, lease, host views;
@@ -71,9 +75,10 @@ crash still points at a TypeScript line.
 
 ### Headless jobs and the kernel
 
-`blender_run(kind="headless")` never runs a bare Python file. `runtime/core/queue/spawn-executor.ts`
+`blender_run(kind="headless")` never runs a bare Python file. `runtime/core/queue/job-args.ts`
 composes the same `KERNEL_BOOTSTRAP` the GUI path injects, then every `preload` module in its own
-namespace, then the caller's script. An inline script is appended to `job.py`; a `script_file` is
+namespace, then the caller's script; `spawn-executor.ts` owns the child process, log capture,
+timeout and cancellation. An inline script is appended to `job.py`; a `script_file` is
 exec'd from that same script with `__file__` set back to the user's path (Blender gives every
 `--python` file its own namespace, so two `--python` arguments would hide `K` from the second one).
 `bootstrap:false` is the only opt-out. An unknown `preload` name fails at prepare time with
@@ -101,7 +106,10 @@ does not depend on the env tier either.
 One host-side exception bypasses the GUI session gate: `blender_op(action="plan")` with an op from
 the local whitelist (`audit_mesh`, `img_*`, `visualreport_report`, `qc_render_views`, `montage`) **and**
 an explicit `args.file` **and** no ready GUI session submits a `kind="headless"` job through `POST /job`
-(`catalog_op` / `op_args`) instead of failing with `session_required`. `src/tools/op/local.ts` resolves
+(`catalog_op` / `op_args`) instead of failing with `session_required`. `headless=true` makes that same
+submission even when a GUI session **is** ready, so concurrent agents do not have to share the single GUI
+instance; `op="catalog", args={format:"json"}` exposes `needs_gui` / `headless` per op so an agent can
+decide before calling. `src/tools/op/local.ts` resolves
 the file, `runtime/execution/local-op/` turns the op name into a kernel call using the same generated
 routing table, and the receipt is always `verdict=degraded` with a `job_id` until the result is collected.
 Every other combination keeps the old rule: no session and no file is still a decision request, and no
@@ -112,6 +120,11 @@ appends one `--python-expr` postlude after `-a`; `runtime/py/render/channels_imp
 cv2) reports `foreground_px / coverage / n_components / bbox` per channel, and the job folds a single
 `CHANNELS {json}` marker into the three-state verdict. A missing ink object is `skipped` and downgrades the
 job to `degraded`, never `fail`; the command line is byte-identical when `channels` is absent.
+`runtime/execution/render-device.ts` prepends the Cycles device/sample setup and prints one
+`DSH_RENDER {json}` marker: `device=auto` tries OPTIX→CUDA→HIP→ONEAPI→METAL, enables only the chosen
+backend's devices, and reports `applied{compute_device_type,devices_used,samples,fell_back_to_cpu,warnings}`.
+A `//` output is resolved against the .blend directory before any directory is created; without a `file`
+the tool rejects it in argument validation instead of letting `mkdir '//'` fail as EPERM.
 
 ### The hot headless kernel
 
@@ -141,6 +154,36 @@ itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-tim
 and `consent-requests.ts` (persisted, human-approvable requests); `start` files a request, the human
 approves it over `/lease?action=consent_approve&requestId=…` (any terminal, no DSH identity headers) or
 pre-approves the host with `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow`, and the next `start` consumes it.
+
+### Subagents, read-only borrowing, and stale owners
+
+DSH gives a subagent its own `dshSessionId`, so strict `(hostId, dshSessionId)` ownership used to lock
+every subagent out of the GUI (`session_in_use` on attach, `session_required` on py/see). The session
+model now separates three rights:
+
+- **family**: same host and either the same DSH session or a subagent whose `parentAgentId` is the
+  owner's agent. The host does not always send `x-dsh-parent-agent-id`, so a same-host caller with
+  same-host caller is viewer-eligible: it attaches as a **viewer** (presence only; ownership never
+  moves; `is_mine` stays false)
+  and may receive grants. A grant issued with only `target_agent_id` records the granting agent as
+  the holder's parent and is matched by `hostId + agentId`; the write gate checks a covering grant
+  **before** rejecting the owner mismatch, so `collection:_probe_x` really is enough to run
+  `blender_py` there. A subagent never claims an unowned session (only a main agent does).
+- **read-only borrow**: any caller on the same host sees the session in `list` with
+  `owner` / `is_mine=false` / `borrowed=true`; `blender_see` and read-only ops work and every op
+  receipt carries `source.owner` + `source.is_mine`. Writes still fail (`session_in_use`) unless the
+  owner issues a grant.
+- **owner reclaim**: owner records carry `role` and heartbeat age. A subagent owner is stale after 30 s;
+  a main owner after **30 min** (it may wait a whole subagent round), and any authenticated call
+  refreshes the heartbeat. `prune` clears a stale owner unless a live `blender_py` holds the session,
+  and `release` accepts `force=true` from a same-host main agent. Status/list show
+  `heartbeat_age_ms` + `stale_after_ms` and the exact reclaim command instead of an opaque wait.
+  Owner expiry clears the claim but **keeps grants** (they have their own TTL): grants default to
+  10 min, accept `ttl_ms` up to 1 h, renew on use, and `grants` no longer answers `session_in_use`
+  for an owner=null session.
+
+`blender_py` takes a declared `write_scope`; after execution the addon reports the objects it actually
+changed (with collections) and the Gateway flags any object outside the grant as `scope_violation`.
 
 ### Public facades and the dual entry
 
@@ -282,8 +325,8 @@ These are the rules that protect the architecture:
   waive a function over 120 lines; the classes are dispatch-table, linear-pipeline, generated-catalog,
   orchestration, formatting, validation, parsing, and integration-io (see [Exceptions](#exceptions)).
 - runtime/py implementation files stay <=1,000 lines; TS and addon files stay <=600 lines. Path-level
-  size exceptions live in config/exceptions.json (kind=file-budget, with reason/owner/reviewBy) and are
-  checked by npm run check:exceptions; the plan catalog data table runtime/catalog/data.ts is the
+  size exceptions live in config/exceptions.json (kind=file-budget, with reason/owner/reviewBy), apply
+  to both budgets, and are checked by npm run check:exceptions; the plan catalog data table runtime/catalog/data.ts is the
   single registered one.
 - Every Python module is in modules.json; there are no flat shims and no second registry.
 - No explicit any in foundation host/runtime files; type debt is a ledger, not a whole-file exemption.
@@ -333,11 +376,14 @@ Each entry has `id`, `kind`, `path`, `reason`, `owner`, and `reviewBy`; `npm run
 check:exceptions` (part of `npm run lint`) rejects an unknown kind, a missing path, a duplicate id,
 a reason shorter than 16 characters, and an expired `reviewBy`. Kinds: `file-budget`,
 `function-budget`, `python-static`, `single-line-reexport`, `facade-export`, `doc-path`,
-`matrix-row`, `python-private-import`. Twelve entries exist today: the `file-budget` one for
-`runtime/catalog/data.ts`; `single-line-reexport` for `runtime/catalog/index.ts`,
-`src/host/runtime-bridge.ts`, and `src/headless/receipts/index.ts` (the documented src-to-lib
-bridge and two barrels); and eight `python-private-import` entries for the addon command modules
-that reuse private `_polyhaven_*` / `_polypizza_*` helpers from `integrations/*_client.py`.
+`matrix-row`, `python-private-import`. Seventeen entries exist today: five `file-budget` entries
+(`runtime/catalog/data.ts`, `runtime/core/sessions/registry.ts`, `runtime/core/local-evidence.ts`,
+and the two single-file Blender scripts `runtime/py/core/worker.py` and `runtime/py/render/view.py`);
+`single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`,
+`src/headless/receipts/index.ts`, and `runtime/execution/local-op/index.ts` (the documented
+src-to-lib bridge and three barrels); and eight `python-private-import` entries for the addon
+command modules that reuse private `_polyhaven_*` / `_polypizza_*` helpers from
+`integrations/*_client.py`.
 `tests/unit/python/test_private_import_contract.py` scans the addon with `ast` for every
 `_`-prefixed name imported from `integrations/*_client.py`, derives the expected count from
 `config/exceptions.json`, and fails on an unregistered pair or a stale entry, so the registry and

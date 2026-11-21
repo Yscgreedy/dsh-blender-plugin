@@ -122,6 +122,22 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "id": "EXC-FILE-BUDGET-WORKER-PY",
+      "kind": "file-budget",
+      "path": "runtime/py/core/worker.py",
+      "reason": "无头常驻 worker 以单文件方式启动（worker-start.ts 直接把 runtime/py/core/worker.py 交给 blender -b --python），同目录模块要额外解决传输与 sys.path 注入；1428 行超过 runtime/py 的 1000 行预算，先登记例外，拆分（accept loop / digest / checkpoint 三段）排到 2027-06-30 前复核。",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "id": "EXC-FILE-BUDGET-VIEW-PY",
+      "kind": "file-budget",
+      "path": "runtime/py/render/view.py",
+      "reason": "view.py 由 injectModule / preload 按**单份源码字符串**注入 Blender（facade + <stem>_impl 才是多文件通道），拆文件会改变注入与失效指纹契约；1187 行超过 1000 行预算，先登记例外，矩阵/投影与 PNG/诊断两段拆分排到 2027-06-30 前复核。",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "id": "EXC-SINGLE-LINE-REEXPORT-LOCAL-OP",
       "kind": "single-line-reexport",
       "path": "runtime/execution/local-op/index.ts",

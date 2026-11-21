@@ -34,6 +34,7 @@ export default defineConfig([
     '.dsh/**',
     'local-workspace/**',
     '.review-tmp/**',
+    '.agents/**',
     'runtime/ext/**',
     'skills/**',
     'docs/**',
@@ -60,6 +61,9 @@ export default defineConfig([
       ecmaVersion: 'latest',
       sourceType: 'module',
       globals: globals.node,
+      // 固定到本仓库根：多 agent worktree（.agents/worktrees/*）会让 ESLint 看到多个
+      // TSConfigRootDir 候选并整体解析失败；根目录只有一个，不需要猜。
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
     },
     rules: {
       // TypeScript already resolves identifiers; no-undef would only create noise.

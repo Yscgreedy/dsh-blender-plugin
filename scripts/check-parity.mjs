@@ -78,11 +78,21 @@ const DECLARED_CATALOG_ADDITIONS = [
   { family: 'geo', ops: 33 },
   // 3.2: external asset search/import (PolyHaven), see runtime/py/core/asset.py
   { family: 'asset', ops: 3 },
+  // 3.3: character animation and toon shading (anim/toon families, 5 ops total)
+  { family: 'anim', ops: 3 },
+  { family: 'toon', ops: 2 },
 ]
 
 // 3.2: read-only ops added on top of the base whitelist (network reads that do not
 // touch the scene, so they stay exempt from the write lease).
-const DECLARED_READ_ONLY_ADDITIONS = ['asset_help', 'asset_search']
+const DECLARED_READ_ONLY_ADDITIONS = [
+  'asset_help',
+  'asset_search',
+  // 3.3: anim/toon audit surfaces that read the scene but never write it
+  'anim_rig_report',
+  'anim_deform_audit',
+  'toon_outline_audit',
+]
 
 // Declared user-visible catalog text patches: exact base -> current replacements
 // for reviewed help-text fixes. The parity gate compares user-visible text
@@ -364,7 +374,7 @@ try {
   ok('declared-engine-removals', 'declared engine exports removed', DECLARED_ENGINE_REMOVALS.length)
   ok('exports-count', 'engine exports', bKeys.length)
 
-  // 2. Catalog fingerprint (36 families / 264 ops / 25 commands / 6 tool details).
+  // 2. Catalog fingerprint (base + declared additions -> 38 families / 269 ops / 25 commands / 6 tool details).
   // The 3.1 tool-surface change is declared: toolDetailKeys shrinks 7 -> 6 and
   // the family metadata grows target fields, so the hash itself is not compared;
   // the structural contract counts are.
