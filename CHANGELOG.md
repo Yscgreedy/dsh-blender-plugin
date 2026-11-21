@@ -36,6 +36,10 @@
 - **验收**：typecheck（runtime + src + tests）· lint · format:check · check:structure（360/360 ≤600、
   178/178 ≤1000）· check:function-budget（111/111 已登记、0 stale）· check:exceptions（17 条）·
   unit / contract / integration / python / extension-unit / python-static / parity 全绿；扩展 zip 重新构建并与源码一致。
+- **CI 首跑（PR gate #44861121212）**：static-and-tests、addon、extension（4.2.10 / 5.3.0）、Linux preview
+  （两档）、Windows helper、coverage ratchet **8/8 全绿**；`v2.6.2` 基线 tag 与 `v3.3.0` tag 已推送。
+  首个 coverage 失败只因基线 tag 尚未在远端（`git rev-parse --verify v2.6.2`），tag 推送后复跑通过：
+  changed lines 72.4%、python pure logic 84.7%。
 
 ### 2026-11-20 第三阶段装机复测补丁：P1 viewer/grant、TTL、owner 过期口径
 
