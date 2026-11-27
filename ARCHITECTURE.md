@@ -47,7 +47,7 @@
 
 | 指标 | 值 | 口径 |
 |---|---|---|
-| TS 源文件 / 相对导入边 | **301 / 1088** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
+| TS 源文件 / 相对导入边 | **302 / 1092** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
 | 值级 SCC / 类型级 SCC | **0 / 6** | 排除 `import type` 后为 0；含类型为 6（全 barrel） |
 | 跨层边 | execution→core **0**；foundation→core/execution **0**；core→execution **16** | 相对 import 解析 `.js`→`.ts` |
 | `src` ↔ `runtime` 源码 import | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
@@ -101,7 +101,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### 2.4 会话、写鉴权与同意
 
-- `runtime/core/sessions/registry.ts` 管归属/实例/租约/presence/selection/py 窗口（**807 行**）：拆分已移出写授权（`write-authority.ts`）、同意面（`consent-book.ts`）与只读视图（`session-views.ts`）；剩余 instances / lifecycle。
+- `runtime/core/sessions/registry.ts` 管归属/租约/presence/selection/py 窗口（**773 行**）：拆分已移出写授权、同意面、只读视图与实例簿（`write-authority` / `consent-book` / `session-views` / `instance-book`）；剩余 lifecycle 一刀。
 - **写鉴权单一入口**：`runtime/http/session-gate.ts` 的 `sessionWriteGate(payload, registry)`；`leaseGate(payload, registry)` 在 `gateway/app.ts` 绑定 registry。**带 caller 头但 registry 缺失 → fail-closed（`session_unavailable`）**；无 caller 头的旧客户端仍走 LEASE 兼容路径。
 - **跳过判据单入口（P2）**：`runtime/http/write-skip.ts` 的 `shouldGateWrite(path, payload)` 是唯一解释器；例外只有两条例外规则（`/act` 的 `py+caller`、`/worker` 的 `isolated`），路由只问“要不要过门”，不再自己拼三元式。默认是过门：未知路径/未知 op 一律落到写门。
 - virtual-gui 同意：`consent.ts`（一次性令牌）、`consent-requests.ts`（持久化、人类批准）、`consent-policy.ts`（env → policy 文件 → 配置 → 默认 manual，≤250 ms 生效）。
@@ -184,7 +184,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 ### 3.3 维度检查
 
 - **系统层**：9 FR / 12 DP；DP>FR 来自共享基础设施（A/H/K），不是过度分层。
-- **DP < FR（职责过度集中）**：`core/sessions/registry.ts`（807 行 / 48 public / 9 子能力，拆分进行中）、`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，且不在行预算门内）、`runtime/py/core/worker.py`（1452）。
+- **DP < FR（职责过度集中）**：`core/sessions/registry.ts`（773 行 / 48 public / 9 子能力，拆分进行中）、`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，且不在行预算门内）、`runtime/py/core/worker.py`（1452）。
 - **DP > FR（透传/碎片）**：工具 presenter 链；队列四层（route → JobSurface → Queue → SpawnExecutor）；`PlanCallDeps` 40 字段。
 - **死质量**：`src/headless/receipts/**`（648 行、0 生产调用）已删除；当前无已知死模块。
 
@@ -406,6 +406,17 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 **验证**：8 个会话相关单测文件 116 条绿；unit 137 / 1210、integration 串行 32 / 309、contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无。
 
+### 7.10 registry 拆分第四刀（实例簿移出）
+
+| 项 | 结果 |
+|---|---|
+| 新模块 | `runtime/core/sessions/instance-book.ts`（112 行）：`InstanceBook` + `InstanceBookHost`（sessions 映射、实例表、dispose、limits、wait） |
+| 迁走 | `refreshInstances` / `readyInstanceIds` / `prune` / `reapLostInstances` / `livenessOf` / `virtualGuiCount` / `handleInstanceGone` / `limits` / `waitForInstance` |
+| 状态归位 | `instances` / `sawInstances` 两个字段随书走，"空表不等于掉线"的探针语义原样保留 |
+| 累计 | registry 1193 → **773** 行；四个协作者合计 701 行 |
+
+**验证**：9 个会话相关单测文件 119 条绿；unit 137 / 1210、integration 串行 32 / 309、contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无。
+
 ---
 
 ## 8 路线图
@@ -425,7 +436,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### P1-2/3/4
 
-- `SessionRegistry` 拆分：**已完成三刀**（写授权 227 行 / 同意面 206 行 / 只读视图 156 行），registry 1193 → 807；剩 instances / lifecycle 两刀，目标是 ≤400 行 + 子模块各 ≤400，并去掉它的 file-budget 例外。
+- `SessionRegistry` 拆分：**已完成四刀**（写授权 227 / 同意面 206 / 只读视图 156 / 实例簿 112 行），registry 1193 → 773；剩 lifecycle 一刀，做完可压到 600 行预算内并去掉它的 file-budget 例外。
 - `config.ts` 拆 platform/paths/file/blender-detect，配置声明式化。
 - 客户端 3058 行拆分并纳入类型/行预算。
 

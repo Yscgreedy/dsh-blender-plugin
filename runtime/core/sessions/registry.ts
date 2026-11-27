@@ -1,5 +1,4 @@
 import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
-import type { AttachLiveness } from './attach.js'
 import { CFG } from '../../config.js'
 import { selectDisplayProvider } from '../../display/provider.js'
 import { systemVirtualGuiLimits } from '../../display/limits.js'
@@ -14,6 +13,7 @@ import type { GrantOpsHost } from './grant-ops.js'
 import { displayCapabilities } from '../../display/prerequisites.js'
 import type { DisplayCapabilities, DisplayProvider } from '../../display/types.js'
 import { ConsentBook } from './consent-book.js'
+import { InstanceBook } from './instance-book.js'
 import { SessionViews } from './session-views.js'
 import { WriteAuthority } from './write-authority.js'
 import {
@@ -27,7 +27,7 @@ import {
   sameHost,
   sessionView,
 } from './types.js'
-import { findCallerSession, pruneSessions, unownedSessions } from './lookup.js'
+import { findCallerSession, unownedSessions } from './lookup.js'
 import { VirtualGuiLifecycle, waitForAddonInstance } from './virtual-gui.js'
 import type { ProviderSelector } from './virtual-gui.js'
 import type {
@@ -59,12 +59,8 @@ function defaultProviderSelector(capabilities: DisplayCapabilities): DisplayProv
 
 export class SessionRegistry {
   private sessions = new Map<string, SessionRecord>()
-  private instances: InstanceRef[] = []
-  /**
-   * 实例表是否曾经"有内容"。空表本身不是"实例已掉线"的证据 —— 测试里没有真实
-   * Gateway 的 registry 恒为空表，把它们当成掉线会把活着的 virtual-gui 拆掉。
-   */
-  private sawInstances = false
+  /** Live instances + the prune they drive (registry 拆分第四刀). */
+  private readonly instanceBook: InstanceBook
   private humanPaused = new Map<string, boolean>()
   /**
    * Last instance each caller attached. prune() releases a user-gui record the
@@ -81,8 +77,6 @@ export class SessionRegistry {
   ) {
     const opts = typeof options === 'function' ? { display: options } : options
     this.listInstances = instances
-    // 构造时已有的实例也算"实例表可用"的证据（registry 通常在所有 addon 之前建）。
-    if (instances().length) this.sawInstances = true
     this.displayFn = opts.display || displayCapabilities
     this.limitsFn = opts.limits || (() => systemVirtualGuiLimits(CFG.features.virtualGuiMax))
     this.waitForInstanceFn =
@@ -97,18 +91,25 @@ export class SessionRegistry {
       findForCaller: (c) => this.findForCaller(c),
       listInstances: () => this.listInstances(),
     })
+    this.instanceBook = new InstanceBook({
+      sessions: this.sessions,
+      listInstances: () => this.listInstances(),
+      dispose: (session) => this.lifecycle.disposeSession(session),
+      limits: () => this.limitsFn(),
+      waitForInstance: (instanceId, timeoutMs) => this.waitForInstanceFn(instanceId, timeoutMs),
+    })
     this.views = new SessionViews({
       sessions: this.sessions,
-      instances: () => this.instances,
+      instances: () => this.instanceBook.list(),
       prune: (now) => this.prune(now),
       findForCaller: (c) => this.findForCaller(c),
       tombstoneFor: (c) => this.tombstoneFor(c),
-      livenessOf: (session) => this.livenessOf(session),
+      livenessOf: (session) => this.instanceBook.liveness(session),
     })
     this.consent = new ConsentBook({
       sessions: this.sessions,
       prune: (now) => this.prune(now),
-      instances: () => this.instances,
+      instances: () => this.instanceBook.list(),
       virtualGuiCount: () => this.virtualGuiCount(),
       limits: () => this.limitsFn(),
     })
@@ -131,36 +132,16 @@ export class SessionRegistry {
   }
 
   refreshInstances(next: InstanceRef[]): void {
-    this.instances = next
-    if (next.length) this.sawInstances = true
+    this.instanceBook.refresh(next)
   }
 
   /** Ready instances the Gateway currently knows — routing evidence for the host layer. */
   readyInstanceIds(): string[] {
-    this.prune()
-    return this.instances.filter((x) => x.ready).map((x) => x.instanceId)
+    return this.instanceBook.ready()
   }
 
   private prune(now = Date.now()): void {
-    this.instances = pruneSessions(this.sessions, this.listInstances, now)
-    if (this.instances.length) this.sawInstances = true
-    this.reapLostInstances()
-  }
-
-  /**
-   * A virtual-gui session cannot outlive the Blender it started. The instance_gone
-   * event normally disposes it, but a missed event used to leave a session record
-   * with a live provider handle and no way to stop it; this is the same teardown,
-   * driven from the instance list instead of the event stream.
-   */
-  private reapLostInstances(): void {
-    if (!this.sawInstances) return
-    const known = new Set(this.instances.map((x) => x.instanceId))
-    for (const s of [...this.sessions.values()]) {
-      if (s.kind !== 'virtual-gui' || !s.instanceId || known.has(s.instanceId)) continue
-      this.sessions.delete(s.id)
-      void this.lifecycle.disposeSession(s)
-    }
+    this.instanceBook.prune(now)
   }
 
   findForCaller(c: CallerIdentity): SessionRecord | null {
@@ -172,13 +153,6 @@ export class SessionRegistry {
     return free.length === 1 ? (free[0] as SessionRecord) : null
   }
 
-  /** Is the instance behind this record in the live ready list right now? */
-  private livenessOf(session: SessionRecord): AttachLiveness {
-    const ready = this.instances.filter((x) => x.ready)
-    const own = ready.some((x) => x.instanceId === session.instanceId)
-    return { instanceReady: own, readyInstances: ready.length }
-  }
-
   private ensureAttached(
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
@@ -186,7 +160,7 @@ export class SessionRegistry {
     this.prune()
     const requested = opts.instanceId ? 'user-gui:' + String(opts.instanceId) : ''
     const existing = requested ? (this.sessions.get(requested) ?? null) : this.findForCaller(c)
-    if (existing) return this.adopt(claimExisting(existing, c, this.livenessOf(existing)), c)
+    if (existing) return this.adopt(claimExisting(existing, c, this.instanceBook.liveness(existing)), c)
     const picked = pickInstance(this.listInstances(), opts)
     if (!('instance' in picked)) {
       // No live instance: prefer "your Blender disconnected" over "no session".
@@ -208,10 +182,10 @@ export class SessionRegistry {
         )
       // claimExisting owns the owner/viewer decision (same-host viewers are allowed,
       // writes still need a grant); owner 过期被 prune 清掉的会话可以重新认领.
-      return this.adopt(claimExisting(knownVirtual, c, this.livenessOf(knownVirtual)), c)
+      return this.adopt(claimExisting(knownVirtual, c, this.instanceBook.liveness(knownVirtual)), c)
     }
     const known = this.sessions.get('user-gui:' + picked.instance.instanceId)
-    if (known) return this.adopt(claimExisting(known, c, this.livenessOf(known)), c)
+    if (known) return this.adopt(claimExisting(known, c, this.instanceBook.liveness(known)), c)
     const created = createSession(picked.instance, c)
     created.paused = this.humanPaused.get(picked.instance.instanceId) === true
     if (created.paused) created.pausedAt = Date.now()
@@ -454,11 +428,7 @@ export class SessionRegistry {
   }
 
   virtualGuiCount(): number {
-    let count = 0
-    for (const s of this.sessions.values()) {
-      if (s.kind === 'virtual-gui' && (s.status === 'starting' || s.status === 'ready')) count++
-    }
-    return count
+    return this.instanceBook.count()
   }
 
   addSession(session: SessionRecord): void {
@@ -471,19 +441,15 @@ export class SessionRegistry {
 
   /** The addon socket dropped: a virtual-gui session for it cannot outlive it. */
   handleInstanceGone(instanceId: string): void {
-    const session = this.sessions.get('virtual-gui:' + String(instanceId))
-    if (!session) return
-    session.status = 'stopped'
-    this.sessions.delete(session.id)
-    void this.lifecycle.disposeSession(session)
+    this.instanceBook.gone(instanceId)
   }
 
   limits(): VirtualGuiLimits {
-    return this.limitsFn()
+    return this.instanceBook.limits()
   }
 
   waitForInstance(instanceId: string, timeoutMs: number): Promise<boolean> {
-    return this.waitForInstanceFn(instanceId, timeoutMs)
+    return this.instanceBook.wait(instanceId, timeoutMs)
   }
 
   heartbeat(
