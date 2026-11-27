@@ -1,15 +1,5 @@
 import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import type { AttachLiveness } from './attach.js'
-import { issueConsentToken } from './consent.js'
-import { policyLock, policyWriteTarget, resolveConsentPolicy } from './consent-policy.js'
-import {
-  approveConsentRequest,
-  consentRequestsAll,
-  consentRequestView,
-  consentRequestsFor,
-  denyConsentRequest,
-  ensureConsentRequest,
-} from './consent-requests.js'
 import { CFG } from '../../config.js'
 import { selectDisplayProvider } from '../../display/provider.js'
 import { systemVirtualGuiLimits } from '../../display/limits.js'
@@ -23,6 +13,7 @@ import { grantTo, listGrants, revokeFrom } from './grant-ops.js'
 import type { GrantOpsHost } from './grant-ops.js'
 import { displayCapabilities } from '../../display/prerequisites.js'
 import type { DisplayCapabilities, DisplayProvider } from '../../display/types.js'
+import { ConsentBook } from './consent-book.js'
 import { WriteAuthority } from './write-authority.js'
 import {
   callerKey,
@@ -111,6 +102,13 @@ export class SessionRegistry {
       findForCaller: (c) => this.findForCaller(c),
       listInstances: () => this.listInstances(),
     })
+    this.consent = new ConsentBook({
+      sessions: this.sessions,
+      prune: (now) => this.prune(now),
+      instances: () => this.instances,
+      virtualGuiCount: () => this.virtualGuiCount(),
+      limits: () => this.limitsFn(),
+    })
   }
   private readonly verifyFn: ((instanceId: string) => Promise<boolean>) | null
   private listInstances: () => InstanceRef[]
@@ -120,6 +118,8 @@ export class SessionRegistry {
   private readonly lifecycle: VirtualGuiLifecycle
   /** Ownership/grant/write decision (registry 拆分第一刀); the registry keeps the public entry. */
   private readonly writes: WriteAuthority
+  /** Consent filing/decision/panel projection (registry 拆分第二刀). */
+  private readonly consent: ConsentBook
 
   display(): DisplayCapabilities {
     return this.displayFn()
@@ -640,149 +640,42 @@ export class SessionRegistry {
     return this.lifecycle.start(c, opts)
   }
   issueConsent(c: CallerIdentity): SessionResult<{ consentToken: string; expiresAt: number }> {
-    return { ok: true, ...issueConsentToken(c) }
+    return this.consent.issueConsent(c)
   }
 
   /** File (or reuse) the pending virtual-gui consent request for this caller. */
   requestConsent(c: CallerIdentity): SessionResult<Record<string, unknown>> {
-    const filed = ensureConsentRequest(c)
-    if (filed.rateLimited)
-      return fail(
-        'consent_rate_limited',
-        'session',
-        'this caller filed a consent request less than a minute ago (' + filed.requestId + ')',
-        'approve the waiting request in the session panel, wait ' +
-          String(Math.ceil(Number(filed.retryAfterMs || 0) / 1000)) +
-          's, or switch the policy to auto/deny in the panel',
-        {
-          reason: 'rate_limited',
-          request_id: filed.requestId,
-          retry_after_ms: filed.retryAfterMs ?? null,
-        },
-      )
-    return {
-      ok: true,
-      request: consentRequestView(filed.requestId),
-      reused: filed.reused,
-      ...(() => {
-        const policy = resolveConsentPolicy()
-        return {
-          policy: policy.policy,
-          mode: policy.mode,
-          auto: policy.auto,
-          policy_source: policy.source,
-        }
-      })(),
-    }
+    return this.consent.requestConsent(c)
   }
 
   /**
    * Record the human's approval for a filed request.
    *
-   * NOT reachable from an agent: `dispatchSessionAction` refuses
-   * `consent_approve` / `consent_deny` for any call that carries a DSH identity
-   * (`consent_human_only`), and the model tool schema no longer offers them.
-   * The decision comes from the identity-free human channel (session panel /
-   * terminal command). This method stays in-process for that channel and for
-   * tests; it is not a caller-facing authorization.
+   * Human channel only: the agent surface refuses consent_approve / consent_deny
+   * (consent_human_only). The decision logic lives in ConsentBook.
    */
   approveConsent(requestId: unknown, source = 'human'): SessionResult<Record<string, unknown>> {
-    const decided = approveConsentRequest(requestId, source)
-    if (!decided.ok)
-      return fail(
-        'consent_' + decided.reason,
-        'session',
-        'consent request ' + String(requestId || '') + ' is ' + decided.reason,
-        decided.reason === 'missing'
-          ? 'use the request_id from the blender_session action=start receipt'
-          : 'call action=start again to file a fresh request',
-        { requestId: requestId || null, reason: decided.reason },
-      )
-    return { ok: true, request: decided.request }
+    return this.consent.approveConsent(requestId, source)
   }
 
-  /** Human-only, same rule as approveConsent (see the note there). */
+  /** Human-only, same rule as approveConsent. */
   denyConsent(requestId: unknown, reason = 'human denied'): SessionResult<Record<string, unknown>> {
-    const decided = denyConsentRequest(requestId, reason)
-    if (!decided.ok)
-      return fail(
-        'consent_' + decided.reason,
-        'session',
-        'consent request ' + String(requestId || '') + ' is ' + decided.reason,
-        'call action=start again to file a fresh request',
-        { requestId: requestId || null, reason: decided.reason },
-      )
-    return { ok: true, request: decided.request }
+    return this.consent.denyConsent(requestId, reason)
   }
 
   /** What this caller still has waiting on a human. */
   consentStatus(c: CallerIdentity): SessionResult<Record<string, unknown>> {
-    const policy = resolveConsentPolicy()
-    return {
-      ok: true,
-      policy: policy.policy,
-      mode: policy.mode,
-      auto: policy.auto,
-      policy_source: policy.source,
-      requests: consentRequestsFor(c),
-    }
+    return this.consent.consentStatus(c)
   }
 
   /**
-   * Read-only data for the Blender session panel inside the conversation view.
-   *
-   * It takes no DSH identity on purpose: the browser that renders the panel is
-   * not the agent, and the panel must not become a write path. Everything here is
-   * a projection of state the Gateway already owns; the two actions the panel
-   * offers (approve / deny) go through the human consent channel, which can only
-   * release a request the agent itself filed.
+   * Read-only data for the Blender session panel (no DSH identity: the panel is not
+   * the agent and must not become a write path).
    */
   consentPanel(dshSessionId: string, now = Date.now()): Record<string, unknown> {
-    this.prune(now)
-    const sid = String(dshSessionId || '')
-    const policy = resolveConsentPolicy(process.env, now)
-    const limits = this.limitsFn()
-    const ready = this.instances.filter((x) => x.ready)
-    const sessions = [...this.sessions.values()].map((s) => panelSessionRow(s, sid))
-    return {
-      ok: true,
-      ts: now,
-      panel_session: sid || null,
-      policy: {
-        mode: policy.mode,
-        policy: policy.policy,
-        auto: policy.auto,
-        source: policy.source,
-        file: policy.file,
-        note: policy.note,
-        // The panel may switch the mode — unless a human pinned it with the env
-        // var, in which case the controls are disabled and a POST is refused.
-        ...(() => {
-          const lock = policyLock()
-          const target = policyWriteTarget()
-          return {
-            locked: lock.locked,
-            lock_env: lock.locked ? lock.env : null,
-            lock_value: lock.value,
-            writable: !lock.locked,
-            write_target: target.file,
-            write_target_exists: target.exists,
-          }
-        })(),
-      },
-      resources: {
-        instances: this.virtualGuiCount(),
-        limit: limits.limit,
-        configured: limits.configured,
-        low_resource: limits.low_resource,
-        limit_reason: limits.reason,
-        ready_instances: ready.length,
-        connected: ready.length > 0,
-      },
-      requests: consentRequestsAll(now).map((r) => ({ ...r })),
-      sessions,
-    }
+    return this.consent.consentPanel(dshSessionId, now)
   }
+
   async stop(c: CallerIdentity, sessionId?: string): Promise<SessionResult<{ stopped: boolean }>> {
     this.prune()
     return this.lifecycle.stop(c, sessionId)
@@ -997,24 +890,3 @@ export class SessionRegistry {
  * is borrowed: ownership in 3.1 is host + DSH session, and the session half is the
  * one the panel actually knows.
  */
-function panelSessionRow(s: SessionRecord, dshSessionId: string): Record<string, unknown> {
-  const owner = s.owner
-  const mine = !!owner && !!dshSessionId && String(owner.dshSessionId || '') === dshSessionId
-  const caller: CallerIdentity | null = dshSessionId
-    ? {
-        hostId: owner ? String(owner.hostId || '') : '',
-        dshSessionId,
-        agentId: mine ? String(owner?.agentId || '') : '',
-        role: 'main',
-      }
-    : null
-  const view = sessionView(s, caller || undefined)
-  const viewer =
-    !!dshSessionId &&
-    [...s.agents.values()].some((a) => String(a.caller.dshSessionId || '') === dshSessionId)
-  return {
-    ...view,
-    panel_is_mine: dshSessionId ? mine : null,
-    viewer,
-  }
-}
