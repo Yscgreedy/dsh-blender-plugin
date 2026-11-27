@@ -5,7 +5,7 @@
 > **范围**：全仓库（src / runtime TS / runtime/py / extension / config / tests / scripts）。
 > **方法**：Nam P. Suh 公理化设计——FR–DP 映射、独立公理（三角化/破环）、信息公理（I 最小）、之字形分层。
 > **证据**：结论均给 `文件:行`。标 ✅ 的是本报告亲自复核；标 ◐ 的来自分层审计（原始报告见 §8），未逐条重跑。
-> **状态**：审计基线 = P0 前；**当前仓库状态 = commit `fbea0a3`（P0 已合并）+ P1-1a 工作区 WIP**。§9 是动态状态页，路径映射/度量/验证以 §9 为准；§1–§8 保留审计基线（路径可按 §9.1 映射到当前布局）。
+> **状态**：审计基线 = P0 前；**当前仓库状态 = `1ae237d`（P0 + P1-1a 已合并）**。§9 是动态状态页，路径映射/度量/验证以 §9 为准；§1–§8 保留审计基线（路径可按 §9.1 映射到当前布局）。
 
 ---
 
@@ -22,7 +22,7 @@
 | `core` ↔ `execution` | **严重耦合（越层双向）** | core→execution 17 条、execution→core 45 条 ✅ |
 | 写鉴权 | **严重耦合（双权威）** | `http/lease.ts:176-182` 把 registry 授权与 LEASE 串在同一函数；8+ 路由各带跳过规则 ◐ |
 | 证据 ↔ 重载 | **严重耦合（跨进程控制回路）** | 宿主装载写清单 → 运行时读清单出 verdict → reload 以 verdict 为唯一判据 ✅ |
-| Blender Python 五域 | **严重耦合（功能单一 SCC）** | 语法跨域 import = 0，功能层经 `K.*` 互通：297 处、跨域 95 处、3 强 2-环 ◐ |
+| Blender Python 五域 | **局部耦合（P1-1a 后）** | view/deliver 已端口化；剩余 `core→render`（calib/material）、`export→core`（gate）、`geometry↔assembly` ◐ |
 | 契约/计数 | **分布式事实** | 只读清单 98 vs 104（**已腐坏**）✅；op 名 4 份；通道词表 3 份 ✅ |
 
 **正式评级：Coupled（局部严重）**。运行时无环是优点，但仍不足以抵消"状态双权威 + 跨进程回路 + 功能 SCC + 已腐坏副本"这四件事。主干可以继续演进；每次触碰 `core`、`evidence`、`runtime/py`、写路由，都会产生"改一处、验五处"的回归税。
@@ -62,7 +62,7 @@ Python 五域断环（最大的一处）放在 **P1-1**：它需要"先有稳定
 | `core → execution` 正向边 | 17 | **16** | 编排依赖执行，方向正确 |
 | `src` ↔ `runtime` 源码 import | 0 | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
 | Python import / 跨域 import | 940 / 0 | **940 / 0** | 守卫：`tests/unit/python/test_runtime_layout.py:128-177` |
-| Python `K.<attr>` / 跨域 | 297 / 95 | **297 / 95**（P1-1a 进行中） | ◐ python-audit 分域归属 |
+| Python `K.<attr>` / 跨域 | 297 / 95 | **297 / 95**（P1-1a 只改 view/deliver 两条边，分域矩阵待重算） | ◐ python-audit 分域归属 |
 | 模块 fan-in 前 5 | config 57、core/json 53（基线） | config **57**、foundation/json **53**、contracts/dynamic **50**、paths **32**、src/constants **27** | 直接 import |
 | `DSH_*` 环境变量 | 46 | **46**（config.ts 独占 24 处读取） | 排除 vendored |
 | 契约规模 | 6 / 38 / 270 / 45 / 44 / 25 / 29 / 12 | **不变** | `capability.lock.json`、`routing.json`、`modules.json` |
@@ -193,7 +193,7 @@ DP0：宿主插件（6 工具） + 本机 Gateway（HTTP + addon WS） + Blender
 | **R1** | `core` ↔ `execution` | 包级双向 | core→execution 17 / execution→core 45 ✅ | 改内核/脚本必须重验作业；execution 难以单独测试 | **已断（P0-2b）**：execution→core **0**；正向 core→execution 16 |
 | **R2** | 写鉴权双权威 | 状态 | `http/lease.ts:176-182` 的 `leaseGate` 内串联 registry 授权与 LEASE；各路由跳过规则不同 ◐ | 同一入口里两套权威串联；跳过条件是散落的布尔公式；registry 未装配时放行 | **部分（P0-3a）**：入口唯一 + fail-closed；跳过谓词仍在路由（P1 数据化） |
 | **R3** | 证据 ↔ 重载 | 跨进程控制回路 | 清单写入 `host-manifest.ts:90-100` → 读取 `layers.ts` → verdict → reload ✅ | 唯一判据是被 reload 自己改写的事实；`unknown` 难以单测 | **已断（P0-4a）**：显式快照入参；`unknown` 可单测 |
-| **R4** | Python 五域 | 功能 SCC | core↔render、core↔export、geometry↔assembly、（弱）core↔assembly ◐ | 不存在拓扑序；改一域语义波及证据/交付/形状 | **进行中（P1-1a）**：core→render/export 端口倒置 WIP；geometry↔assembly 待产品决策 |
+| **R4** | Python 五域 | 功能 SCC | core↔render、core↔export、geometry↔assembly、（弱）core↔assembly ◐ | 不存在拓扑序；改一域语义波及证据/交付/形状 | **部分（P1-1a 已合并）**：view/deliver 端口化；剩余 export→core gate、core→render calib/material、geometry↔assembly |
 | **R5** | 会话 ⇄ 热更 ⇄ 生命周期 | 状态（两代写） | `session/reload.ts` → `hostReload` → `plugin-lifecycle.ts` → settle ◐ | 同一 reload 状态被两代 fiber 写 | **已断（P0-4b）**：`reloadOnce` 单入口；`globalThis` 探针收敛保留 |
 | **D1** | **只读判定已腐坏** | 契约副本 | 宿主 98 vs catalog 104；缺 6 个；声称的 parity 测试不存在 ✅ | 6 个只读 op 无会话时被判 `session_required` | **已修复（P0-1a）**：104 + parity 门 |
 | **D2** | op 可达性双向破洞 | 契约 | routing-only exact op；空前缀 catch-all 抢名 ◐ | 广告出来不可达 / 可路由但不可发现 | **已加 ratchet（P0-1d）**：exact op 可发现、catch-all 唯一且表尾、重名只允许 `help` |
@@ -304,8 +304,8 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 **当前评级：Decoupled（主干）/ Coupled（局部）**
 
 - **已消除**：R1（foundation 分层）、R3（显式快照）、R5（reloadOnce）、D1（只读 104 + 门）、D2/D5（ratchet/parity 门）。
-- **仍 Coupled**：R2 的跳过谓词仍散落在各路由；R4 的 Python 五域功能 SCC（P1-1a 正在断 core→render/export）；D3/D4 未收口。
-- **结论**：P0 前判定的四条结构环里 R1/R3/R5 已断、R4 进行中；主干可继续演进，P1 的靶子收敛到 Python 与两处契约/状态副本。
+- **仍 Coupled**：R2 的跳过谓词仍散落在各路由；R4 剩 `export→core` gate、`core→render` calib/material、`geometry↔assembly`；D3/D4 未收口。
+- **结论**：P0 前判定的四条结构环里 R1/R3/R5 已断；R4 的 view/deliver 两条边已在 P1-1a 端口化，剩余三处属 P1-1b/1c。主干可继续演进。
 
 ---
 
@@ -427,7 +427,7 @@ FR7 契约              X              ·              ·          X         X
 | `receipt.v2` 手写 | 6 | **1** | `rg "receipt.v2" src` |
 | 可变模块单例 | 17 | **16**（session-gate 移除） | 静态扫描 |
 | `globalThis` 代际 | 2 键 | **2 键（收敛保留）** | 只在 `host-manifest.ts` |
-| Python 跨域 `K` 引用 | 95 | **95（P1-1a 进行中）** | python-audit 脚本 |
+| Python 跨域 `K` 引用 | 95 | **95（分域矩阵待重算；view/deliver 字面已归零）** | python-audit 脚本 |
 | TS 文件 / 相对边 | 295 / 987 | **298 / 1000** | §0.2 口径 |
 | 类型级 SCC | 6 | **6（全 barrel）** | Tarjan |
 
@@ -461,14 +461,15 @@ FR7 契约              X              ·              ·          X         X
 
 ## 9 当前状态（动态页）
 
-> **最后核对**：2026-11-27，HEAD `fbea0a3`（P0 已合并）；工作区另有 **P1-1a（Python 端口倒置）** 未提交改动。
+> **最后核对**：2026-11-27，HEAD `1ae237d`（P0 + P1-1a 已合并）；工作区干净。
 > 本节是唯一“当前事实”页；§1–§8 保留审计基线，路径按 §9.1 映射到当前布局。
 
 ### 9.0 现在是什么状态
 
 - **已合并（P0）**：foundation 分层、契约单源、写门单入口 + fail-closed、SessionRef 收口、证据显式快照、reloadOnce、唯一 receipt。
-- **进行中（P1-1a）**：`core → render` / `core → export` 的端口倒置（`K.dsh_kit.register_port/call_port`）。目标：五域功能 SCC 缩到 `{geometry, assembly}`。
-- **下一刀候选**：`geometry ↔ assembly`（shapegen/vehicle 的产品归属决策）、`core/scene_ctx`、preload/DEPS 生成、`txn` 与 `worker.checkpoint` 合并。
+- **已合并（P1-1a，`1ae237d`）**：`view_capture` / `deliver_export` / `deliver_verify` 端口化；`runtime/py/core` 全域 `dsh_view_api` / `dsh_deliver_api` 字面 **0**；`modules.json` 仍 44。
+- **仍未断**：`export → core` 的 `dsh_gate_api`（`require_gate` 路径）、`core → render` 的 `calib/material` 字面、`geometry ↔ assembly`。
+- **下一刀候选**：把 export 的门调用也倒置成 `gate_run` 端口（去掉 `{core, export}` 的最后一环），再做 `geometry ↔ assembly` 的产品归属决策。
 
 ### 9.1 路径映射（审计基线 → 当前）
 
@@ -496,7 +497,8 @@ FR7 契约              X              ·              ·          X         X
 - **行数热点**：`core/sessions/registry.ts` 1193、`config.ts` 572、`foundation/layers.ts` 578、`foundation/kernel/api.ts` 519、`foundation/evidence.ts` 388、`src/client/index.js` 3058。
 - **契约**：6 工具 / 38 family / 270 op / 45 路由行 / 44 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12（未变）。
 - **债务**：函数预算 110 条（stale 0）、路径例外 17 条。
-- **Python**：跨域 import 0；`K.<attr>` 297 / 跨域 95（P1-1a 进行中）。
+- **Python**：跨域 import 0；`K.<attr>` 297 / 跨域 95（分域矩阵待重算）；view/deliver 直取已归零；`modules.json` 44。
+- **Python 功能图（端口/API 口径）**：`[assembly] [geometry] [render] [core, export]`；`{core, export}` 的环由 `export → core` 的 gate 调用维持。
 
 ### 9.3 P0 逐项结果
 
@@ -515,6 +517,18 @@ FR7 契约              X              ·              ·          X         X
 | globalThis 代际 | 删除 | **改为收敛**（HMR 模块复用的判据；删除会退化“假 current”） | `src/host/backend/host-manifest.ts` |
 | 回执构造器 | 唯一 | **完成**：`receipt.v2` 手写 6 → 1 | `src/tools/receipt.ts`、`receipt-constructor.test.ts` |
 | `headless/receipts` 648 行零调用 | 接入或删除 | **未动**（P1 清理） | `src/headless/receipts/**` |
+
+### 9.3.1 P1-1a 结果（commit 1ae237d）
+
+| 项 | 结果 |
+|---|---|
+| 端口机制 | `K.dsh_ports` + `register_port / port_available / call_port / port_names`（`core/kit.py`）；`modules.json` 仍 **44** |
+| core→render | `c_evidence` 走 `view_capture`（`render/view.py` 注册 v4）；缺端口时同形错误、全程不触 bpy |
+| core→export | `gate_deliver` 走 `deliver_export` / `deliver_verify`；gate plan 的 `deliver_verify` 端口优先 + `dsh_<short>_api` 运行时回退 |
+| 字面归零 | `runtime/py/core` 全域 `dsh_view_api` / `dsh_deliver_api` **0**（含 OP_MAP） |
+| 仍存在 | `core→render`：`dsh_calib_api`（evalharness）、`dsh_material_api`（OP_MAP）；`export→core`：`dsh_gate_api`（`require_gate`） |
+| 功能图 | `[assembly] [geometry] [render] [core, export]`；`{core, export}` 由 `export→core` 维持 |
+| 验证 | pytest 全绿（exit 0）；`check:python-static`；`test:contract` 432；`typecheck`/`lint` |
 
 ### 9.4 合并验证（commit fbea0a3 时实际执行）
 
@@ -544,7 +558,7 @@ node scripts/sync_counts.mjs --dry      # 契约计数
 
 ### 9.6 遗留（P1/P2）
 
-- **P1-1a**（进行中）：core→render/export 端口倒置；完成后复核五域 SCC 是否只剩 `{geometry, assembly}`。
+- **P1-1a 后续**：把 `export → core` 的 gate 调用倒置为 `gate_run` 端口；清掉 `core → render` 的 calib/material 字面；之后重算五域 SCC。
 - **P1-1b**：`geometry ↔ assembly` 的 shapegen/vehicle 归属（产品决策）。
 - **P1-1c**：`core/scene_ctx`、preload/DEPS 生成、`txn` 与 `worker.checkpoint` 合并。
 - **P1-2/3/4**：SessionRegistry 拆分、config 拆分、client 3058 行拆分与类型化。
