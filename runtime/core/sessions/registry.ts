@@ -14,6 +14,7 @@ import type { GrantOpsHost } from './grant-ops.js'
 import { displayCapabilities } from '../../display/prerequisites.js'
 import type { DisplayCapabilities, DisplayProvider } from '../../display/types.js'
 import { ConsentBook } from './consent-book.js'
+import { SessionViews } from './session-views.js'
 import { WriteAuthority } from './write-authority.js'
 import {
   callerKey,
@@ -26,13 +27,7 @@ import {
   sameHost,
   sessionView,
 } from './types.js'
-import {
-  findCallerSession,
-  pruneSessions,
-  readableSessions,
-  sessionForInstance,
-  unownedSessions,
-} from './lookup.js'
+import { findCallerSession, pruneSessions, unownedSessions } from './lookup.js'
 import { VirtualGuiLifecycle, waitForAddonInstance } from './virtual-gui.js'
 import type { ProviderSelector } from './virtual-gui.js'
 import type {
@@ -102,6 +97,14 @@ export class SessionRegistry {
       findForCaller: (c) => this.findForCaller(c),
       listInstances: () => this.listInstances(),
     })
+    this.views = new SessionViews({
+      sessions: this.sessions,
+      instances: () => this.instances,
+      prune: (now) => this.prune(now),
+      findForCaller: (c) => this.findForCaller(c),
+      tombstoneFor: (c) => this.tombstoneFor(c),
+      livenessOf: (session) => this.livenessOf(session),
+    })
     this.consent = new ConsentBook({
       sessions: this.sessions,
       prune: (now) => this.prune(now),
@@ -120,6 +123,8 @@ export class SessionRegistry {
   private readonly writes: WriteAuthority
   /** Consent filing/decision/panel projection (registry 拆分第二刀). */
   private readonly consent: ConsentBook
+  /** Read-only projections: list/listFor/sessionInfo/status (registry 拆分第三刀). */
+  private readonly views: SessionViews
 
   display(): DisplayCapabilities {
     return this.displayFn()
@@ -251,35 +256,11 @@ export class SessionRegistry {
   }
 
   list(): Record<string, unknown>[] {
-    this.prune()
-    return [...this.sessions.values()].map((s) => sessionView(s))
-  }
-
-  /** Any authenticated call from the owner counts as a heartbeat (feedback 8). */
-  private refreshOwner(c: CallerIdentity): void {
-    for (const s of this.sessions.values()) {
-      if (s.owner && ownerMatches(s.owner, c)) s.owner.heartbeatAt = Date.now()
-    }
+    return this.views.list()
   }
 
   listFor(c: CallerIdentity): Record<string, unknown>[] {
-    this.prune()
-    this.refreshOwner(c)
-    const rows = new Map<string, Record<string, unknown>>()
-    // 实例维度兜底：Blender 还连着、只是归属过期的会话也列出来。否则模型看到 0 个会话，
-    // 手里没有 sessionId，attach/claim/stop 全被 session_in_use 挡住。
-    for (const s of unownedSessions(this.sessions, this.instances))
-      rows.set(s.id, sessionView(s, c))
-    const own = this.findForCaller(c)
-    if (own) rows.set(own.id, sessionView(own, c))
-    // Read-only visibility (field 反馈 1/3): same-host sessions are listed with
-    // owner + is_mine=false so blender_see can use them and audit_* can attribute
-    // their results. Writes still fail in authorizeWrite (grant/owner required).
-    for (const s of readableSessions(this.sessions, c, this.instances)) {
-      if (rows.has(s.id)) continue
-      rows.set(s.id, { ...sessionView(s, c), read_only: true })
-    }
-    return [...rows.values()]
+    return this.views.listFor(c)
   }
 
   /**
@@ -288,86 +269,19 @@ export class SessionRegistry {
    * authorizeWrite and are refused without a grant.
    */
   readableInstanceFor(c: CallerIdentity): string | null {
-    this.prune()
-    const rows = readableSessions(this.sessions, c, this.instances).filter(
-      (s) => s.status === 'ready' && !!s.instanceId,
-    )
-    return rows.length === 1 ? String(rows[0].instanceId) : null
+    return this.views.readableInstanceFor(c)
   }
 
   /** Attribution for a plan/op receipt: the session behind the instance we drove. */
   sessionInfo(c: CallerIdentity, instanceId?: string | null): Record<string, unknown> | null {
-    this.prune()
-    this.refreshOwner(c)
-    const session = instanceId
-      ? sessionForInstance(this.sessions, String(instanceId))
-      : this.findForCaller(c)
-    if (!session) return null
-    const mine = ownerMatches(session.owner, c) || inOwnerFamily(session.owner, c)
-    return {
-      sessionId: session.id,
-      instanceId: session.instanceId,
-      owner: session.owner
-        ? {
-            hostId: session.owner.hostId,
-            dshSessionId: session.owner.dshSessionId,
-            agentId: session.owner.agentId,
-            role: session.owner.role || 'main',
-            stale: ownerStale(session.owner),
-          }
-        : null,
-      is_mine: mine,
-      borrowed: !mine && sameHost(session.owner, c),
-    }
+    return this.views.sessionInfo(c, instanceId)
   }
 
   status(
     c: CallerIdentity,
     sessionId?: string,
   ): SessionResult<{ session: Record<string, unknown> }> {
-    this.prune()
-    this.refreshOwner(c)
-    const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session) {
-      // A released record is gone by design; still answer what happened instead of
-      // a bare session_not_found, using the last instance this caller attached.
-      const instanceId = this.tombstoneFor(c)
-      if (instanceId && !sessionId)
-        return {
-          ok: true,
-          session: {
-            id: 'user-gui:' + instanceId,
-            kind: 'user-gui',
-            instanceId,
-            status: 'stopped',
-            owner: null,
-            agents: [],
-            grants: [],
-            paused: false,
-            activePy: null,
-            humanModified: null,
-            display: null,
-            createdAt: null,
-            lastActivityAt: null,
-            live: { instanceReady: false, readyInstances: 0 },
-            reason: 'addon_disconnected_after_release',
-          },
-        }
-      return fail(
-        'session_not_found',
-        'session',
-        'the session does not exist',
-        'call blender_session list to see live sessions',
-        { sessionId: sessionId || null },
-      )
-    }
-    if (ownerMatches(session.owner, c) || session.agents.has(callerKey(c))) touchAgent(session, c)
-    // live=false is the honest answer for "the record exists but its Blender is
-    // gone"; attach refuses to revive it, so status must not imply otherwise.
-    return {
-      ok: true,
-      session: { ...sessionView(session, c), live: this.livenessOf(session) },
-    }
+    return this.views.status(c, sessionId)
   }
 
   attach(
