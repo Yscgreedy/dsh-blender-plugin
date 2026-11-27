@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
+import { shouldGateWrite } from '../write-skip.js'
 import { errorMessage, errorField } from '../../foundation/json.js'
 import { currentCaller } from '../caller.js'
 import { gateResponse } from '../session-gate.js'
@@ -146,7 +147,7 @@ export function createActRoutes(E: HttpRouteDeps) {
       // 没有调用方身份的老客户端仍走 leaseGate 的 legacy 路径。
       const isPy = payload.py === true
       const caller = isPy ? currentCaller() : null
-      const gate = isPy && caller ? null : leaseGate(payload)
+      const gate = shouldGateWrite('/act', payload) ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

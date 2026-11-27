@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
 import { errorMessage, errorField } from '../../foundation/json.js'
+import { shouldGateWrite } from '../write-skip.js'
 
 /** 失败信封：只透出插件约定的 code，并为已知配置错误补齐四问字段。 */
 function workerFailureBody(e: unknown, op: string): Record<string, unknown> {
@@ -110,7 +111,7 @@ async function dispatchWorker(
 
 // HTTP 路由 /worker：热无头会话
 export function createWorkerRoutes(E: HttpRouteDeps) {
-  const { isReadOnly, json, leaseGate, readBody, stats, streamJson } = E
+  const { json, leaseGate, readBody, stats, streamJson } = E
   return {
     async worker(req: IncomingMessage, res: ServerResponse, _url: URL, _p: string): Promise<void> {
       const raw = await readBody(req)
@@ -122,7 +123,7 @@ export function createWorkerRoutes(E: HttpRouteDeps) {
       }
       const op = String(payload.op || 'status')
       // worker 是**独立无头进程**，不碰 live GUI 场景 ⇒ 显式 isolated:true 时不占全局写租约。
-      const gate = payload.isolated || isReadOnly('/worker', op) ? null : leaseGate(payload)
+      const gate = shouldGateWrite('/worker', payload) ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

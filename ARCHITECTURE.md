@@ -10,7 +10,7 @@
 
 ## 0 摘要
 
-**一句话：三段进程边界稳定，TypeScript 值级图是 DAG；P0 把装配/契约/证据的环拆掉，P1-1a 把 Python 五域的源码层耦合降到 5 个单点，P2 第一批把队列传输/取帧去重/回执收成单入口并删掉 648 行死模块。剩余耦合只有“写路由跳过谓词”和“几何↔装配的归属迁移”，不再是全仓级架构缺陷。**
+**一句话：三段进程边界稳定，TypeScript 值级图是 DAG；P0 拆掉装配/契约/证据的环，P1-1a 把 Python 五域的源码层耦合降到 5 个单点，P2 把队列传输/取帧去重/回执/写门跳过判据收成单入口并删掉 648 行死模块。剩余耦合只剩 R4 的 12 条 `core→` 域 API 字面与几何↔装配的归属（已复核为“需先做截面策略，暂不迁移”），不再是全仓级架构缺陷。**
 
 | 维度 | 现状 | 证据 |
 |---|---|---|
@@ -24,11 +24,11 @@
 | Python 端口层 SCC | `{core, export}` 互调（交付必须过门，产品语义） | §7.2 |
 | 写鉴权 | **单一入口 + fail-closed**；跳过谓词仍分散 | §2.4、§4.4 |
 | 契约计数 | 6 工具 / 38 family / 270 op / 45 路由行 / 44 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12 | `capability.lock.json` |
-| 测试面 | unit 136 文件 / 1204 passed（2 skipped）；integration 32 / 309；contract 49 / 432；pytest 522 | §7.4、§7.5 |
+| 测试面 | unit 137 文件 / 1210 passed（2 skipped）；integration 32 / 309；contract 49 / 432；pytest 522 | §7.4、§7.6 |
 
-**评级：Decoupled（主干）/ Coupled（局部）**。仍 Coupled 的两处：R2 写路由跳过谓词、R4 的 `geometry↔assembly` 归属与 12 条 `core→` 域 API 字面。D3/D4 已在 P2 第一批收口。详见 §4。
+**评级：Decoupled（主干）/ Coupled（局部）**。仍 Coupled 的只剩 R4：`core→` 域 API 12 条字面 + `geometry↔assembly` 的归属（复核后确认要先做截面策略，不能靠搬文件解）。R2/D3/D4 均已收口。详见 §4。
 
-**下一步**：P1-1b 第二刀（通用壳层实现迁 geometry）→ P1-1c（`scene_ctx`、preload/DEPS、txn/checkpoint）→ P1-2/3/4（SessionRegistry/config/client 拆分）。
+**下一步**：P1-1b 第二刀（截面策略 seam，需要 Blender E2E）→ P1-1c（`scene_ctx`、preload/DEPS、txn/checkpoint）→ P1-2/3/4（SessionRegistry/config/client 拆分）。
 
 ---
 
@@ -47,7 +47,7 @@
 
 | 指标 | 值 | 口径 |
 |---|---|---|
-| TS 源文件 / 相对导入边 | **297 / 1063** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
+| TS 源文件 / 相对导入边 | **298 / 1074** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
 | 值级 SCC / 类型级 SCC | **0 / 6** | 排除 `import type` 后为 0；含类型为 6（全 barrel） |
 | 跨层边 | execution→core **0**；foundation→core/execution **0**；core→execution **16** | 相对 import 解析 `.js`→`.ts` |
 | `src` ↔ `runtime` 源码 import | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
@@ -57,7 +57,7 @@
 | `DSH_*` 环境变量 | **46**（config.ts 独占 24 处读取） | 排除 vendored |
 | 契约规模 | 6 / 38 / 270 / 45 / 44 / 25 / 29 / 12 | 见 §2.8 |
 | 债务台账 | 函数预算 **110**、路径例外 **16**（file-budget 5 / py-private-import 8 / reexport 3） | `config/*.json` |
-| 测试面 | **311** 文件（ts/mjs/py） | `tests/**` |
+| 测试面 | **312** 文件（ts/mjs/py） | `tests/**` |
 
 ### 1.3 未做与 `[待核实]`
 
@@ -96,14 +96,14 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 | `runtime/contracts/` | `routes.generated.ts`、`route-match.ts`、`local-lane.ts`（生成） | 纯数据/纯函数；dispatcher 与 execution 共同消费 |
 | `runtime/core/` | dispatcher、catalog、engine、engine-api、sessions、queue、plan | 编排；允许依赖 foundation/execution |
 | `runtime/execution/` | headless、jobs、workers、ledger、local-op、txn、preset | 执行；**0** 反向 import core |
-| `runtime/http/`、`runtime/gateway/`、`runtime/transport/` | 29 路由、租约、addon WS | HTTP 只消费 engine |
+| `runtime/http/`、`runtime/gateway/`、`runtime/transport/` | 29 路由、租约、写门跳过判据（`write-skip.ts`）、addon WS | HTTP 只消费 engine |
 | `runtime/config.ts`、`paths.ts`、`launch/`、`display/` | 配置/路径/启动/显示 | 基础常量，fan-in 最高 |
 
 ### 2.4 会话、写鉴权与同意
 
 - `runtime/core/sessions/registry.ts` 管归属/实例/租约/同意/授权/presence/selection/py 窗口（1193 行，P1-2 拆）。
 - **写鉴权单一入口**：`runtime/http/session-gate.ts` 的 `sessionWriteGate(payload, registry)`；`leaseGate(payload, registry)` 在 `gateway/app.ts` 绑定 registry。**带 caller 头但 registry 缺失 → fail-closed（`session_unavailable`）**；无 caller 头的旧客户端仍走 LEASE 兼容路径。
-- 各写路由仍各自决定是否调用 `leaseGate`（只读 op、`isolated`、`py+caller` 等跳过条件），这是 R2 的剩余部分（P1 数据化）。
+- **跳过判据单入口（P2）**：`runtime/http/write-skip.ts` 的 `shouldGateWrite(path, payload)` 是唯一解释器；例外只有两条例外规则（`/act` 的 `py+caller`、`/worker` 的 `isolated`），路由只问“要不要过门”，不再自己拼三元式。默认是过门：未知路径/未知 op 一律落到写门。
 - virtual-gui 同意：`consent.ts`（一次性令牌）、`consent-requests.ts`（持久化、人类批准）、`consent-policy.ts`（env → policy 文件 → 配置 → 默认 manual，≤250 ms 生效）。
 
 ### 2.5 证据与验收
@@ -215,7 +215,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 | # | 环 | 类型 | 现状 |
 |---|---|---|---|
 | **R1** | `core` ↔ `execution` 包级双向 | 导入 | **已断（P0-2b）**：execution→core **0**；core→execution 16 条正向 |
-| **R2** | 写鉴权双权威 / 跳过谓词 | 状态 | **部分（P0-3a）**：入口唯一 + fail-closed；跳过谓词仍在路由（P1） |
+| **R2** | 写鉴权双权威 / 跳过谓词 | 状态 | **已断（P0-3a + P2）**：入口唯一 + fail-closed；跳过判据收成 `shouldGateWrite` + 2 条例外数据 |
 | **R3** | 证据 ↔ 重载 跨进程回路 | 状态 | **已断（P0-4a）**：显式快照；`unknown` 可单测 |
 | **R4** | Python 五域功能 SCC | 功能 | **源码层已解（P1-1a）**：5 个单点；端口层 `{core, export}` 属产品语义；剩余 `core→` 域 API 12 条字面；`geometry↔assembly` 委托已收成 1 入口（P1-1b 第一刀） |
 | **R5** | 会话 ⇄ 热更 ⇄ 生命周期 两代写 | 状态 | **已断（P0-4b）**：`reloadOnce` 单入口；`globalThis` 探针收敛 |
@@ -234,12 +234,12 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 - **D2**：`route-catalog-parity.test.ts` 三条 ratchet。
 - **D5**：`channel-vocabulary.test.ts` 三处集合相等。
 - **D3/D4**：`job-transport-single-source.test.ts` 锁"只有 `shared/queue-job.ts` POST /job、`op:'submit'` 只写一次、两个车道都经构造器"；`frame-key.test.ts` 锁"同通道同参数、不同调用方 → 不同键；无调用方 → 显式 `no-caller`"。
+- **R2**：`write-skip.test.ts` 锁"默认过门（未知路径/op 也过门）、两条例外行为不变、`runtime/http/routes/*` 里不再出现 `isReadOnly(`"。
 
 ### 4.4 仍耦合的局部
 
-1. **R2 写路由谓词**：`leaseGate` 已是单入口，但各路由仍各自决定跳过（只读 op、`isolated`、`py+caller`）。改一处跳过语义仍要横扫 `runtime/http/routes/*`。P1 目标：把跳过规则声明成路由数据，由 `authorizeRoute` 统一解释。
-2. **R4 剩余字面**：`core/gate_impl/common.py` 的 12 条跨域 dispatch 条目（assembly 7 / export 2 / geometry 2 / render 1）+ `evalharness.py` 的 `MODULE_ATTR` 7 条（评估面，未列入口径）。`geometry↔assembly` 归属已定为"通用壳层上提 geometry"；第一刀把 5 处委托收成 `shapegen._shell` 1 处，实现迁移（loft/fit/panels ≈900 行）仍未做。
-3. **R4 端口层**：`{core, export}` 仍互调（core 交付调用 export；export 交付前过门调用 core）。这是业务前置关系，不是私有 API 耦合；若要端口图也单点，需把 gate 提到域外，属架构决策。
+1. **R4 剩余字面**：`core/gate_impl/common.py` 的 12 条跨域 dispatch 条目（assembly 7 / export 2 / geometry 2 / render 1）+ `evalharness.py` 的 `MODULE_ATTR` 7 条（评估面，未列入口径）。`geometry↔assembly` 归属复核后改为"先做截面策略 seam，暂不搬文件"（§8 P1-1b）；第一刀把 5 处委托收成 `shapegen._shell` 1 处，归属未动。
+2. **R4 端口层**：`{core, export}` 仍互调（core 交付调用 export；export 交付前过门调用 core）。这是业务前置关系，不是私有 API 耦合；若要端口图也单点，需把 gate 提到域外，属架构决策。
 
 ### 4.5 三角化与安全修改顺序
 
@@ -251,7 +251,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### 4.6 评级
 
-**Decoupled（主干）/ Coupled（局部）**。P0 前判定的四条结构环里 R1/R3/R5 已断；R4 在源码层降为 5 个单点；D3/D4 在 P2 第一批收口。剩余是 R2 的谓词、R4 的 12 条 `core→` 字面与归属迁移。主干可继续演进，P1 的靶子已收敛。
+**Decoupled（主干）/ Coupled（局部）**。P0 前判定的四条结构环里 R1/R3/R5 已断；R2 在 P2 收口（写门入口 + 跳过判据都单点）；R4 在源码层降为 5 个单点；D3/D4 已修。剩余只有 R4 的 12 条 `core→` 字面与`geometry↔assembly` 的归属（需截面策略 + E2E，属下一刀）。主干可继续演进，P1 的靶子已收敛。
 
 ---
 
@@ -356,22 +356,33 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 | 队列传输单源 | `/job` 请求体与不可达回执只在 `src/tools/shared/queue-job.ts`；`op:'submit'` 写一次 | `job-transport-single-source.test.ts`（5 条，含源码扫描） |
 | 取帧去重键 | `py-see` 与 `see` 三条通道都经 `frameKey(channel, …parts)`，键含调用方 | `frame-key.test.ts`（5 条） |
 | 死模块删除 | `src/headless/receipts/**` 3 文件 648 行 + `__internals` 四项；测试接缝迁到 `receipt.ts` / `toolError` | `lossless.test.ts`（4 条）、`tool-error-contract.test.ts`（脱敏断言 3→11） |
+| 写门跳过判据 | `runtime/http/write-skip.ts` 的 `shouldGateWrite` + 2 条例外数据；8 个写路由不再自己拼 `isReadOnly(...)` | `write-skip.test.ts`（6 条，含路由源码扫描） |
 | 债务台账 | 路径例外 17 → 16（删 `EXC-SINGLE-LINE-REEXPORT-HEADLESS-RECEIPTS`） | `check:exceptions` |
 | 文档真值 | `DSH_HEADLESS_WAIT_MS` / `DSH_HEADLESS_AUTO_JOB_MS` 已无代码读者 → `docs/配置参考.md` §3/§11.1 改为"窗口由 `timeout_ms` 给"；`AGENTS.md` 回到 118 行 | `check:doc-paths`、`agents-doc` |
 | P1-1b 第一刀 | `shapegen` 的 5 处 `_api("vehicle")` + 5 份缺失文案 → `_shell()` 1 处 | `npm run test:python` |
 
 **验证**：unit 136 / 1204 passed（2 skipped）；integration 32 / 309；contract 49 / 432；`test:python` 522 passed；`lint`（check:any / exceptions / plan-ids / doc-paths / local-ops / ports）全 PASS；`check:build` PASS（产物清单含 `lib/tools/shared/queue-job.js`）。**行为差异**：回执侧不再有 `promoted` 信封与 `HEADLESS_WAIT_MS` 常量；两个 `DSH_HEADLESS_*` 环境变量由"无读者"变为"明确不存在"。
 
+### 7.6 P2 第二批（写门跳过判据单入口）
+
+| 收口 | 结果 | 证据 |
+|---|---|---|
+| 跳过判据 | `runtime/http/write-skip.ts` 的 `shouldGateWrite(path, payload)` + 2 条例外数据（`/act` 的 `py+caller`、`/worker` 的 `isolated`）；**默认过门** | `write-skip.test.ts`（6 条） |
+| 路由 | 8 个写路由的 `isReadOnly(...) ? null : leaseGate(...)` 三元式删除；`/plan` 的歧义判定与门共用同一个 `writeRequest` | 源码扫描：`runtime/http/routes/*` 不再出现 `isReadOnly(` |
+| 契约测试 | `security.test.ts` 的写门断言跟到新形状（解释器 + 例外数据 + 默认过门） | 16 条相关断言全绿 |
+
+**验证**：unit 137 / 1210（2 skipped）；integration 32 / 309（两轮各有一个并发 flake，单跑均绿：`gateway-addon-channel`、`gateway-lifecycle`）；contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无（`shouldGateWrite` 对每条真实请求返回与旧三元式相同的结果，由 `write-skip.test.ts` 与 146 条 `route-matrix` 用例对拍）。
+
 ---
 
 ## 8 路线图
 
-### P1-1b：geometry ↔ assembly 归属（已决策，待迁移）
+### P1-1b：geometry ↔ assembly 归属（决策修正：先做截面策略，暂不搬文件）
 
-- **决策：走"上提"**。`shape_sections/loft/fit/regions/panels`（`shapegen.py:161/171/181/192/202`）的语义是通用壳层几何——逐列/逐行量轮廓、按站表放样、折线族拟合、按区间分块、按缝分件——本就是 geometry 的职责；vehicle 只是先落地的地方。反过来 `assembly/repair.py:501` 用 `dsh_geo_api.boolean` 是装配动作需要几何原语，方向正确。目标是让边单向：**assembly → geometry**。
-- **不选**"shapegen 整体迁 assembly"：装配域会拥有"参考图还原方法层"，DP 追着依赖图走而不是追着 FR 走（违反之字形）。
-- **第一刀（已落）**：5 处 `_api("vehicle")` + 5 份"缺少 vehicle"文案收成 `_shell(op, kw, layer)` 1 处 —— 换实现或换端口只改这一个函数，5 个 op 面不动。
-- **第二刀（待做，契约改动单独成刀）**：`loft.py`(472) / `fit.py`(253) / `panels.py`(173) 迁 geometry；`base.py`(454) 的 `vehicle_sections` 先与车辆专用 `_vb_*` 解耦再动。同时改 `runtime/py/modules.json`、`config/contracts.json` 的 pythonTables 与 catalog 对拍，并跑 `check:function-budget`。
+- **复核证据（2026-11-27）**：`vehicle_loft/fit/sections` 并不是"与车无关"的通用壳层——`loft.py` 的 `_ring_from_station` 默认环来自 `common._section`（超级椭圆 + tumblehome + beltline），`fit.py`/sections 直接吃 `vehicle_spec` 的车辆参数默认值。5 个 `shape_*` op 是"把车辆形工具当量具用"，不是"通用几何"。
+- **结论**：整体上提 geometry 会把 `vehicle_spec`/车形语义一起拖进几何域；整体迁 assembly 又会把 674 行里约 600 行与车辆无关的方法层（协议表、旋转体、草稿、自检）塞进装配域。**两条整体搬迁都不做**。
+- **第二刀改成**：在 geometry 抽象"截面策略"seam（`ring_from_outline` / `ring_from_shape` / `ring_from_station` 三选一，默认环由调用方注入），vehicle 提供车形策略，shapegen 用自己的策略。该 seam 是纯函数、可单测；但 loft 的真实网格**必须**带回 Blender E2E 验收，所以排在 P1-1c 之后。
+- **第一刀（已落，commit `5476cb3`）**：`shapegen` 的 5 处 `_api("vehicle")` + 5 份缺失文案收成 `_shell(op, kw, layer)` 1 处；**归属未动**，R4 的这条边按现状记账，不假装已解。
 
 ### P1-1c：场景上下文与依赖声明
 
@@ -387,8 +398,8 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### P2
 
-- **已完成（本批）**：`headless/receipts` 删除（648 行）；`/job` 请求体单源；取帧去重键带调用方；路径例外 17→16；`AGENTS.md` 回到 120 行预算内。
-- **待做**：只读/通道生成化；写路由跳过谓词数据化；availability/addon 出口收敛；死代码清理。
+- **已完成（本批）**：`headless/receipts` 删除（648 行）；`/job` 请求体单源；取帧去重键带调用方；写门跳过判据单入口；路径例外 17→16；`AGENTS.md` 回到 120 行预算内。
+- **待做**：只读/通道生成化；availability/addon 出口收敛；死代码清理。
 
 ---
 

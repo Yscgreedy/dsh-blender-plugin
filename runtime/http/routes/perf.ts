@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
 import { errorMessage, errorField } from '../../foundation/json.js'
+import { shouldGateWrite } from '../write-skip.js'
 // HTTP 路由 /perf：性能诊断
 export function createPerfRoutes(E: HttpRouteDeps) {
-  const { engine, isReadOnly, json, leaseGate, readBody, stats } = E
+  const { engine, json, leaseGate, readBody, stats } = E
   return {
     async perf(req: IncomingMessage, res: ServerResponse, _url: URL, _p: string): Promise<void> {
       const raw = await readBody(req)
@@ -14,7 +15,7 @@ export function createPerfRoutes(E: HttpRouteDeps) {
         payload = {}
       }
       const op = String(payload.op || 'status')
-      const gate = isReadOnly('/perf', op) ? null : leaseGate(payload)
+      const gate = shouldGateWrite('/perf', payload) ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

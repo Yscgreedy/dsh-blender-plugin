@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
+import { shouldGateWrite } from '../write-skip.js'
 import { isRecord, errorMessage, errorField } from '../../foundation/json.js'
 import { currentInstanceId, runWithInstance } from '../../transport/instance-target.js'
 import { targetAmbiguity } from '../target.js'
@@ -51,7 +52,7 @@ export function withSessionSource(
 }
 // HTTP 路由 /plan：契约层/规划器/catalog
 export function createPlanRoutes(E: HttpRouteDeps) {
-  const { engine, isReadOnly, json, leaseGate, pushRtt, readBody, sessionRegistry, stats } = E
+  const { engine, json, leaseGate, pushRtt, readBody, sessionRegistry, stats } = E
   return {
     async plan(req: IncomingMessage, res: ServerResponse, _url: URL, _p: string): Promise<void> {
       // 契约层与规划器统一入口：op + args
@@ -65,7 +66,8 @@ export function createPlanRoutes(E: HttpRouteDeps) {
       const op = String(payload.op || 'status')
       // 多实例：没点名 instance_id、调用方也没有会话时，"驱动哪台"是没定的。
       // 先按实例表说清楚（不执行任何 Blender 调用），别把它伪装成 session_unavailable。
-      if (!isReadOnly('/plan', op)) {
+      const writeRequest = shouldGateWrite('/plan', payload)
+      if (writeRequest) {
         const ready = sessionRegistry ? sessionRegistry.readyInstanceIds() : []
         const ambiguous = targetAmbiguity(op, payload, ready)
         if (ambiguous) {
@@ -73,7 +75,7 @@ export function createPlanRoutes(E: HttpRouteDeps) {
           return
         }
       }
-      const gate = isReadOnly('/plan', op) ? null : leaseGate(payload)
+      const gate = writeRequest ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

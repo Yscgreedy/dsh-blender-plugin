@@ -65,7 +65,7 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 - **Verdicts are three-state** (`pass` / `fail` / `degraded`); `degraded` is not a pass; delivery gates
   use `gate_preflight` / `gate_checkpoint` / `gate_deliver` and `deliver_export(require_gate=true)`.
 - **Cross-domain Python calls use kernel ports.** A capability owned by another domain is registered with `K.dsh_ports.register_port` by its provider and called with `call_port`; do not take another domain's `K.dsh_*_api`. Cross-domain imports stay at zero (layout test).
-- **One write authority.** `sessionWriteGate(payload, registry)` is the only authorization entry; a host-attributed write with no registry fails closed. Per-route skip predicates are local and must move together when the rule changes.
+- **One write authority.** `sessionWriteGate(payload, registry)` is the only authorization entry; a host-attributed write with no registry fails closed. Which requests skip the gate is data in `runtime/http/write-skip.ts` (`shouldGateWrite`); routes ask it instead of spelling `isReadOnly`.
 - **Migrate in slices** ([architecture](docs/architecture.md)): one module or boundary per change, no behavior change while moving code, old file deleted in the same change.
 - **No new rule files.** A lesson learned goes into this file or the architecture guide.
 
