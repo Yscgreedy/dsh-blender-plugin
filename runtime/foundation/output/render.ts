@@ -9,7 +9,7 @@ import {
   planOpNames,
   renderFamilyText,
 } from '../../catalog/index.js'
-import { isLocalOpName } from '../../execution/local-op/names.js'
+import { isLocalOpName } from '../../contracts/local-lane.js'
 import { MODELING_CLASS_GUIDE, renderClassText, renderHandoff } from '../../classes.js'
 
 /** 只读但必须有真 UI 上下文的 op（不是 GUI 租约，但 headless 也做不了）。 */

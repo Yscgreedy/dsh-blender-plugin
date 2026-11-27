@@ -13,8 +13,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { winToWsl, wslToWin } from '../../config.js'
 import { WIN_TMP } from '../../paths.js'
-import { PLUGIN_VERSION, pidAlive } from '../../core/evidence.js'
-import { errorMessage } from '../../core/json.js'
+import { PLUGIN_VERSION, pidAlive } from '../../foundation/evidence.js'
+import { errorMessage } from '../../foundation/json.js'
 
 export const RECOVER_VERSION = '2.6.1'
 const NL = String.fromCharCode(10)

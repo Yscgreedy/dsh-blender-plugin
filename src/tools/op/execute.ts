@@ -13,7 +13,7 @@ import type { HostContext } from '../../host/context.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import { jsonPayload } from '../../host/http.js'
 import { toolError } from '../errors.js'
-import { requireReadySession } from '../shared/session.js'
+import { resolveSession } from '../shared/session.js'
 import { tryLocalLane } from './local.js'
 import { executeLoop } from './loop.js'
 import { executeOpt } from './opt.js'
@@ -56,14 +56,15 @@ function targetInstance(args: Record<string, unknown>): string {
   return text(args.instance_id).trim()
 }
 
+/** Session gate for executing ops: null = proceed, otherwise the structured failure. */
 async function gate(
   port: number,
   needsSession: boolean,
   instanceId?: string,
 ): Promise<unknown | null> {
   if (!needsSession) return null
-  const ready = await requireReadySession(port, undefined, instanceId)
-  return ready.ok ? null : ready.failure
+  const ref = await resolveSession(port, undefined, instanceId)
+  return ref.ok ? null : ref.failure
 }
 
 export async function executeOp(

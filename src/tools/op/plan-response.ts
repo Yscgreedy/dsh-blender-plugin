@@ -1,7 +1,8 @@
-/** blender_op action=plan 的回执收尾：receipt.v2 信封 + 产物附图。 */
+/** blender_op action=plan 的回执收尾：receipt 信封（构造器见 tools/receipt.ts）+ 产物附图。 */
 import type { HostContext } from '../../host/context.js'
 import { attachPaths, planImagePaths } from '../../utils/image.js'
 import { asRecord, isRecord, text } from '../../contracts/dynamic.js'
+import { receiptV2 } from '../receipt.js'
 
 /** 结构化目录（catalog format=json）从结果里摘出来：文本只是摘要，判据在 catalog 字段。 */
 function structuredCatalog(res: unknown): Record<string, unknown> | null {
@@ -223,8 +224,7 @@ export function planEnvelope(op: string, res: unknown): Record<string, unknown> 
             why: limit(asRecord(x).why || '', 120),
           },
     )
-  const env: Record<string, unknown> = {
-    contract: 'receipt.v2',
+  const env: Record<string, unknown> = receiptV2({
     op: op,
     verdict: verdict,
     summary: limit(r.summary || r.note || r.error || r.hint || '', 160),
@@ -232,7 +232,7 @@ export function planEnvelope(op: string, res: unknown): Record<string, unknown> 
     next: next,
     images: planImagePaths(r).slice(0, 2),
     provenance: { ms: typeof r.ms === 'number' ? r.ms : null },
-  }
+  })
   // 长回执：source / file_load / cleanup 是"从哪个文件来、清理了什么"的唯一判据。
   attachAuditEvidence(env, r)
   const counts = r.counts || (r.totals ? r.totals : null)

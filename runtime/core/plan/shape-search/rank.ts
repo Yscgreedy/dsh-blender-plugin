@@ -1,6 +1,6 @@
 // shape-search 结果判定/恢复/建议
-import { KERNEL_BOOTSTRAP } from '../../kernel/index.js'
-import { errorMessage } from '../../json.js'
+import { KERNEL_BOOTSTRAP } from '../../../foundation/kernel/index.js'
+import { errorMessage } from '../../../foundation/json.js'
 import { pyIndent, pyLit } from './axes.js'
 import type { ShapeSearchDeps } from './index.js'
 import type { SearchPoll } from './search.js'

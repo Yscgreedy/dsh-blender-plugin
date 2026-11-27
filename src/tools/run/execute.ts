@@ -15,6 +15,7 @@ import { backendPost, jsonPayload } from '../../host/http.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { workspaceNote, workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
+import { resolveSession } from '../shared/session.js'
 import { executeWorker } from './worker.js'
 import {
   formatCancel,
@@ -341,7 +342,7 @@ async function submitRun(
     )
   const body = await postQueue(port, built, 60000)
   if (body.ok !== true) return failureOf(body, 'submit')
-  // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与 receipt.v2 信封同源。
+  // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与回执信封同源。
   const job = asRecord(body.job)
   return {
     text: formatSubmit(job) + LF + workspaceNote(ws, resolved.base),
@@ -349,6 +350,19 @@ async function submitRun(
     queued_ahead: typeof job.queued_ahead === 'number' ? job.queued_ahead : null,
     envelope: submitEnvelope(job, job.queued_ahead, resolved.base),
   }
+}
+
+/**
+ * list 的 owner 解析：先看已解析的会话 ref（mine 会话的 ref.owner 就是调用方的
+ * DSH 会话 id）；没有 ready 会话、或只有别人的只读会话时，回退到 exec 调用方。
+ * viewer 会话的 owner 属于另一个 DSH 会话，不能当作 "me"。
+ */
+async function listOwner(port: number, ownerArg: string): Promise<string> {
+  if (ownerArg === 'all') return ''
+  if (ownerArg && ownerArg !== 'me') return ownerArg
+  const ref = await resolveSession(port)
+  if (ref.ok && ref.source === 'mine' && ref.owner) return ref.owner
+  return String(execCaller()?.dshSessionId || '')
 }
 
 export async function executeRun(
@@ -380,9 +394,7 @@ export async function executeRun(
     const payload: Record<string, unknown> = { op: 'list' }
     for (const k of ['state', 'kind']) if (present(args[k])) payload[k] = args[k]
     // C-13：默认只看**本会话**，`owner=all` 才放开；默认 20 条，`limit=0` = 不分页。
-    const ownerArg = text(args.owner).trim()
-    const callerSession = String(execCaller()?.dshSessionId || '')
-    const owner = ownerArg === 'all' ? '' : ownerArg && ownerArg !== 'me' ? ownerArg : callerSession
+    const owner = await listOwner(port, text(args.owner).trim())
     if (owner) payload.owner = owner
     const limitRaw = args.limit === undefined ? 20 : Number(args.limit)
     const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(0, Math.trunc(limitRaw))) : 20

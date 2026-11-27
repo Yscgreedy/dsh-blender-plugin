@@ -148,6 +148,7 @@ const TARGET_FILES = [
   'src/plugin-lifecycle.ts',
   'src/plugin-surfaces.ts',
   'src/tools/errors.ts',
+  'src/tools/receipt.ts',
   'src/host/skill.ts',
   'src/tools/index.ts',
   'src/tools/shared/session.ts',

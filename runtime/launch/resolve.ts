@@ -1,6 +1,6 @@
 // 启动解析：Windows 代理 / addon 名字提示 / 注入脚本
 import { CFG } from '../config.js'
-import { errorMessage } from '../core/json.js'
+import { errorMessage } from '../foundation/json.js'
 
 export interface LaunchOpts {
   waitMs?: unknown

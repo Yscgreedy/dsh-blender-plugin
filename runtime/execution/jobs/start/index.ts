@@ -1,7 +1,7 @@
 // 作业启动入口（拆分）：记录 / spawn / 收尾
 import fs from 'node:fs'
 import { jobSnapshot } from '../snapshot.js'
-import { errorMessage } from '../../../core/json.js'
+import { errorMessage } from '../../../foundation/json.js'
 import { buildJobScript } from '../script/index.js'
 import type { JobRecord } from '../types.js'
 import type { JobsDeps } from '../types.js'

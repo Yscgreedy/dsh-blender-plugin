@@ -1,7 +1,7 @@
 // engine API：Python 执行/命令透传
 import { ACT_WRAPPER } from '../../paths.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
-import { enrichError } from '../errors.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
+import { enrichError } from '../../foundation/errors.js'
 import { planOpCrossChannelHint } from '../../catalog/index.js'
 import type { EngineApiDeps } from './index.js'
 

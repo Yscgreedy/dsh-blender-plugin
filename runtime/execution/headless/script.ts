@@ -4,11 +4,11 @@ import {
   scriptFileBlock,
   shotsBlock,
   workdirBlock,
-} from '../../core/scripts.js'
-import { KERNEL_BOOTSTRAP } from '../../core/kernel/index.js'
+} from '../../foundation/scripts.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import { hardExitSyncTail } from '../../hard_exit.js'
 import { writeHeadlessScript } from '../../staging.js'
-import { slipFixPath } from '../../core/output/index.js'
+import { slipFixPath } from '../../foundation/output/index.js'
 import { wslToWin } from '../../config.js'
 import type { PreparedHeadless } from './types.js'
 

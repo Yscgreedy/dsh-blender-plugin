@@ -39,7 +39,7 @@ const h = vi.hoisted(() => {
     fileCount: 1,
     bytes: 42,
   }
-  // 清单的真实扫描/落盘在 runtime/core/layers.ts（有独立用例）；这里只要证明
+  // 清单的真实扫描/落盘在 runtime/foundation/layers.ts（有独立用例）；这里只要证明
   // ① 扫描发生在**模块求值那一刻**（LOAD_SCAN），② spawn 之前只写一次，③ 元数据齐全。
   let scanCalls = 0
   const scanLayer = vi.fn(() => {

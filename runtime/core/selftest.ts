@@ -10,7 +10,7 @@
 //   evidence_ok       bool                —— 没有 false 叶子
 //   evidence_shape    flat-bool|nested|list|missing
 // 只对 *selftest* op 生效（dispatch 结果在 routeTable 统一过一遍）。
-import { isArray, isRecord } from './json.js'
+import { isArray, isRecord } from '../foundation/json.js'
 
 export interface SelftestEvidence {
   evidence_flat: Record<string, boolean>

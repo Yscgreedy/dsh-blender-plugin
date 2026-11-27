@@ -85,7 +85,7 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "file": "runtime/core/kernel/api.ts",
+      "file": "runtime/foundation/kernel/api.ts",
       "name": "injectModule",
       "lines": 98,
       "classification": "linear-pipeline",

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
-import { isRecord, errorMessage, errorField } from '../../core/json.js'
+import { isRecord, errorMessage, errorField } from '../../foundation/json.js'
 import { currentInstanceId, runWithInstance } from '../../transport/instance-target.js'
 import { targetAmbiguity } from '../target.js'
 import { currentCaller } from '../caller.js'

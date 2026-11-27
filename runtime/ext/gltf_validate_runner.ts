@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
-import { errorMessage } from "../core/json.js";
+import { errorMessage } from "../foundation/json.js";
 import { findExtDir } from './ext-dir.js';
 // 安装目录固定是 <pkg>/runtime/ext —— 不能按 runner 自身位置 require：
 // 构建后 runner 在 lib/runtime/ext/，会找不到 runtime/ext/node_modules（现场实测）。

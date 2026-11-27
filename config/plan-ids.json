@@ -29,11 +29,14 @@
       "openspec",
       "runtime/ext",
       ".dsh-ops",
-      ".agents"
+      ".agents",
+      ".audit"
     ],
     "skipFiles": [
       "package-lock.json",
-      "package.json"
+      "package.json",
+      "ARCHITECTURE.md",
+      "P0-REFACTOR-PLAN.md"
     ]
   },
   "prefixes": [
@@ -285,14 +288,14 @@
       "reason": "3.1 收口：P1 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
     },
     {
-      "path": "runtime/core/kernel/api.ts",
+      "path": "runtime/foundation/kernel/api.ts",
       "prefixes": [
         "P"
       ],
       "reason": "3.1 收口：P2 是外部验收缺陷编号（BlenderProject 复测清单 2026-11-16 的 P 条目），不是计划 ID；只豁免 P 前缀，同文件其它前缀仍计入残留。"
     },
     {
-      "path": "runtime/core/kernel/bootstrap.ts",
+      "path": "runtime/foundation/kernel/bootstrap.ts",
       "prefixes": [
         "P"
       ],

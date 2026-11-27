@@ -3,8 +3,8 @@ import path from 'node:path'
 import { winToWsl } from '../../config.js'
 import { WIN_TMP, WSL_TMP } from '../../paths.js'
 import fs from 'node:fs'
-import { errorCode, errorMessage } from '../../core/json.js'
-import { PLUGIN_VERSION } from '../../core/evidence.js'
+import { errorCode, errorMessage } from '../../foundation/json.js'
+import { PLUGIN_VERSION } from '../../foundation/evidence.js'
 
 export interface WorkdirProbe {
   wsl: string

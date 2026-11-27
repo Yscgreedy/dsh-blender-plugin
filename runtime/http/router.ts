@@ -2,10 +2,11 @@
 // 匹配顺序由 routes/index.mjs 的数组顺序决定（与拆分前 if 链顺序一致）。
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from './response.js'
-import { errorDetail } from '../core/json.js'
+import { errorDetail } from '../foundation/json.js'
 import { callerFromRequest, runWithCaller } from './caller.js'
 import { callerInstanceId } from './target.js'
 import { runWithInstance } from '../transport/instance-target.js'
+import type { SessionRegistry } from '../core/sessions/registry.js'
 
 export interface RouteDef {
   method?: string | null
@@ -19,6 +20,8 @@ export interface RouterDeps {
   PORT: number
   bump: (p: string) => void
   routes: RouteDef[]
+  /** Gateway 装配好的会话注册表：调用方会话 → 目标 Blender 实例。 */
+  sessionRegistry?: SessionRegistry | null
 }
 export function createRouter(E: RouterDeps) {
   const routes = E.routes
@@ -36,7 +39,7 @@ export function createRouter(E: RouterDeps) {
         const caller = callerFromRequest(req)
         // 3.1 多实例：把"这次请求该驱动哪个 Blender"一次定下来（调用方会话的实例），
         // 否则 addon.send 省略 instanceId 时会报 ambiguity，plan op 直接变成死路。
-        const target = callerInstanceId(caller)
+        const target = callerInstanceId(caller, E.sessionRegistry ?? null)
         await runWithCaller(caller, () => runWithInstance(target, () => r.fn(req, res, url, p)))
         return
       }

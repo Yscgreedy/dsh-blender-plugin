@@ -4,7 +4,7 @@ import type { Server } from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CFG } from '../config.js'
-import { errorMessage } from '../core/json.js'
+import { errorMessage } from '../foundation/json.js'
 import { holderResponsive, killHolders } from '../ports.js'
 
 // 永远排不上队、看护每 15 s 重生一个实例却撞 EADDRINUSE 退出 ⇒ 无限循环，只能人工 kill -9。

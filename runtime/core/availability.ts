@@ -15,7 +15,7 @@ import type {
   AvailabilityFallbackKind,
   AvailabilityStage,
 } from './availability-schema.generated.js'
-import { isRecord } from './json.js'
+import { isRecord } from '../foundation/json.js'
 
 export {
   AVAILABILITY_BUDGETS_MS,

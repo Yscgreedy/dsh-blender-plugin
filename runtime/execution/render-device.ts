@@ -11,7 +11,7 @@
  *
  * 兼容性：Python 3.11+/Blender 4.2/5.3；不依赖 GPU_PRELUDE 的 EEVEE 默认（render 尊重 caller 的 engine）。
  */
-import { isRecord } from '../core/json.js'
+import { isRecord } from '../foundation/json.js'
 
 export const RENDER_DEVICES = ['auto', 'gpu', 'cpu'] as const
 export const COMPUTE_DEVICE_TYPES = [

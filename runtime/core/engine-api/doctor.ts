@@ -6,11 +6,18 @@ import {
 } from '../../transport/addon-ws.js'
 import type { AddonHandshakeError, AddonInstanceView } from '../../transport/addon-ws.js'
 import { FLAGS_CODE, REGION_CODE } from '../flags.js'
-import { jsonFromStdout } from '../output/index.js'
-import { PLUGIN_VERSION, RUNTIME_DIR, engineProvenance, runtimeFingerprint } from '../evidence.js'
+import { jsonFromStdout } from '../../foundation/output/index.js'
+import {
+  PLUGIN_VERSION,
+  RUNTIME_DIR,
+  engineProvenance,
+  provenanceLayers,
+  runtimeFingerprint,
+} from '../../foundation/evidence.js'
+import type { ProvenanceLayers } from '../../foundation/evidence.js'
 import { wslToWin } from '../../config.js'
 import { COMMAND_CATALOG } from '../../catalog/index.js'
-import { errorMessage } from '../json.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { EngineApiDeps } from './index.js'
 import { metricsView } from './metrics.js'
 import { displayCapabilities } from '../../display/prerequisites.js'
@@ -68,7 +75,7 @@ function readinessView(
 
 export async function statusView(
   E: EngineApiDeps,
-  opts: { addonTimeoutMs?: number } = {},
+  opts: { addonTimeoutMs?: number; layers?: ProvenanceLayers } = {},
 ): Promise<Record<string, unknown>> {
   const {
     LEDGER,
@@ -103,7 +110,8 @@ export async function statusView(
       version: PLUGIN_VERSION,
       runtimeDir: wslToWin(RUNTIME_DIR),
       runtime: runtimeFingerprint(),
-      provenance: engineProvenance({}),
+      // 4a：HTTP 边界递进来的宿主层快照原样透传；没给就还是原来的「自己发现」路径。
+      provenance: engineProvenance({ layers: opts.layers }),
     },
     session: SESSION_NAME,
     resultsDir: wslToWin(RESULTS_DIR),
@@ -258,6 +266,7 @@ function gatewayFailure(
 async function gatewayDoctor(
   E: EngineApiDeps,
   instances: AddonInstanceView[],
+  layers?: ProvenanceLayers,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now()
   const ready = instances.filter((x) => x.ready)
@@ -284,7 +293,7 @@ async function gatewayDoctor(
   }
   const instance = ready[0]
   try {
-    const s = await statusView(E, { addonTimeoutMs: ADDON_DOCTOR_STATUS_TIMEOUT_MS })
+    const s = await statusView(E, { addonTimeoutMs: ADDON_DOCTOR_STATUS_TIMEOUT_MS, layers })
     if (s.addonError) throw new Error(String(s.addonError))
     const pingStart = Date.now()
     let pingMs: number | null = null
@@ -448,12 +457,13 @@ export function createDoctorApi(E: EngineApiDeps) {
           error: 'gateway addon client required',
         }
       }
-      const result = await gatewayDoctor(E, gateway)
+      const result = await gatewayDoctor(E, gateway, provenanceLayers(opts))
       return { ...result, virtualGui: displayCapabilities() }
     },
     /** 3D 视口区域 rect / 窗口尺寸 / 着色模式 */
-    status() {
-      return statusView(E)
+    /** /status 的 engine 侧：opts.layers 是 HTTP 边界显式递进来的宿主层快照（4a）。 */
+    status(opts: Record<string, unknown> = {}) {
+      return statusView(E, { layers: provenanceLayers(opts) })
     },
     async commands() {
       const out = await addon.send('execute_code', { code: FLAGS_CODE }, ADDON_FLAGS_TIMEOUT_MS)

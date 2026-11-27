@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
 import { lookupHeadless } from '../../core/bpy-api-probe.js'
 // HTTP 路由 /commands：命令清单 / 透传
 export function createCommandsRoutes(E: HttpRouteDeps) {

@@ -68,7 +68,12 @@ interface ListContext {
   addon: Record<string, unknown> | null
 }
 
-/** 工单 6：list 的本地证据 + addon 实例表来自 Gateway 的 /status?evidenceOnly=1（不付 addon 往返）。 */
+/**
+ * 工单 6：list 的本地证据 + addon 实例表来自 Gateway 的 /status?evidenceOnly=1（不付 addon 往返）。
+ *
+ * 这里不解析会话行（只取 local_evidence / addon），所以没有可迁移的 ready 判定：
+ * resolveSession 回答"这次调用驱动哪一个会话"，这里回答"本机看见了什么"。
+ */
 async function listContextOf(port: number, args: Record<string, unknown>): Promise<ListContext> {
   const q = new URLSearchParams({ evidence: '1', evidenceOnly: '1' })
   const fixture = strArg(args, 'probeFixture', 'probe_fixture')
@@ -147,6 +152,10 @@ function validate(action: string, args: Record<string, unknown>): string | null 
   return null
 }
 
+/**
+ * status 要**整张**会话表（formatStatus 逐行渲染），不是"挑一个 ready 会话"；
+ * sessionRefOf 只描述一行，用它会把多行证据压成一个。这里保留 listSessions。
+ */
 async function statusOf(port: number): Promise<unknown> {
   const listed = await listSessions(port)
   if (!listed.ok) return listed.failure
@@ -252,6 +261,7 @@ export async function executeSession(
   if (action === 'status') return statusOf(port)
   if (action === 'doctor') return doctorOf(port, args)
   if (action === 'list') {
+    // 0 会话也要给出 attach 指引：这里需要全部行，不是 resolveSession 的单行结果。
     const listed = await listSessions(port)
     if (!listed.ok) return listed.failure
     // 6a：0 会话也要能看见 local_processes / ports / ports_evidence + 可粘贴的 attach。

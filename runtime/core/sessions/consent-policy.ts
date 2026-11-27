@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { CONFIG_FILES, CFG } from '../../config.js'
-import { isRecord } from '../json.js'
+import { isRecord } from '../../foundation/json.js'
 
 export const CONSENT_POLICY_ENV = 'DSH_BLENDER_VIRTUAL_GUI_CONSENT'
 export const CONSENT_POLICY_FILE_ENV = 'DSH_BLENDER_CONSENT_POLICY_FILE'

@@ -1,7 +1,7 @@
 // ext-check candidates: WSL path mapping, interpreter routing and the spawn loop
 // (continuation of runtime/core/plan/ext-check.ts).
 import path from 'node:path'
-import { errorMessage } from '../json.js'
+import { errorMessage } from '../../foundation/json.js'
 
 /** Windows drive path -> WSL /mnt path; anything else is passed through. */
 export function toWslPath(winPath: string): string {

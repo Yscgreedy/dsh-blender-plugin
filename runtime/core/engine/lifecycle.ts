@@ -1,7 +1,7 @@
 // engine 生命周期：指标 / addon.send 包装
 import { gatewayInstances } from '../../transport/addon-ws.js'
 import { currentInstanceId } from '../../transport/instance-target.js'
-import { errorMessage } from '../json.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { EngineMetrics } from './index.js'
 import type { AddonClient as AddonClientType } from '../../transport/probes.js'
 

@@ -1,6 +1,6 @@
 // engine API：宿主集成数据源 / start / stop
-import { extractTag } from '../output/index.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { extractTag } from '../../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import type { EngineApiDeps } from './index.js'
 
 export function createHostApi(E: EngineApiDeps) {

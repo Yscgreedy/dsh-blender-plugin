@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
 
 /** 失败信封：只透出插件约定的 code，并为已知配置错误补齐四问字段。 */
 function workerFailureBody(e: unknown, op: string): Record<string, unknown> {

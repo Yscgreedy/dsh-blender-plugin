@@ -102,6 +102,44 @@ export function readyRow(
 }
 
 /**
+ * The ready session a tool call drives, as one value object.
+ *
+ * Every session-bound tool needs the same four facts (id / instance / owner /
+ * whether it is ours) and each one used to dig them out of a raw Gateway row on
+ * its own. `resolveSession` is the only resolver now; the failure keeps the
+ * structured `session_required` envelope together with the instance hint.
+ */
+export interface SessionRef {
+  ok: true
+  sessionId: string
+  instanceId: string
+  owner: string
+  /** `mine` = this DSH session owns it; `visible` = read-only same-host row. */
+  source: 'mine' | 'visible'
+  /** Untouched Gateway row, for presenters that need more than the scalars. */
+  row: SessionRow
+}
+
+export interface NoSessionRef {
+  ok: false
+  failure: ToolFailure
+}
+
+/** Project one listed row onto the shared value object (no Gateway call). */
+export function sessionRefOf(row: SessionRow): SessionRef {
+  const owner = row.owner
+  return {
+    ok: true,
+    sessionId: String(row.id || ''),
+    instanceId: String(row.instanceId || ''),
+    // owner is the Gateway attribution view; an absent/expired owner has no id.
+    owner: typeof owner === 'string' ? owner : String(asRecord(owner).dshSessionId || ''),
+    source: row.is_mine === true ? 'mine' : 'visible',
+    row,
+  }
+}
+
+/**
  * Decision-required failure used when an executing tool has no ready GUI
  * session. It must never spawn Blender; it names the two explicit choices the
  * user can take (attach an open Blender, or consent to a virtual-gui).
@@ -129,6 +167,45 @@ export function sessionRequiredFailure(detail?: string): ToolFailure {
   )
 }
 
+/** The "no ready session" envelope: same code/stage as before, instance hint kept. */
+function noReadySessionFailure(kind?: string, instanceId?: string): ToolFailure {
+  if (instanceId)
+    return sessionRequiredFailure(
+      'instance_id=' +
+        instanceId +
+        ' 没有 ready 的 GUI 会话（先 blender_session action=attach instance_id=' +
+        instanceId +
+        '）',
+    )
+  if (kind)
+    return sessionRequiredFailure(
+      'kind=' + kind + ' 没有 ready 的 GUI 会话（先 blender_session action=attach）',
+    )
+  return sessionRequiredFailure()
+}
+
+/**
+ * Resolve the ready GUI session for a session-bound tool call.
+ *
+ * One Gateway `list` + one `readyRow` decision; a miss is a structured
+ * `session_required` failure (decision request, never an implicit launch).
+ */
+export async function resolveSession(
+  port: number,
+  kind?: string,
+  instanceId?: string,
+): Promise<SessionRef | NoSessionRef> {
+  const listed = await listSessions(port)
+  if (!listed.ok) return { ok: false, failure: listed.failure }
+  const row = readyRow(listed.sessions, kind, instanceId)
+  if (!row) return { ok: false, failure: noReadySessionFailure(kind, instanceId) }
+  return sessionRefOf(row)
+}
+
+/**
+ * Backward-compatible shape for call sites that still want the bare row
+ * (blender_py, the local headless lane). New code uses `resolveSession`.
+ */
 export interface ReadySession {
   ok: true
   session: SessionRow
@@ -140,34 +217,23 @@ export interface NoReadySession {
   failure: ToolFailure
 }
 
-/** Resolve the ready GUI session for a session-bound tool call. */
+/** Compatibility wrapper: same resolution, older receipt shape. */
 export async function requireReadySession(
   port: number,
   kind?: string,
   instanceId?: string,
 ): Promise<ReadySession | NoReadySession> {
-  const listed = await listSessions(port)
-  if (!listed.ok) return listed
-  const row = readyRow(listed.sessions, kind, instanceId)
-  if (!row)
-    return {
-      ok: false,
-      failure: instanceId
-        ? sessionRequiredFailure(
-            'instance_id=' +
-              instanceId +
-              ' 没有 ready 的 GUI 会话（先 blender_session action=attach instance_id=' +
-              instanceId +
-              '）',
-          )
-        : sessionRequiredFailure(),
-    }
-  return { ok: true, session: row, instanceId: String(row.instanceId || '') }
+  const ref = await resolveSession(port, kind, instanceId)
+  if (!ref.ok) return { ok: false, failure: ref.failure }
+  return { ok: true, session: ref.row, instanceId: ref.instanceId }
 }
 
-/** Session id used by mutating routes (txn/py/view) for ownership + scope checks. */
+/**
+ * Session id used by mutating routes (txn/py/view) for ownership + scope checks.
+ * Delegates so `sessionRefOf` stays the only place that reads the row's id.
+ */
 export function sessionIdOf(row: SessionRow): string {
-  return String(row.id || '')
+  return sessionRefOf(row).sessionId
 }
 
 /**

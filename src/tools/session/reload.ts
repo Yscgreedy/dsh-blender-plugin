@@ -10,14 +10,17 @@
  *   （mode / changed / pidBefore / pidAfter / verdict / needsRestart / receipt / note），
  *   **不**压成一句 "SESSION reload 失败 · request failed" —— 那正是上一轮下游验收的痛点：
  *   模型看不到 mode=hmr 与"为什么必须重启"，只能去猜。
+ *
+ * 4b：本文件只剩**呈现**（取回执 → formatReloadReport）。提交与收尾都在 host/reload 的
+ * reloadOnce 里，writeReloadState / settleReloadState 不再有第二个调用点。
  */
 import { text } from '../../contracts/dynamic.js'
-import { hostReload } from '../../host/reload/index.js'
+import { reloadOnce } from '../../host/reload/index.js'
 import { formatReloadReport } from './presenter.js'
 
 export async function executeReload(port: number, args: Record<string, unknown>): Promise<unknown> {
   const dryRun = args.dry_run === true || args.apply === false
-  const report = await hostReload({
+  const { report } = await reloadOnce({
     port,
     apply: !dryRun,
     // force：不信判据，强制重组合一次。给「镜像被中断 + 清单丢了 → 两层都说 current」留的
@@ -25,5 +28,6 @@ export async function executeReload(port: number, args: Record<string, unknown>)
     force: args.force === true,
     reason: text(args.reason).trim() || undefined,
   })
-  return { text: formatReloadReport(report as unknown as Record<string, unknown>), report }
+  const view = report as unknown as Record<string, unknown>
+  return { text: formatReloadReport(view), report: view }
 }

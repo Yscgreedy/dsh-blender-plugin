@@ -1,5 +1,6 @@
 /** blender_run 的呈现层：作业记录、等待/收集、队列指标、tune 回执。 */
 import { asRecord, text } from '../../contracts/dynamic.js'
+import { receiptV2 } from '../receipt.js'
 
 const LF = String.fromCharCode(10)
 
@@ -215,7 +216,7 @@ export function jobFields(job: Record<string, unknown>): Record<string, unknown>
 }
 
 /**
- * receipt.v2 信封：与 blender_op 共用同一份契约（contract/op/verdict/summary/next/provenance）。
+ * 回执信封：与 blender_op 共用同一份契约（构造器见 tools/receipt.ts）。
  * submit 是"作业已建立"不是判定，verdict 固定 null；job_id 与 queued_ahead 是结构化句柄。
  */
 export function submitEnvelope(
@@ -224,8 +225,7 @@ export function submitEnvelope(
   workspaceBase: string | undefined,
 ): Record<string, unknown> {
   const id = text(job.id)
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: 'submit',
     verdict: null,
@@ -249,14 +249,13 @@ export function submitEnvelope(
       surface: 'queue',
       workspace_base: workspaceBase || null,
     },
-  }
+  })
 }
 
 /** status/wait/collect/cancel 的信封：同一套 job_id/state，action 区分来源。 */
 export function jobEnvelope(action: string, job: Record<string, unknown>): Record<string, unknown> {
   const id = text(job.id)
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: action,
     verdict: null,
@@ -266,7 +265,7 @@ export function jobEnvelope(action: string, job: Record<string, unknown>): Recor
     state: text(job.state) || null,
     slot: text(job.slot) || null,
     provenance: { route: '/job', surface: 'queue' },
-  }
+  })
 }
 
 /** list 的结构化行（只留可枚举字段；文本仍给人读）。 */
@@ -293,8 +292,7 @@ export function listRows(jobs: Array<Record<string, unknown>>): Array<Record<str
 export function listEnvelope(jobs: Array<Record<string, unknown>>): Record<string, unknown> {
   const rows = listRows(jobs)
   const CAP = 64
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: 'list',
     verdict: null,
@@ -302,7 +300,7 @@ export function listEnvelope(jobs: Array<Record<string, unknown>>): Record<strin
     truncated: rows.length > CAP,
     jobs: rows.slice(0, CAP),
     provenance: { route: '/job', surface: 'queue' },
-  }
+  })
 }
 
 export function formatWait(

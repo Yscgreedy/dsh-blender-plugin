@@ -150,7 +150,12 @@ describe('archive and lease security boundaries', () => {
   })
 
   it('keeps write routes behind the lease gate while read-only ops bypass it', () => {
-    expect(serverSource).toContain('function leaseGate(payload')
+    // The gate takes the session registry explicitly (the module-level REGISTRY
+    // is gone), so the signature spans two lines and both parameters are part of
+    // the contract.
+    expect(serverSource).toMatch(
+      /function leaseGate\(\s*payload\?: Record<string, unknown> \| null,\s*registry\?: WriteAuthoritySource \| null,?\s*\)/,
+    )
     expect(serverSource).toContain("error: 'leased'")
     expect(serverSource).toContain('const gate = leaseGate(payload)')
     expect(serverSource).toContain(

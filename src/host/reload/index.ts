@@ -464,3 +464,30 @@ export async function settlePendingReload(port: number): Promise<boolean> {
   settleReloadState({ pidAfter, pending: false, verdict, error: null })
   return true
 }
+
+/**
+ * 4b：唯一入口 —— 「提交 → 等待 → 收尾」封成一次调用。
+ *
+ * · settle=false（默认）= 工具面的一次 reload：内部就是 hostReload（诊断 → 动手 → 等新 pid → 收尾）。
+ * · settle=true = **新 fiber 激活**后的收尾：把上一代写下的 pending 记录补成 pidAfter/verdict；
+ *   没有 pending 记录时什么都不做，所以同一代里重复调用是幂等的。
+ *
+ * writeReloadState / settleReloadState 只在本模块内部用 —— 「两代写同一份状态」的口子在这里收掉：
+ * 调用方（plugin-lifecycle / 工具面）只认识 reloadOnce，碰不到那两个写入口。
+ */
+export interface ReloadOnceInput extends HostReloadInput {
+  /** true = 只做「新 fiber 收尾」，不提交新的 reload（plugin-lifecycle 用） */
+  settle?: boolean
+}
+
+export interface ReloadOnceResult {
+  /** settle=true：上一代留下的 pending 记录是否被本次收掉（false = 本来就没有待收尾的） */
+  settled: boolean
+  /** settle≠true：本次 reload 的回执（工具面原样呈现）；settle=true 时为 null */
+  report: ReloadReport | null
+}
+
+export async function reloadOnce(input: ReloadOnceInput): Promise<ReloadOnceResult> {
+  if (input.settle === true) return { settled: await settlePendingReload(input.port), report: null }
+  return { settled: false, report: await hostReload(input) }
+}

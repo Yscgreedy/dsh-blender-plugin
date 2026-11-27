@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
-import { errorCode, errorMessage, errorField } from '../../core/json.js'
+import { errorCode, errorMessage, errorField } from '../../foundation/json.js'
 import { JobSurface, callerFromHeaders } from '../../core/queue/handler.js'
 
 /** The internal queue surface lives behind the same /job route until section 7 exposes blender_run. */

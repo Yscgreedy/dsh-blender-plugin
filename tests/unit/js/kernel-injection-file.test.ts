@@ -9,7 +9,7 @@ import {
   runtimeModuleFiles,
   runtimeModuleFingerprint,
   runtimeModulePrefixes,
-} from '../../../runtime/core/kernel/api.js'
+} from '../../../runtime/foundation/kernel/api.js'
 
 describe('kernel module injection', () => {
   it('gives preloaded modules their real __file__ path', () => {

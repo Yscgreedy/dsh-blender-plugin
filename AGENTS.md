@@ -45,7 +45,7 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 | Host entry | `src/index.ts` — entry-only; re-exports the plugin API and frame cache |
 | Host modules | `src/plugin.ts`, `src/tools/*` (one file per tool), `src/plan/*`, `src/host/*`, `src/ui/*`, `src/contracts/*`, `src/tui/*`, `src/plugin-lifecycle.ts`, `src/plugin-surfaces.ts` |
 | Backend HTTP | `runtime/http/*` — routes, lease, host views |
-| Backend engine | `runtime/core/*` (dispatch, kernel, scripts), `runtime/execution/*` (headless, jobs, workers), `runtime/transport/*` |
+| Backend engine | `runtime/foundation/*` (json/errors/progress/scripts, output, kernel, evidence, layers — no edge back into core), `runtime/core/*` (dispatch, engine, engine-api, sessions, queue, plan), `runtime/execution/*` (headless, jobs, workers), `runtime/transport/*` |
 | Backend language | `runtime/**/*.ts` compiled to `lib/runtime/**/*.js`; `lib/` is never committed |
 | Python domains | `runtime/py/{core,geometry,assembly,render,export}` (registry `runtime/py/modules.json`; no flat `runtime/*.py` after the v3 domain split) |
 | Blender addon | `extension/dsh_blender_bridge/` package and the committed `extension/dsh_blender_bridge.zip` |

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
 import type { CallerIdentity, InstanceRef } from '../../../runtime/core/sessions/types.js'
 import { resetConsentRequests } from '../../../runtime/core/sessions/consent-requests.js'
+import { resetConsentPolicyCache } from '../../../runtime/core/sessions/consent-policy.js'
 import { dispatchSessionAction } from '../../../runtime/http/routes/session/api.js'
 import { formatConsent } from '../../../src/tools/session/presenter.js'
 
@@ -27,14 +28,30 @@ function setup(instances: InstanceRef[] = [{ instanceId: 'inst-1', ready: true }
  * suite must not share the real workDir's consent folder between runs.
  */
 let consentDir = ''
+let policyDir = ''
 beforeAll(() => {
   consentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-consent-liveness-'))
   process.env.DSH_BLENDER_CONSENT_DIR = consentDir
+  // The operator's profile may set virtualGuiConsent=auto; this suite is about the
+  // manual request flow, so pin a policy file that outranks the profile config.
+  // It lives outside consentDir: afterEach clears the request JSONs in that folder.
+  policyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-consent-policy-'))
+  const policy = path.join(policyDir, 'consent-policy.json')
+  fs.writeFileSync(policy, JSON.stringify({ virtualGuiConsent: 'manual' }))
+  process.env.DSH_BLENDER_CONSENT_POLICY_FILE = policy
+  resetConsentPolicyCache()
 })
 afterAll(() => {
   delete process.env.DSH_BLENDER_CONSENT_DIR
+  delete process.env.DSH_BLENDER_CONSENT_POLICY_FILE
+  resetConsentPolicyCache()
   try {
     fs.rmSync(consentDir, { recursive: true, force: true })
+  } catch {
+    /* fine */
+  }
+  try {
+    fs.rmSync(policyDir, { recursive: true, force: true })
   } catch {
     /* fine */
   }
@@ -42,6 +59,7 @@ afterAll(() => {
 
 afterEach(() => {
   resetConsentRequests()
+  resetConsentPolicyCache()
   delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
   for (const name of fs.existsSync(consentDir) ? fs.readdirSync(consentDir) : []) {
     if (!name.endsWith('.json')) continue

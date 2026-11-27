@@ -13,7 +13,7 @@ import {
   noteGatewayRestartSuccess,
 } from './host/backend/restart.js'
 import { refreshHostManifest } from './host/backend/host-manifest.js'
-import { settlePendingReload } from './host/reload/index.js'
+import { reloadOnce } from './host/reload/index.js'
 import type { HostContext } from './host/context.js'
 
 export function registerLifecycle(ctx: HostContext, port: number, autoStart: boolean): void {
@@ -30,8 +30,10 @@ export function registerLifecycle(ctx: HostContext, port: number, autoStart: boo
       else noteGatewayRestartFailure()
     }
     // H2：上一代触发的 HMR 到底成不成 —— 只有新一代写得下 pidAfter/verdict（两段式收尾）。
+    // 4b：唯一入口是 reloadOnce（settle=true 只收尾、不提交）：writeReloadState/settleReloadState
+    // 都封在 host/reload 内部，这里不会再出现「两代各写一次」的第二个写入口。
     try {
-      await settlePendingReload(port)
+      await reloadOnce({ port, settle: true })
     } catch {
       /* 收尾失败只影响自证记录的完整性，不影响后端可用性 */
     }
@@ -73,7 +75,7 @@ export function registerLifecycle(ctx: HostContext, port: number, autoStart: boo
             }
           }
           // Bounded auto-restart: exponential backoff up to 30 s, five failures.
-          // An explicit op=start resets the budget (see viewport/execute.ts).
+          // 预算只在看护里累积：显式 op=start 也不重置（旧引用 viewport/execute.ts 已删除）。
           if (!canRestartGateway()) return
           if (await ensureBackend(port)) noteGatewayRestartSuccess()
           else noteGatewayRestartFailure()

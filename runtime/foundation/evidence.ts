@@ -23,6 +23,7 @@ export const PLUGIN_VERSION: string | null = (() => {
 
 import { sha12 } from './evidence-util.js'
 import { HOST_DIR, HOST_SCOPE, hostProvenance } from './evidence-host.js'
+import type { LayerSnapshot } from './layers.js'
 import type { EngineSelf, PathWarning, Provenance } from './evidence-types.js'
 export type {
   EngineSelf,
@@ -237,13 +238,21 @@ function applyRuntimeLayer(out: Provenance): void {
   out.runtime.currentHash = out.currentHash
 }
 
+/**
+ * 显式分层入参（4a）：给了 host 快照就不再让 foundation 自己发现清单（不读 env、不扫盘）。
+ * 形状是 opts.layers.host —— 与 engineProvenance 的 opts 同构，旧调用方零改动。
+ */
+export interface ProvenanceLayers {
+  host?: LayerSnapshot
+}
+
 /** 顶层判定的合成：任一层 stale 即 stale，staleLayer 说清是哪一层（H1）。 */
-function composeLayerVerdict(out: Provenance, fresh = false): void {
+function composeLayerVerdict(out: Provenance, o: Record<string, unknown>): void {
   out.staleLayer = []
   if (out.runtime.verdict === 'stale') out.staleLayer.push('runtime')
 
   // H1：宿主层同样自证，并与运行时层合成顶层判定（fresh 绕过 250ms 快照缓存）。
-  const host = hostProvenance(fresh)
+  const host = hostProvenance(o.fresh === true, provenanceLayers(o)?.host)
   out.host = host
   if (host.verdict === 'stale') out.staleLayer.push('host')
 
@@ -318,9 +327,16 @@ export function engineProvenance(opts?: unknown): Provenance {
   const cat = catalogFingerprint()
   const out = baseProvenance(cat)
   applyRuntimeLayer(out)
-  composeLayerVerdict(out, o.fresh === true)
+  composeLayerVerdict(out, o)
   if (o.verify) applyDiskVerify(out, o, cat)
   return out
+}
+
+/** opts.layers 的边界解析：调用方（HTTP 边界）拿好的宿主层快照；形状不对就当没给（向后兼容）。 */
+export function provenanceLayers(o: Record<string, unknown>): ProvenanceLayers | undefined {
+  const layers = o.layers && typeof o.layers === 'object' ? (o.layers as ProvenanceLayers) : null
+  const host = layers && layers.host
+  return host && typeof host === 'object' ? layers : undefined
 }
 
 /**

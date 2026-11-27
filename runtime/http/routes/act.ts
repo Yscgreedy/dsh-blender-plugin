@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
 import { currentCaller } from '../caller.js'
 import { gateResponse } from '../session-gate.js'
 import { scopeCoversObject } from '../../core/sessions/scopes.js'

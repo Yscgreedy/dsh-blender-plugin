@@ -5,7 +5,7 @@
  *
  * config/routing.json is the single source of truth for plan/EXT GUI routing. This
  * script renders:
- *   - runtime/core/dispatcher/routes.generated.ts (GUI addon dispatch table)
+ *   - runtime/contracts/routes.generated.ts (GUI addon dispatch table, contract layer)
  *
  * The host-side worker mapping table was removed in 3.1 together with the worker
  * plan channel; `blender_run` submits scripts through the job queue instead.
@@ -22,7 +22,7 @@ import * as prettier from 'prettier'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const DEFAULT_ROOT = path.resolve(HERE, '..')
 export const ROUTING_FILE = 'config/routing.json'
-export const GENERATED_FILES = ['runtime/core/dispatcher/routes.generated.ts']
+export const GENERATED_FILES = ['runtime/contracts/routes.generated.ts']
 
 const SIDES = new Set(['gui'])
 const GROUPS = ['main', 'module', 'ext']

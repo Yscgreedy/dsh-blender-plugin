@@ -65,7 +65,7 @@ vi.mock('../../../runtime/paths.js', () => ({
   USER_SCRIPTS_WIN: null,
 }))
 
-vi.mock('../../../runtime/core/kernel/index.js', () => ({
+vi.mock('../../../runtime/foundation/kernel/index.js', () => ({
   KERNEL_BOOTSTRAP: '# kernel bootstrap',
 }))
 

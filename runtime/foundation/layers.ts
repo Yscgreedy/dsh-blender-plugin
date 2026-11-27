@@ -391,23 +391,54 @@ function unavailableHost(
   }
 }
 
+/** 「已装载」这一侧：只有已装载清单，没有磁盘现算。 */
+export interface HostLayerSnapshotOptions {
+  /** **本进程自己的**宿主层根（Gateway 传 <包根>/lib）；给了就必须与清单里的 root 一致 */
+  root?: string
+  /** 显式清单对象：给了就不再读 env、也不读文件（调用方已经拿好了「已装载」） */
+  manifest?: LayerManifest | null
+  /** 显式清单路径（HTTP 边界从 env 取好再传）；空串 = 已知没有清单 */
+  manifestPath?: string
+}
+
 /**
- * 宿主层：已装载清单（宿主写）vs 磁盘清单（Gateway 现算）。
+ * env 里的宿主层清单路径 —— **唯一**的 env 读取点。
+ *
+ * 生产上 Gateway 由插件宿主 spawn，清单路径经 env 传进来；HTTP 边界要显式化时自己调这个函数
+ * 取值再传 manifestPath，foundation 就不会在深处偷偷发现（R3 的隐式环境契约）。
+ */
+export function envHostManifestPath(): string {
+  return String(process.env[HOST_MANIFEST_ENV] || '')
+}
+
+/** 没有清单时的统一说法（生产兜底与显式空路径共用，回执文本逐字节不变）。 */
+const MISSING_MANIFEST_NOTE =
+  '宿主层不可自证：Gateway 不由插件宿主 spawn（缺 ' +
+  HOST_MANIFEST_ENV +
+  '）→ 只看运行时层；宿主层改动请用 blender_session action=reload'
+
+/**
+ * 宿主层：已装载清单（宿主写 / 调用方显式给）vs 磁盘清单（Gateway 现算）。
  *
  * root：**本进程自己的**宿主层根（Gateway 传 <包根>/lib）。给了就必须与清单里的 root 一致 ——
  * 共享目录里可能躺着别的安装/仓库副本写下的清单；拿它来对拍等于用别人的指纹给自己发合格证。
+ *
+ * 4a：manifest / manifestPath 都是显式入参；**两者都缺省**才回落到 env 发现（生产兜底）。
  */
-export function hostLayerSnapshot(opts: { root?: string } = {}): LayerSnapshot {
-  const manifestPath = String(process.env[HOST_MANIFEST_ENV] || '')
+export function hostLayerSnapshot(opts: HostLayerSnapshotOptions = {}): LayerSnapshot {
   const expected = String(opts.root || '').trim()
-  if (!manifestPath) {
-    return unavailableHost(
-      expected || null,
-      '宿主层不可自证：Gateway 不由插件宿主 spawn（缺 ' +
-        HOST_MANIFEST_ENV +
-        '）→ 只看运行时层；宿主层改动请用 blender_session action=reload',
-    )
+  const hasManifest = Object.hasOwn(opts, 'manifest')
+  const manifestPath = hasManifest
+    ? ''
+    : opts.manifestPath !== undefined
+      ? String(opts.manifestPath || '')
+      : envHostManifestPath()
+  if (hasManifest) {
+    const manifest = opts.manifest ?? null
+    if (!manifest) return unavailableHost(expected || null, MISSING_MANIFEST_NOTE)
+    return hostSnapshotFromManifest(manifest, expected)
   }
+  if (!manifestPath) return unavailableHost(expected || null, MISSING_MANIFEST_NOTE)
   const manifest = readHostManifest(manifestPath)
   if (!manifest) {
     return unavailableHost(
@@ -415,6 +446,11 @@ export function hostLayerSnapshot(opts: { root?: string } = {}): LayerSnapshot {
       '宿主层清单读不到或 schema 不匹配（' + manifestPath + '）→ 只看运行时层',
     )
   }
+  return hostSnapshotFromManifest(manifest, expected)
+}
+
+/** 一份「已装载」清单 vs 磁盘：归属校验（root）+ 逐文件对拍 + 三态判定。 */
+function hostSnapshotFromManifest(manifest: LayerManifest, expected: string): LayerSnapshot {
   if (expected && !sameRoot(manifest.root, expected)) {
     // 现场（2026-11-19）：manifest.root = 仓库开发副本 lib，本 Gateway 从 profile 安装副本跑。
     // 旧实现照单全收 → 仓库 lib 对仓库 lib = current，宿主 fiber 的旧代码永远"已是最新"。

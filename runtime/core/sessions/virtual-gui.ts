@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { AVAILABILITY_STAGES, availabilityFailure } from '../availability.js'
 import type { AvailabilityFailure, AvailabilityStage } from '../availability.js'
-import { isRecord } from '../json.js'
+import { isRecord } from '../../foundation/json.js'
 import { startVirtualGuiGate } from './display-gate.js'
 import { fail, ownerMatches, ownerOf, sessionView } from './types.js'
 import type { CallerIdentity, InstanceRef, SessionRecord, SessionResult } from './types.js'

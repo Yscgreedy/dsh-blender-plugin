@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from '../deps.js'
 import type { HttpRouteDeps } from '../deps.js'
-import { errorMessage } from '../../../core/json.js'
+import { errorMessage } from '../../../foundation/json.js'
 
 export function createLaunchHandler(E: HttpRouteDeps) {
   const { engine, json, readBody, stats } = E

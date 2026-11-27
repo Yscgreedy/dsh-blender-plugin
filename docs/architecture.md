@@ -56,8 +56,14 @@ lib/runtime/**/*.js. Published packages contain built JavaScript, not backend Ty
 
 Layout:
 
-- runtime/core/: dispatch, kernel, scripts, catalog, engine; queue argument construction lives
-  in `queue/job-args.ts` and the process lifecycle in `queue/spawn-executor.ts`;
+- runtime/foundation/: the leaf helpers both other runtime layers share — `json.ts`,
+  `errors.ts`, `progress.ts`, `scripts.ts`, `layers.ts`, `evidence*.ts`, and the `output/`
+  (parse/render) and `kernel/` (bootstrap/api) subtrees. A foundation module imports only the runtime
+  roots (`config.ts`, `paths.ts`, `catalog/`, `contracts/`, `classes.ts`, `transport/`) — never
+  `runtime/core/**` or `runtime/execution/**`, so the execution layer reaches these helpers without a
+  reverse edge into core;
+- runtime/core/: dispatch, engine, engine-api, sessions, queue and plan; queue argument construction
+  lives in `queue/job-args.ts` and the process lifecycle in `queue/spawn-executor.ts`;
 - runtime/embedded/: the Python preludes and templates embedded into Blender command lines (GPU
   setup, kernel path helpers, the `blender_py` act wrapper), kept as data modules so `paths.ts`
   stays inside its line budget;
@@ -66,7 +72,13 @@ Layout:
 - runtime/http/: routes, lease, host views;
 - runtime/gateway/: the Gateway process, addon WebSocket channel, ownership, and lifecycle;
 - runtime/transport/: frames, sockets, protocol helpers;
-- contract tables: `config/contracts.json` is the catalog <-> Python link layer (described in section 8); there is no separate runtime contract-table directory;
+- runtime/contracts/: the code-shared contract tables — the generated GUI routing table
+  (`runtime/contracts/routes.generated.ts`, described in section 8), the route matching predicate
+  (`runtime/contracts/route-match.ts`), and the headless local-lane name whitelist
+  (`runtime/contracts/local-lane.ts`). `runtime/foundation/**`, `runtime/core/**` and
+  `runtime/execution/**` all import from here, so no layer has to reach sideways into another for a
+  shared table;
+- contract data: `config/contracts.json` is the catalog <-> Python link layer (described in section 8);
 - runtime/py/: the Blender-side Python library described below.
 
 The runtime build precedes the host build because host modules import boundary helpers from the built
@@ -213,7 +225,7 @@ The build has exactly two public facades, one per entry:
   only the consumed surface: `createEngine` plus the catalog tables and helpers, the class-guide
   helpers, flags, `PATH_GUARD`, `PLUGIN_VERSION`, and `engineProvenance`. Internal runtime, src, and
   test code imports implementation modules directly (`runtime/paths.ts`,
-  `runtime/core/evidence.ts`, `runtime/transport/probes.ts`, ...); a facade copy that insulates nobody
+  `runtime/foundation/evidence.ts`, `runtime/transport/probes.ts`, ...); a facade copy that insulates nobody
   is dead code and is removed in the same change.
 
 `config/facades.json` is the checked-in machine-readable inventory: each facade file, its exports, and
@@ -371,7 +383,7 @@ The op surface has two derived data sources; neither is hand-maintained inside t
 
 - `config/routing.json` is the single GUI routing table (op prefix or exact alias, strip length,
   python api, preload, timeout, ensure hook). `scripts/gen-routes.mjs` renders
-  `runtime/core/dispatcher/routes.generated.ts`, which starts with an AUTO-GENERATED header plus the
+  `runtime/contracts/routes.generated.ts`, which starts with an AUTO-GENERATED header plus the
   source sha256. The host-side worker table was removed with the 3.1 worker plan channel: headless
   work belongs to `blender_run(kind="headless")`. `npm run build` regenerates the table and
   `npm run check:routes` fails when a generated file is missing, stale, or hand-edited. Generated

@@ -2,15 +2,15 @@
 //
 // 这是**窄车道**：名字来自需求清单（audit_mesh / img_* / visualreport_report /
 // qc_render_views / montage）。API 属性、子操作名与 preload 模块一律从
-// runtime/core/dispatcher/routes.generated.ts（config/routing.json 生成）里取，
+// runtime/contracts/routes.generated.ts（config/routing.json 生成）里取，
 // 本文件不维护第二份映射表 —— 路由改了，车道跟着改；对拍断言在
 // tests/unit/js/op-local-lane.test.ts。
-import { EXT_ROUTES, MAIN_ROUTES, MODULE_ROUTES } from '../../core/dispatcher/routes.generated.js'
-import type { GuiRoute } from '../../core/dispatcher/routes.generated.js'
-import { routeMatches } from '../../core/dispatcher/plan-call.js'
-import { isLocalOpName } from './names.js'
+import { EXT_ROUTES, MAIN_ROUTES, MODULE_ROUTES } from '../../contracts/routes.generated.js'
+import type { GuiRoute } from '../../contracts/routes.generated.js'
+import { routeMatches } from '../../contracts/route-match.js'
+import { isLocalOpName } from '../../contracts/local-lane.js'
 
-export { LOCAL_OP_NAMES, LOCAL_OP_PREFIXES, isLocalOpName } from './names.js'
+export { LOCAL_OP_NAMES, LOCAL_OP_PREFIXES, isLocalOpName } from '../../contracts/local-lane.js'
 
 /** routing.json 的 montage 行走显式 API 调用，那一行没有 preload 字段。 */
 const MODULE_BY_KIND: Record<string, readonly string[]> = { montage: ['montage'] }

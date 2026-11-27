@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "ops": [
+    "audit_mesh",
+    "img_digest",
+    "img_probe",
+    "img_measure",
+    "img_calib",
+    "visualreport_report",
+    "qc_render_views",
+    "montage"
+  ],
+  "prefixes": ["img_"]
+}

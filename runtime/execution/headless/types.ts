@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
-import type { StageRecord } from '../../core/progress.js'
+import type { StageRecord } from '../../foundation/progress.js'
 import type { StagingInfo } from '../../staging.js'
 
 export interface HeadlessOpts {

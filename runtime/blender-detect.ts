@@ -24,7 +24,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { readString } from './core/json.js'
+import { readString } from './foundation/json.js'
 
 /** 探测依赖面：默认 = 生产实现；测试按需覆盖（未给的键仍走生产实现） */
 export interface BlenderDetectDeps {

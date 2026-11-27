@@ -20,9 +20,11 @@ function readTree(dir: string, ext: string): string {
     })
     .join('\n')
 }
+// 生成路由表（config/routing.json 的派生产物）住在契约层，派发源 = dispatcher 树 + 该表。
 const dispatchSource =
   readTree(pkgPath('runtime', 'core', 'dispatcher'), '.ts') +
-  fs.readFileSync(pkgPath('runtime', 'core', 'plan-dispatch.ts'), 'utf8')
+  fs.readFileSync(pkgPath('runtime', 'core', 'plan-dispatch.ts'), 'utf8') +
+  fs.readFileSync(pkgPath('runtime', 'contracts', 'routes.generated.ts'), 'utf8')
 
 const REQUIRED = [
   '/health',

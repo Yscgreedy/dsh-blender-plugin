@@ -19,7 +19,6 @@ import { trimJob, clampIntParam } from '../http/jobs.js'
 import { SessionRegistry } from '../core/sessions/registry.js'
 import { JobQueue } from '../core/queue/manager.js'
 import { SpawnJobExecutor } from '../core/queue/spawn-executor.js'
-import { setSessionRegistry } from '../http/session-gate.js'
 import { installPresencePublisher } from './presence-push.js'
 import { gatewayInstances } from '../transport/addon-handshake.js'
 import { createRouter } from '../http/router.js'
@@ -116,7 +115,6 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     },
   )
   registryRef.current = sessionRegistry
-  setSessionRegistry(sessionRegistry)
   const jobQueue = new JobQueue({ executor: new SpawnJobExecutor() })
   const E: HttpRouteDeps = {
     sessionRegistry,
@@ -139,7 +137,9 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     leaseView,
     releaseStaleLease,
     leaseAcquire,
-    leaseGate,
+    // The write gate gets the registry explicitly; routes keep the single-arg
+    // LeaseGateFn signature, so no route reads the registry behind the gate's back.
+    leaseGate: (p) => leaseGate(p, sessionRegistry),
     isReadOnly,
     trimJob,
     clampIntParam,
@@ -155,7 +155,9 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     },
   }
   const routes = createRoutes(E)
-  const server = http.createServer(createRouter({ HOST: host, PORT: port, bump, routes }))
+  const server = http.createServer(
+    createRouter({ HOST: host, PORT: port, bump, routes, sessionRegistry }),
+  )
   addonGateway.attach(server)
   const app: GatewayApp = {
     server,

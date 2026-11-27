@@ -13,37 +13,31 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AvailabilityStage } from '../../contracts/availability.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
+import { LOCAL_OP_NAMES, LOCAL_OP_PREFIXES, isLocalOpName } from '../../contracts/local-lane.js'
 import type { HostContext } from '../../host/context.js'
 import { backendPost } from '../../host/http.js'
 import { workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
 import type { ToolFailure } from '../errors.js'
+import { deriveVerdict, receiptV2, withEvidence } from '../receipt.js'
 import { requireReadySession } from '../shared/session.js'
 
 const LF = String.fromCharCode(10)
 const BLEND_END = '.blend'
 
-/** 本地可执行白名单（与 runtime/execution/local-op/table.ts 对拍，见单测）。 */
-export const LOCAL_OPS: readonly string[] = [
-  'audit_mesh',
-  'img_digest',
-  'img_probe',
-  'img_measure',
-  'img_calib',
-  'visualreport_report',
-  'qc_render_views',
-  'montage',
-]
+/**
+ * 本地可执行白名单：唯一定义在 config/local-ops.json，生成到 src/contracts/local-lane.ts
+ * （后端同一份生成到 runtime/contracts/local-lane.ts）。这里不再手写名单，只保留对外名字。
+ */
+export const LOCAL_OPS: readonly string[] = LOCAL_OP_NAMES
 
 /** img_ 全族共用同一条车道（同一路由行）。 */
-export const LOCAL_PREFIXES: readonly string[] = ['img_']
+export const LOCAL_PREFIXES: readonly string[] = LOCAL_OP_PREFIXES
 
+/** 兼容旧名：只做名字判定，口径与后端 isLocalOpName 完全一致。 */
 export function isLocalLaneOp(op: string): boolean {
-  const name = op.trim()
-  if (!name) return false
-  if (LOCAL_OPS.includes(name)) return true
-  return LOCAL_PREFIXES.some((prefix) => name.startsWith(prefix))
+  return isLocalOpName(op)
 }
 
 function isAbsolutePath(p: string): boolean {
@@ -171,16 +165,16 @@ export function localLaneReceipt(
     'verdict: degraded —— 作业已提交、结果未取回，不是 pass；作业失败或结果 ok=false 一律按 degraded + evidence 处理',
     '证据：驱动把 verdict/evidence 写进 HEADLESS 回执行，blender_run action=collect 可读',
   ]
-  const envelope: Record<string, unknown> = {
-    contract: 'receipt.v2',
+  // verdict 由证据产出：作业只提交、结果还在队列里 —— 不是 pass（deriveVerdict 规则 3）。
+  const envelope: Record<string, unknown> = receiptV2({
     op,
-    verdict: 'degraded',
+    verdict: deriveVerdict({ ok: true, job }),
     job_id: id,
     file,
     take,
     summary: '已提交本地无头作业 · ' + (text(job.status || job.state) || 'queued'),
     provenance: { route: '/job', surface: 'queue', kind: 'headless', forced: forced },
-  }
+  })
   if (text(job.outdir)) envelope.outdir = text(job.outdir)
   if (text(job.logDir)) envelope.log_dir = text(job.logDir)
   return { text: lines.join(LF), envelope }
@@ -219,14 +213,16 @@ export function localLaneFailure(
       LF +
       'evidence: ' +
       JSON.stringify(evidence),
-    envelope: {
-      ...base.envelope,
-      contract: 'receipt.v2',
-      verdict: 'degraded',
-      job_id: null,
-      file,
-      evidence: { ...base.envelope.evidence, ...evidence },
-    },
+    // 作业没有建立 = 没拿到证据（降级），不是「证据证明失败」（deriveVerdict 规则 1）。
+    envelope: withEvidence(
+      receiptV2({
+        ...base.envelope,
+        verdict: deriveVerdict({ ok: false, degraded: true }),
+        job_id: null,
+        file,
+      }),
+      evidence,
+    ),
   }
 }
 

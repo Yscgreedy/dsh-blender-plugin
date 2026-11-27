@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
 // HTTP 路由 /preset：配方库
 export function createPresetRoutes(E: HttpRouteDeps) {
   const { engine, isReadOnly, json, leaseGate, readBody, stats, streamJson } = E

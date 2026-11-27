@@ -1,15 +1,15 @@
 // 作业脚本前导/正文拼装
 import fs from 'node:fs'
 import { GPU_PRELUDE, pyModuleFile, pyModuleNames } from '../../../paths.js'
-import { slipFixPath } from '../../../core/output/index.js'
+import { slipFixPath } from '../../../foundation/output/index.js'
 import {
   PATH_GUARD,
   envPrelude,
   scriptFileBlock,
   shotsBlock,
   workdirBlock,
-} from '../../../core/scripts.js'
-import { KERNEL_BOOTSTRAP } from '../../../core/kernel/index.js'
+} from '../../../foundation/scripts.js'
+import { KERNEL_BOOTSTRAP } from '../../../foundation/kernel/index.js'
 import { hardExitJobParts } from '../../../hard_exit.js'
 import { writeHeadlessScript } from '../../../staging.js'
 import type { JobsDeps } from '../types.js'

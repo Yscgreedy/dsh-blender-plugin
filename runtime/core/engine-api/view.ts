@@ -2,8 +2,8 @@
 import fs from 'node:fs'
 import { winToWsl } from '../../config.js'
 import { VIEW_PNG_WIN } from '../../paths.js'
-import { extractTag } from '../output/index.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { extractTag } from '../../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import type { EngineApiDeps } from './index.js'
 
 export function createViewApi(E: EngineApiDeps) {

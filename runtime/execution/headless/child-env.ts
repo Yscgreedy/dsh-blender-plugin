@@ -1,4 +1,4 @@
-import { PLUGIN_VERSION } from '../../core/evidence.js'
+import { PLUGIN_VERSION } from '../../foundation/evidence.js'
 import { USER_CONFIG_WIN, USER_SCRIPTS_WIN } from '../../paths.js'
 import { baseChildEnv, withWslEnv } from '../../proc_env.js'
 import type { HeadlessOpts, PreparedHeadless } from './types.js'

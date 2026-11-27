@@ -1,7 +1,7 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-21T14:11:36.468Z",
+  "generatedAt": "2026-11-27T02:21:08.748Z",
   "mode": "warn",
   "totals": {
     "all": 1517,
@@ -116,16 +116,6 @@
       "exempt": 1,
       "residual": 0
     },
-    "runtime/core/kernel/api.ts": {
-      "count": 1,
-      "exempt": 1,
-      "residual": 0
-    },
-    "runtime/core/kernel/bootstrap.ts": {
-      "count": 2,
-      "exempt": 2,
-      "residual": 0
-    },
     "runtime/core/queue/job-args.ts": {
       "count": 4,
       "exempt": 4,
@@ -144,6 +134,16 @@
     "runtime/execution/workers/worker-start.ts": {
       "count": 1,
       "exempt": 1,
+      "residual": 0
+    },
+    "runtime/foundation/kernel/api.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/foundation/kernel/bootstrap.ts": {
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/http/routes/health.ts": {

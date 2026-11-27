@@ -6,7 +6,7 @@ import {
   extractTag,
   jsonFromStdout,
   slipFixPath,
-} from '../../../runtime/core/output/parse.js'
+} from '../../../runtime/foundation/output/parse.js'
 
 // split these pure helpers out of runtime/core/output.ts; they are
 // imported directly here so a regression in one phase cannot hide behind the

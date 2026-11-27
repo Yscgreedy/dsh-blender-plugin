@@ -11,7 +11,7 @@
  *   - 三态判据放在 JS：Python 侧只报每通道 status/metrics/reason，判定集中一处。
  */
 import path from 'node:path'
-import { isArray, isRecord } from '../core/json.js'
+import { isArray, isRecord } from '../foundation/json.js'
 import { PY_ROOT } from '../paths.js'
 
 /** 允许的通道名（模型面 invalid_params 的允许列表就取这一份）。 */

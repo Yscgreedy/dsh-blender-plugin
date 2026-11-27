@@ -1,7 +1,7 @@
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
-import { extractLoop } from '../output/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
+import { extractLoop } from '../../foundation/output/index.js'
 import { wslToWin } from '../../config.js'
-import { errorMessage } from '../json.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { AddonClient } from '../../transport/probes.js'
 
 export interface RenderGuardDeps {
