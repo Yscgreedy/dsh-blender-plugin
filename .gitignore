@@ -51,3 +51,6 @@ coverage/
 pytest-of-*/
 pytest-*/
 
+# Antigravity MCP adapter: dependencies and the vite single-file bundle (both rebuilt)
+antigravity/node_modules/
+antigravity/dist/
