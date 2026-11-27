@@ -45,7 +45,7 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 | Host entry | `src/index.ts` — entry-only; re-exports the plugin API and frame cache |
 | Host modules | `src/plugin.ts`, `src/tools/*` (one file per tool), `src/plan/*`, `src/host/*`, `src/ui/*`, `src/contracts/*`, `src/tui/*`, `src/plugin-lifecycle.ts`, `src/plugin-surfaces.ts` |
 | Backend HTTP | `runtime/http/*` — routes, lease, host views |
-| Backend engine | `runtime/foundation/*` (json/errors/progress/scripts, output, kernel, evidence, layers — no edge back into core), `runtime/core/*` (dispatch, engine, engine-api, sessions, queue, plan), `runtime/execution/*` (headless, jobs, workers), `runtime/transport/*` |
+| Backend engine | `runtime/foundation/*` (json/errors/progress/scripts, output, kernel, evidence, layers — no edge back into core), `runtime/core/*` (dispatch, engine, engine-api, sessions, queue, plan), `runtime/execution/*` (headless, jobs, workers), `runtime/contracts/*` (generated routing table, route matcher, local-lane names), `runtime/transport/*` |
 | Backend language | `runtime/**/*.ts` compiled to `lib/runtime/**/*.js`; `lib/` is never committed |
 | Python domains | `runtime/py/{core,geometry,assembly,render,export}` (registry `runtime/py/modules.json`; no flat `runtime/*.py` after the v3 domain split) |
 | Blender addon | `extension/dsh_blender_bridge/` package and the committed `extension/dsh_blender_bridge.zip` |
@@ -68,6 +68,8 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
   poll by job id — a client timeout is not a failed job.
 - **Verdicts are three-state** (`pass` / `fail` / `degraded`); `degraded` is not a pass; delivery gates
   use `gate_preflight` / `gate_checkpoint` / `gate_deliver` and `deliver_export(require_gate=true)`.
+- **Cross-domain Python calls use kernel ports.** A capability owned by another domain is registered with `K.dsh_ports.register_port` by its provider and called with `call_port`; do not take another domain's `K.dsh_*_api`. Cross-domain imports stay at zero (layout test).
+- **One write authority.** `sessionWriteGate(payload, registry)` is the only authorization entry; a host-attributed write with no registry fails closed. Per-route skip predicates are local and must move together when the rule changes.
 - **Migrate in slices** ([architecture](docs/architecture.md)): one module or boundary per change,
   no behavior change while moving code, and the old file is deleted in the same change.
 - **No new rule files.** A lesson learned goes into this file or the architecture guide.

@@ -185,6 +185,13 @@ Since 3.5 the same tab also carries a read-only ops surface: one shared poll of 
 write path. Its two settings — backend override and poll interval — live in browser localStorage and
 never touch ownership, grants or `virtualGuiConsent`.
 
+Write authorization has one entry since the P0 decoupling. `runtime/http/session-gate.ts` exposes
+`sessionWriteGate(payload, registry)`, and `gateway/app.ts` binds the session registry into
+`leaseGate`. A host-attributed write with no registry fails closed (`session_unavailable`) instead of
+falling through to the legacy lease; requests without caller headers keep the legacy path. Each write
+route still declares its own skip predicate (read-only ops, `isolated`, `py` + caller), so changing a
+skip rule still touches every write route — tracked as the remaining P1 item.
+
 ### Subagents, read-only borrowing, and stale owners
 
 DSH gives a subagent its own `dshSessionId`, so strict `(hostId, dshSessionId)` ownership used to lock
@@ -282,6 +289,13 @@ Public facade modules keep the stable name at runtime/py/<domain>/<name>.py. The
 the shared runtime/py/_facade.py helper and re-export the implementation package. The implementation
 lives in the sibling <name>_impl/ package. The public path, preload name, and K.dsh_<name>_api entry are
 the contract; the facade is the stable entry, not a temporary shim.
+
+Cross-domain capabilities go through kernel ports, not another domain's API object. `core/kit.py`
+owns `K.dsh_ports` with `register_port` / `port_available` / `call_port` / `port_names`.
+`render` registers `view_capture`, `export` registers `deliver_export` and `deliver_verify`, and
+`core` registers `gate_run`; the consumers call the port, so the source-level domain graph stays
+acyclic. Imports remain zero-cross-domain (enforced by the layout test), and `modules.json` is still
+the only module registry.
 
 ## 5. Blender addon (extension/dsh_blender_bridge/)
 
@@ -397,6 +411,13 @@ The op surface has two derived data sources; neither is hand-maintained inside t
   (`pythonExtras`) are declared explicitly; the retired `catalogExtras` field fails the parity test,
   so an advertised-but-undispatchable op cannot pass as known drift.
 
+`config/local-ops.json` is the single source for the headless local lane. `scripts/gen-local-ops.mjs`
+renders `runtime/contracts/local-lane.ts` and `src/contracts/local-lane.ts`, and
+`node scripts/check-local-ops.mjs` (part of `npm run lint`) fails when either copy is stale or
+hand-edited. Two contract tests keep the consumers honest: `op-read-only-parity.test.ts` compares the
+host read-only list with the catalog, and `route-consumers.test.ts` keeps every tool/host/headless/
+client route literal inside `CONTRACT_ROUTES`.
+
 ### Exceptions
 
 Exceptions are owned at two levels; an unowned, expired, or stale entry fails a gate.
@@ -491,13 +512,17 @@ policy; a floor must not be lowered without a documented policy change in this g
 | Two registered public facades plus implementation packages | Stable host and runtime entry imports; every export needs a registered consumer, and an unregistered export fails check:no-shims |
 | File, function, and coverage budgets | Reviewable size and measured debt; exceptions need owner, reason, and expiry |
 | One routing table plus codegen; one catalog <-> Python link table | GUI and worker routes cannot drift from config/routing.json; check:routes rejects stale generated tables, and the parity test rejects undeclared dispatch drift |
+| Kernel ports for cross-domain Python calls | The core can call view/deliver/gate capabilities without naming another domain's private API; the port name is the contract, and the layout test still enforces zero cross-domain imports |
+| One write authority with a fail-closed registry | A host-attributed write does not slip through when the Gateway has no session registry; legacy no-caller clients keep the lease path, and per-route skip rules remain the one local decision point |
 
 ## 10. How to change safely
 
 1. Read AGENTS.md for commands and hard rules.
 2. For a boundary or contract change, update the code, the catalog/lock, the contract tests, and the
    migration notes together. Routing changes start in config/routing.json and regenerate through
-   node scripts/gen-routes.mjs; catalog op changes must also update config/contracts.json.
+   node scripts/gen-routes.mjs; catalog op changes must also update config/contracts.json. A
+   cross-domain Python capability is registered as a port in `core/kit.py` (provider side) and called
+   through `call_port` (consumer side); it must not take another domain's `K.dsh_*_api`.
 3. Add or update a failing test before the behavior change. Keep unit tests free of Blender, display,
    network, and user profile dependencies.
 4. Run the layer gates for what changed, then the full test and static gates. Run real-Blender E2E for
@@ -512,6 +537,11 @@ The refactor plan, the working spec, and the debt ledger are historical evidence
 this repository documents behavior and the terminal state only. Plan-shaped IDs (D1, F2.3, S3, ...) are
 no longer a maintained narrative: config/plan-ids.json carries the remaining exemptions, and
 scripts/check-plan-ids.mjs is the ratchet that keeps new ones out.
+
+The 2026-11 P0/P1-1a refactor moved the shared runtime helpers into `runtime/foundation/`, the shared
+tables into `runtime/contracts/`, removed the last module-global write registry, and replaced the
+view/deliver/gate cross-domain API calls with kernel ports. Current metrics, the coupling inventory and
+the remaining roadmap live in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 Two historical analyses are kept for traceability, not as current guidance:
 [Procedura fusion analysis](Procedura-融合分析.md) (2026-09-17) and

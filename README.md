@@ -185,6 +185,7 @@ On Windows and Linux the Gateway can launch an isolated Blender GUI for the agen
 - Third-party checklist: [docs/给第三方的安装清单.md](docs/给第三方的安装清单.md)
 - DSH upgrade compatibility: [docs/DSH-更新适配.md](docs/DSH-更新适配.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
+- Current architecture + Axiomatic Design audit: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Closed backlog (animation/toon round): [CHANGELOG.md](CHANGELOG.md) · archive snapshot [docs/archive/2026-11-20-角色动画与卡通渲染需求.md](docs/archive/2026-11-20-角色动画与卡通渲染需求.md)
 - OCCT backend plan (deferred): [docs/OCCT后端-接入计划.md](docs/OCCT后端-接入计划.md)
 - Modeling skill: [skills/blender-modeling/](skills/blender-modeling/)

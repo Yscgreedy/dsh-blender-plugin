@@ -40,3 +40,4 @@
 - [操作教程](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/docs/操作教程.md): 从零上手 → 连通 → 工具 → 配方 → 排错
 - [假设驱动建模 cookbook](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/docs/假设驱动建模-cookbook.md): 假设 / 区间 / 证据 / 三态判定
 - [CHANGELOG](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/CHANGELOG.md): 逐版实测数据
+- [当前架构与公理化设计审计](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/ARCHITECTURE.md): 模块布局 / 耦合环现状 / 演进与路线图

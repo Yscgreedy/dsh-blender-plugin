@@ -182,6 +182,7 @@ Windows 与 Linux 上 Gateway 可以为 agent 拉起一个隔离的 Blender GUI�
 - 第三方安装清单：[docs/给第三方的安装清单.md](../给第三方的安装清单.md)
 - DSH 升级适配：[docs/DSH-更新适配.md](../DSH-更新适配.md)
 - 架构说明：[docs/architecture.md](../architecture.md)
+- 当前架构与公理化设计审计：[ARCHITECTURE.md](../../ARCHITECTURE.md)
 - 建模 skill：[skills/blender-modeling/](../../skills/blender-modeling/)
 - 版本说明：[GitHub Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 与 [CHANGELOG.md](../../CHANGELOG.md)
 
@@ -201,7 +202,7 @@ Windows 与 Linux 上 Gateway 可以为 agent 拉起一个隔离的 Blender GUI�
 - Node.js **24.9** 是最低支持版本；CI 使用 Node 24。
 - 开发环境：克隆后运行 `npm run setup:dev`，它会探测 Python 3.11+、创建或复用 `.venv`，安装
   `requirements-dev.txt`、`requirements-typecheck.txt` 与 npm 依赖（仅当 `node_modules` 缺失时才跑
-  `npm ci --legacy-peer-deps`）。`npm run setup:dev -- --check` 只验证不写入；
+  `npm ci --legacy-peer-deps`）。`npm run setup:dev -- --check` 只验证、零写入；
   `npm run setup:dev -- --force` 重建 `.venv`。`.venv` 与 `node_modules` 都不入库。
 - Python 测试需要装有 `pytest` 的虚拟环境（virtualenv，由 `npm run setup:dev` 创建）。测试会自动探测
   `.venv`；需要换解释器时用 `PYTHON` 指向别处（Windows 另设 `PYTHONIOENCODING=utf-8`、
