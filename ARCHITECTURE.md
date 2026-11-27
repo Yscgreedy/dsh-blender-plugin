@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — DSH × Blender 插件：当前架构与公理化设计审计
 
 > **性质**：架构现状 + 公理化设计（AD）审计。规范以 [docs/architecture.md](docs/architecture.md) 与 [AGENTS.md](AGENTS.md) 为准；本文回答“现在长什么样、哪里仍然耦合、为什么、下一步拆哪”。
-> **代码基线**：`427a02f`（P0 + P1-1a 收尾已合并）。文档提交不影响该基线；§7 记录演进。
+> **代码基线**：`5476cb3`（P0 + P1-1a + P2 第一批已合并）。文档提交不影响该基线；§7 记录演进。
 > **方法**：Nam P. Suh 公理化设计——FR–DP 映射、独立公理（三角化/破环）、信息公理（I 最小）、之字形分解。
 > **证据**：结论给 `文件:行` 或生成物路径；✅ = 本报告复核，◐ = 分层审计给出（原始报告在 `.audit/`，本地忽略）。
 > **未覆盖**：真实 Blender E2E、Windows GUI、浏览器面板运行时未在本报告中实测。
@@ -349,7 +349,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 | `check:python-static` | ruff + pyright clean |
 | `check:structure` / `function-budget` / `routes` / `no-shims` / `runtime-layout` | 全 PASS |
 
-### 7.5 P2 第一批（单入口收敛 + 死模块删除）
+### 7.5 P2 第一批（commit `5476cb3`：单入口收敛 + 死模块删除）
 
 | 收口 | 结果 | 证据 |
 |---|---|---|
