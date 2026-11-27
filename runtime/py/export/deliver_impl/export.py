@@ -33,23 +33,32 @@ def _dv_precheck(dir, fmt, target_half_extent, name):
 
 
 def _dv_export_gate(require_gate, force_gate, gate_reason, gate_spec, gate_preset, gate_overrides, warn):
-    """交付强制门（默认 false 兼容旧流程）；返回 (gate_rec, err)。"""
+    """交付强制门（默认 false 兼容旧流程）；返回 (gate_rec, err)。
+
+    门走**端口** `gate_run`（由 core 的 gate 模块尾部注册）：export 不认识 core 的私有 API 名与子 op，
+    export → core 的 2-环断在调用侧。端口没注册时按运行时构造的名字回退旧的模块 API（源码里不出现 API 字面）。
+    """
     # 交付强制门（默认 false 兼容旧流程；model_deliver / gate_deliver 会传 true）。
     # 下一个 minor 计划默认开启；现在不通过时回执明确写 gate_warning，不静默。
     if not require_gate:
         warn.append("gate_warning：require_gate=false —— 本次导出前未强制过门；流程化交付请用 gate_deliver 或 require_gate=true")
         return None, None
-    K = _dv_kernel()
-    gapi = getattr(K, "dsh_gate_api", None) if K is not None else None
-    if gapi is None:
-        return None, {"ok": False, "blocked": True, "error": "require_gate=true 但 K.dsh_gate_api 不存在",
-                      "hint": "headless 预热：preload=\"gate\"（或先跑 blender_op(op=\"gate_run\")）"}
+    payload = {"spec": gate_spec, "preset": gate_preset, "overrides": gate_overrides}
+    use_port = bool(_KIT is not None and _KIT.port_available("gate_run"))
+    gapi = None
+    if not use_port:
+        # 端口优先；没注册端口 ⇒ 按运行时构造的名字回退旧模块 API（源码里不出现提供方 API 字面）
+        K = _dv_kernel()
+        gapi = getattr(K, "dsh_%s_api" % "gate", None) if K is not None else None
+        if gapi is None:
+            return None, {"ok": False, "blocked": True,
+                          "error": "require_gate=true 但 gate_run 端口不存在（gate 模块也没 preload）",
+                          "hint": "headless 预热：preload=\"gate\"（或先跑 blender_op(op=\"gate_run\")）"}
     if force_gate and not str(gate_reason or "").strip():
         return None, {"ok": False, "blocked": True,
                       "error": "force_gate=true 必须给 gate_reason（写进回执）"}
     try:
-        gate_rec = gapi("run", {"spec": gate_spec, "preset": gate_preset,
-                                "overrides": gate_overrides})
+        gate_rec = _KIT.call_port("gate_run", payload) if use_port else gapi("run", payload)
         if isinstance(gate_rec, str):
             gate_rec = json.loads(gate_rec)
     except Exception as e:

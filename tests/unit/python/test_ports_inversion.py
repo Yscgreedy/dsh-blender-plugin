@@ -23,6 +23,7 @@ core 只认 `view_capture` / `deliver_export` / `deliver_verify` 三个端口名
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib
 import json
@@ -31,6 +32,8 @@ import types
 from pathlib import Path
 
 import pytest
+
+from bpy_stub import install as install_bpy_stub
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_PY = ROOT / "runtime" / "py"
@@ -292,6 +295,117 @@ def test_f_plan_step_falls_back_to_module_api(gate_api, ports, kernel, monkeypat
 
 
 # ────────────────────────────── g：core 全域不再点名提供方的 API
+
+
+# ────────────────────────────── h：export → core 的 gate 也走端口（export 只认 gate_run）
+
+
+@contextlib.contextmanager
+def _export_runtime():
+    """独立 boot：真 bpy stub + 新 kernel + 隔离包加载 export/deliver_impl/export.py。
+
+    module 级 fixture 装的是"碰 bpy 就炸"的探针；export 侧导入需要真 stub，所以这里自带一套，
+    退出时把 sys.modules 恢复原状（含 bpy.* 子模块与隔离包）。
+    """
+    prefixes = ("bpy", "_dsh_test_export")
+    saved = {}
+    for name in list(sys.modules):
+        if name in prefixes or any(name.startswith(p + ".") for p in prefixes) or name == "dsh_rt_kernel":
+            saved[name] = sys.modules.pop(name)
+    try:
+        install_bpy_stub()
+        kernel = _boot_kernel()
+        mod = _load_isolated("_dsh_test_export", RUNTIME_PY / "export" / "deliver_impl", "export")
+        yield kernel, mod
+    finally:
+        for name in list(sys.modules):
+            if name in prefixes or any(name.startswith(p + ".") for p in prefixes) or name == "dsh_rt_kernel":
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+
+def test_h_export_gate_runs_on_port_only():
+    """只有 gate_run 端口、内核里没有 gate 模块 API ⇒ 门照常跑。"""
+    with _export_runtime() as (kernel, mod):
+        assert getattr(kernel, "dsh_gate_api", None) is None
+        seen = []
+        kernel.dsh_kit.register_port(
+            "gate_run", lambda payload: seen.append(payload) or {"ok": True, "verdict": "pass", "gates": []}, 3)
+        rec, err = mod._dv_export_gate(True, False, "", {"name": "t"}, "assembly", {"g": {}}, [])
+        assert err is None
+        assert rec["verdict"] == "pass"
+        assert seen == [{"spec": {"name": "t"}, "preset": "assembly", "overrides": {"g": {}}}]
+
+
+def test_h_export_gate_blocks_on_failing_verdict():
+    with _export_runtime() as (kernel, mod):
+        kernel.dsh_kit.register_port("gate_run", lambda payload: {"ok": False, "verdict": "fail", "failed": ["mesh"]}, 3)
+        rec, err = mod._dv_export_gate(True, False, "", None, None, None, [])
+        assert rec is None
+        assert err["ok"] is False and err["blocked"] is True
+        assert err["verdict"] == "fail"
+        assert err["gate"] == {"ok": False, "verdict": "fail", "failed": ["mesh"]}
+        assert err["error"] == "安全门未通过（verdict=fail）：拒绝导出"
+
+
+def test_h_deliver_export_require_gate_returns_blocked(tmp_path):
+    """端到端：require_gate=true + 门 fail ⇒ 在挑对象（碰 bpy）之前返回 blocked。"""
+    with _export_runtime() as (kernel, mod):
+        kernel.dsh_kit.register_port("gate_run", lambda payload: {"ok": False, "verdict": "fail"}, 3)
+        out = json.loads(mod.deliver_export(dir=str(tmp_path), require_gate=True))
+        assert out["ok"] is False and out["blocked"] is True and out["verdict"] == "fail"
+
+
+def test_h_export_gate_falls_back_to_module_api():
+    """端口没注册、旧的 gate 模块 API 在 ⇒ 兼容回退照旧工作。"""
+    with _export_runtime() as (kernel, mod):
+        calls = []
+
+        def fake_api(op, args):
+            calls.append((op, args))
+            return {"ok": True, "verdict": "pass"}
+
+        kernel.dsh_gate_api = fake_api
+        rec, err = mod._dv_export_gate(True, False, "", "s", None, None, [])
+        assert err is None and rec["verdict"] == "pass"
+        assert calls == [("run", {"spec": "s", "preset": None, "overrides": None})]
+
+
+def test_h_export_gate_without_any_provider_is_blocked():
+    with _export_runtime() as (kernel, mod):
+        rec, err = mod._dv_export_gate(True, False, "", None, None, None, [])
+        assert rec is None
+        assert err["ok"] is False and err["blocked"] is True
+        assert "gate_run 端口不存在" in err["error"]
+        assert "preload" in err["hint"]
+
+
+def test_h_export_gate_force_still_needs_reason():
+    with _export_runtime() as (kernel, mod):
+        kernel.dsh_kit.register_port("gate_run", lambda payload: {"ok": True, "verdict": "pass"}, 3)
+        rec, err = mod._dv_export_gate(True, True, "", None, None, None, [])
+        assert rec is None
+        assert err["blocked"] is True and "gate_reason" in err["error"]
+
+
+# ────────────────────────────── i/j：export 全域无 gate API 字面 + 注册锚
+
+
+def test_i_export_domain_never_names_gate_api():
+    needle = "dsh_" + "gate_api"
+    offenders = [p.relative_to(RUNTIME_PY).as_posix()
+                 for p in sorted((RUNTIME_PY / "export").rglob("*.py"))
+                 if "__pycache__" not in p.parts and needle in p.read_text(encoding="utf-8")]
+    assert offenders == [], "export 仍点名 gate 的 API：%s" % offenders
+
+
+def test_j_gate_module_registers_gate_run_port():
+    gate_src = (RUNTIME_PY / "core" / "gate_impl" / "api.py").read_text(encoding="utf-8")
+    assert "def _port_gate_run(" in gate_src
+    assert 'register_port("gate_run", _port_gate_run, GATE_VERSION)' in gate_src
+    export_src = (RUNTIME_PY / "export" / "deliver_impl" / "export.py").read_text(encoding="utf-8")
+    assert '_KIT.call_port("gate_run", payload)' in export_src
+    assert '"dsh_%s_api" % "gate"' in export_src, "兼容回退必须运行时构造 API 名（不写字面）"
 
 
 def test_g_core_never_names_provider_apis():

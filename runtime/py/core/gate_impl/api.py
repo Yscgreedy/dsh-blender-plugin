@@ -169,3 +169,16 @@ if _K is not None:
     _K.dsh_gate_api = _DshApi({"version": GATE_VERSION, "dispatch": gate_dispatch, "plan": gate_plan,
                                "run": gate_run, "selftest": gate_selftest, "help": gate_help,
                                "preflight": gate_preflight, "checkpoint": gate_checkpoint, "deliver": gate_deliver})
+
+
+# ---- 端口：gate_run（export 只认这个端口，不再直取 core 的 gate API）----
+# 端口是 core 自己的稳定契约：payload = gate_run 的 kwargs（spec / preset / overrides / detail / out_json …）。
+# 注册在模块尾部，与 dsh_gate_api 同一时机：谁加载了 gate，谁就提供这个端口。
+def _port_gate_run(payload):
+    """端口 gate_run：dict 或 JSON 文本 → gate_run(**payload)（返回回执，call_port 会把 JSON 文本解析成对象）。"""
+    if isinstance(payload, str):
+        payload = json.loads(payload) if payload.strip() else {}
+    return gate_run(**dict(payload or {}))
+
+
+_KIT.register_port("gate_run", _port_gate_run, GATE_VERSION)
