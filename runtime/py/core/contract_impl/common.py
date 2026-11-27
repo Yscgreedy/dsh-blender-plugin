@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DSH 契约层—— 把「假设 / 区间 / 校验 / 证据 / 门控」变成机器可查的 API。
 
-API 挂在持久内核上：K.dsh_contract_api（与 K.dsh_view_api / K.dsh_perf_api 同一个约定）。
+API 挂在持久内核上：K.dsh_contract_api（与 K.dsh_perf_api 同一个约定）。
 
 基础能力：
   help()                     契约速查
@@ -15,7 +15,7 @@ API 挂在持久内核上：K.dsh_contract_api（与 K.dsh_view_api / K.dsh_perf
   check_interface(conn_id, mesh, samples)          两组件间隙/侵入（bbox 级老字段不变；
                                                    mesh=True 追加真实网格量测块，只做加法）
   destructive_guard(op, targets, conn_ids)         破坏性操作门控（boolean/weld/merge/apply_transform）
-  evidence(label, view)                            出图 + md5 + 记账（复用 K.dsh_view_api）
+  evidence(label, view)                            出图 + md5 + 记账（走端口 view_capture；提供方 render/view.py 注册）
   ledger() / status()                              证据账本 / 全局概览
   report(path)                                     生成 Markdown 报告（含判定与复现命令）
 

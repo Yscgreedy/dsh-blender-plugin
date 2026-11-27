@@ -64,3 +64,30 @@ _K_api = _sys_api.modules.get("dsh_rt_kernel")
 if _K_api is not None and isinstance(getattr(_K_api, "dsh_deliver_api", None), dict) \
         and not isinstance(getattr(_K_api, "dsh_deliver_api", None), _DshApi):
     _K_api.dsh_deliver_api = _DshApi(_K_api.dsh_deliver_api)
+
+# ---- 端口（provider 端口倒置）：core 的 gate_deliver 只 call_port(...) ----
+# 注册点就在提供方模块尾，且**复用上面已构造好的同一个 Api 对象**（不复制 export/verify 实现）：
+# 换实现只改这里，core 的 gate/contract 一行不用动。
+_DV_API = getattr(_K_api, "dsh_deliver_api", None) if _K_api is not None else None
+
+
+def _port_payload(payload):
+    """端口入参归一：dict 或 JSON 文本都收（引擎直调走 JSON，进程内调用走 dict）。"""
+    if isinstance(payload, str):
+        return json.loads(payload) if payload.strip() else {}
+    return dict(payload or {})
+
+
+def _port_deliver_export(payload):
+    """端口 deliver_export：payload = {dir, objects, scope, name, fmt, require_gate} → 等价 api("export", …)。"""
+    return _DV_API("export", _port_payload(payload))
+
+
+def _port_deliver_verify(payload):
+    """端口 deliver_verify：payload = {path_or_dir, manifest, …} → 等价 api("verify", …)。"""
+    return _DV_API("verify", _port_payload(payload))
+
+
+if _DV_API is not None:
+    _KIT.register_port("deliver_export", _port_deliver_export, DELIVER_VERSION)
+    _KIT.register_port("deliver_verify", _port_deliver_verify, DELIVER_VERSION)

@@ -41,12 +41,14 @@ def _gate_prepare(spec, spec_path, preset, overrides):
     return sp, src, md5, _ov
 
 
-def _gate_missing_row(g, api):
-    """该门模块没 preload / 来源未配置 ⇒ 直接给 error/skipped 行（跑不了）；可跑返回 None。"""
+def _gate_missing_row(g, label, available):
+    """该门提供方不可用 / 来源未配置 ⇒ 直接给 error/skipped 行（跑不了）；可跑返回 None。
+
+    label 是给人看的提供方名：API 形态传 "模块 dsh_audit_api"（旧文案逐字不变），端口形态传 "端口 <名>"。
+    """
     rec = {"id": g["id"], "op": g["op"]}
-    attr, _sub = OP_MAP[g["op"]]
-    if api is None:
-        rec.update({"state": "error", "error": "该门需要模块 %s（preload 里没注入）" % attr})
+    if not available:
+        rec.update({"state": "error", "error": "该门需要%s（preload 里没注入）" % label})
         return rec
     # v0.9.6：未配置来源 ⇒ 该门 skipped（未跑）。一定显式列出，且会把顶层压成 degraded。
     _miss = _missing_skip_groups(g["args"], g.get("skip_if_missing"))
@@ -66,6 +68,15 @@ def _gate_call(api, sub, args):
     t1 = time.time()
     try:
         return api(sub, args or {}), int((time.time() - t1) * 1000), None
+    except Exception as e:
+        return None, int((time.time() - t1) * 1000), "%s: %s" % (type(e).__name__, str(e)[:180])
+
+
+def _gate_call_port(name, args):
+    """经端口调子 op（端口优先形态）：payload 就是门声明的 args；返回 (sub_receipt, ms, err)。"""
+    t1 = time.time()
+    try:
+        return _KIT.call_port(name, dict(args or {})), int((time.time() - t1) * 1000), None
     except Exception as e:
         return None, int((time.time() - t1) * 1000), "%s: %s" % (type(e).__name__, str(e)[:180])
 
@@ -127,13 +138,23 @@ def _gate_row(g, detail):
 
     stop_kind：never（不因 stop_on_fail 中断）/ always（执行异常即中断）/ if_fail（fail/error 才中断）。
     """
-    attr, sub = OP_MAP[g["op"]]
-    api = getattr(_kernel(), attr, None)   # 模块间调用：API 都挂在 dsh_rt_kernel 上
-    miss_row = _gate_missing_row(g, api)
+    prov = gate_provider(g["op"])
+    api = None
+    if prov["kind"] == "port" and _KIT.port_available(prov["name"]):
+        available, label = True, "端口 %s" % prov["name"]
+    else:
+        # 端口优先；端口没注册 ⇒ 回退旧的模块 API（已 preload 的调用路径不受影响）
+        api = getattr(_kernel(), prov["api_attr"], None) if prov["api_attr"] else None
+        available = api is not None
+        label = "端口 %s" % prov["name"] if prov["kind"] == "port" else "模块 %s" % prov["name"]
+    miss_row = _gate_missing_row(g, label, available)
     if miss_row is not None:
         return miss_row, "never"
     rec = {"id": g["id"], "op": g["op"]}
-    sub_receipt, ms, call_err = _gate_call(api, sub, g["args"])
+    if api is None:
+        sub_receipt, ms, call_err = _gate_call_port(prov["name"], g["args"])
+    else:
+        sub_receipt, ms, call_err = _gate_call(api, prov["sub"], g["args"])
     if call_err is not None:
         rec.update({"state": "error", "error": call_err, "ms": ms})
         return rec, "always"

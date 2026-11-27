@@ -132,16 +132,19 @@ def _demote_if_drifted(conn, cid):
 # ---------------------------------------------------------------- 证据
 
 def c_evidence(label, view=None, note="", objects=None, scope=None):
-    K = _kernel()
-    api = getattr(K, "dsh_view_api", None)
-    if api is None:
-        return _j({"ok": False, "error": "需要 view.py：先 preload/注入 K.dsh_view_api（引擎里 ensureView）"})
+    """证据：出图 + md5 + 记账。
+
+    取图走**端口** view_capture（端口倒置）：core 不再认识 render/view.py 的私有 API 名 ——
+    core → render 的 2-环断在调用侧。端口由 render/view.py 尾部注册；没注册就 fail-closed（不碰 bpy）。
+    """
+    if not _KIT.port_available("view_capture"):
+        return _j({"ok": False, "error": "需要 view_capture 端口：先注册 render/view.py（preload 加 view；引擎 ensureView 会自动注入）"})
     import hashlib, os
     spec = dict(view or {})
     path = spec.get("path")
     if not path:
         return _j({"ok": False, "error": "view.path 必填（引擎会带默认工作目录）"})
-    info = json.loads(api["capture"](json.dumps(spec)))
+    info = _KIT.call_port("view_capture", spec)   # call_port 已把 JSON 文本回执解析成对象
     if not info.get("ok"):
         return _j({"ok": False, "error": info})
     h = hashlib.md5(open(path, "rb").read()).hexdigest()

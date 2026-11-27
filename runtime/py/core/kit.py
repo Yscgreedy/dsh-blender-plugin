@@ -10,6 +10,8 @@
     _j = _KIT.j ; Api = _KIT.Api ; dispatch = _KIT.dispatch ; units = _KIT.units
 
 约定：kit 只放"**每个模块都要写一遍**"的东西；领域逻辑一律留在各模块。
+跨域端口（本刀）：提供方尾部 `register_port("名字", fn, 版本)`，消费方 `call_port("名字", payload)` /
+`port_available("名字")`；端口表在 K.dsh_ports。core 因此不再直取 render / export 的 K.dsh_*_api。
 """
 import contextlib
 import json
@@ -253,6 +255,95 @@ def install_kernel(ns=None):
     if getattr(K, "dsh_kit", None) is not None:
         target["kapi"] = K.dsh_kit.kapi
     return K
+
+
+# ────────────────────────────── 跨域端口（provider 端口倒置） ──────────────────────────────
+# 为什么存在：core 的 contract / gate 曾经直接按名字从内核里取 render / export 的私有 API，
+# 于是反向依赖它们的**模块名 + 子 op 名** —— 这就是
+# core → render、core → export 两条强 2-环。这条边逃得过 import 图检查（取的是内核属性，不是 import），
+# 所以必须在**调用侧**倒置：
+#   提供方在自己模块尾部 register_port("名字", fn, 版本)；
+#   消费方只 port_available("名字") / call_port("名字", payload)，不认识提供方的模块与子 op。
+# 端口表挂 K.dsh_ports（与 K.dsh_artifacts 同一约定：状态在持久内核上跨调用保留）。
+PORT_VERSION = 1
+
+# call_port 的"调用方没给 default"哨兵 —— 不能用 None（端口可能合法返回 None）
+_PORT_MISSING = object()
+
+
+def ports():
+    """当前端口表（K.dsh_ports）；不存在或形状不对时建空表并挂回内核。"""
+    K = _kernel()
+    reg = getattr(K, "dsh_ports", None)
+    if not isinstance(reg, dict):
+        reg = {}
+        setattr(K, "dsh_ports", reg)
+    return reg
+
+
+def register_port(name, fn, version=PORT_VERSION):
+    """提供方登记一个端口（模块尾部一行）。同名重复登记 = 覆盖（后加载的实现胜出，与 K.dsh_x_api 一致）。"""
+    if not callable(fn):
+        raise TypeError("端口 %s 的 fn 必须可调用（拿到 %s）" % (str(name), type(fn).__name__))
+    ports()[str(name)] = {"fn": fn, "version": int(version),
+                          "owner": str(getattr(fn, "__module__", "") or "")}
+    return fn
+
+
+def port_available(name):
+    """端口是否可用（登记过且 fn 可调用）—— 消费方据此走 fail-closed 回退，而不是靠抛异常。"""
+    entry = ports().get(str(name))
+    return bool(isinstance(entry, dict) and callable(entry.get("fn")))
+
+
+def port_info(name):
+    """端口元数据 {name, version, owner}（不含 fn）；未登记返回 None。"""
+    entry = ports().get(str(name))
+    if not isinstance(entry, dict) or not callable(entry.get("fn")):
+        return None
+    return {"name": str(name), "version": entry.get("version"), "owner": entry.get("owner")}
+
+
+def port_names():
+    """已登记端口名（诊断用，排序稳定）。"""
+    return sorted(str(k) for k in ports().keys())
+
+
+def call_port(name, payload=None, default=_PORT_MISSING):
+    """调用端口；未登记时返回 default（给了）或抛 LookupError（没给）。
+
+    返回值：端口函数的原样结果；**结果是 JSON 文本时解析成对象**（端口契约是"回执"：提供方可以
+    `return capture(...)` 这种返回 JSON 串的实现，也可以在进程内直接返回 dict）。
+    异常不吞：端口实现自己抛的错照旧冒泡给调用方（调用方按自己的回执形状兜）。
+    """
+    entry = ports().get(str(name))
+    if not isinstance(entry, dict) or not callable(entry.get("fn")):
+        if default is _PORT_MISSING:
+            raise LookupError("端口未注册: %s（已登记：%s）" % (str(name), ", ".join(port_names()) or "无"))
+        return default
+    out = entry["fn"](payload)
+    if isinstance(out, str):
+        try:
+            return json.loads(out)
+        except Exception:
+            return out
+    return out
+
+
+def _ports_selftest():
+    """端口机制自检：登记 → 可查 → 可调（JSON 文本自动解析）→ 缺省回退 → 清理。"""
+    name = "__dsh_port_selftest__"
+    try:
+        fn = register_port(name, lambda payload: json.dumps({"echo": payload}), PORT_VERSION)
+        info = port_info(name) or {}
+        return bool(callable(fn) and port_available(name)
+                    and info.get("name") == name and info.get("version") == PORT_VERSION
+                    and call_port(name, 7) == {"echo": 7}
+                    and call_port("__dsh_port_absent__", "fallback", "fallback") == "fallback")
+    except Exception:
+        return False
+    finally:
+        ports().pop(name, None)
 
 
 def comp_tree(scene=None):
@@ -786,6 +877,7 @@ def selftest():
         ev["iou"] = abs(float(i) - 1.0 / 3.0) < 1e-9 and inter == 1 and uni == 3
     except Exception as e:
         ev["iou"] = "skip: %s" % str(e)[:40]
+    ev["ports"] = _ports_selftest()
     ok = all(v is True for v in ev.values())
     return j({"ok": bool(ok), "version": KIT_VERSION, "evidence": ev})
 
@@ -885,6 +977,9 @@ _K.dsh_kit = types.SimpleNamespace(
     action_fcurves=action_fcurves,
     find_runtime_file=find_runtime_file, RUNTIME_DOMAINS=RUNTIME_DOMAINS,
     pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree, BatchUpdates=BatchUpdates,
+    # 跨域端口（provider 端口倒置）：提供方 register_port，消费方 call_port / port_available
+    register_port=register_port, call_port=call_port, port_available=port_available,
+    port_info=port_info, port_names=port_names, ports=ports, PORT_VERSION=PORT_VERSION,
     norm_evidence=norm_evidence,
     # 反馈 4：回执自证（changed/faces_delta）走这两个纯函数
     state_probe=state_probe, state_delta=state_delta,
