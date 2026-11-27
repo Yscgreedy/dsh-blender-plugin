@@ -3,6 +3,7 @@
 > 配套报告：[ARCHITECTURE.md](ARCHITECTURE.md)（诊断与证据）。本文件只讲**怎么做、改哪些文件、怎么证明没改坏**。
 > 原则（来自 `docs/architecture.md` §8 与 `AGENTS.md`）：**一次一刀、只动一个边界、移动代码行为零变化、旧文件同刀删除、行为变更先写失败测试**。
 > 基线：v3.3.0，2026-11-27。所有路径相对仓库根。
+> **当前执行状态以 [ARCHITECTURE.md](ARCHITECTURE.md) §9 为准**：P0 已合并（`fbea0a3`），P1-1a（Python 端口倒置）进行中。
 
 ---
 

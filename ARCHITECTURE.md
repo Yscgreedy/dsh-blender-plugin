@@ -5,7 +5,7 @@
 > **范围**：全仓库（src / runtime TS / runtime/py / extension / config / tests / scripts）。
 > **方法**：Nam P. Suh 公理化设计——FR–DP 映射、独立公理（三角化/破环）、信息公理（I 最小）、之字形分层。
 > **证据**：结论均给 `文件:行`。标 ✅ 的是本报告亲自复核；标 ◐ 的来自分层审计（原始报告见 §8），未逐条重跑。
-> **未执行**：build / test / Blender（本报告只读源码与生成物，行为判断标 `[待核实]`）。
+> **状态**：审计基线 = P0 前；**当前仓库状态 = commit `fbea0a3`（P0 已合并）+ P1-1a 工作区 WIP**。§9 是动态状态页，路径映射/度量/验证以 §9 为准；§1–§8 保留审计基线（路径可按 §9.1 映射到当前布局）。
 
 ---
 
@@ -46,25 +46,28 @@ Python 五域断环（最大的一处）放在 **P1-1**：它需要"先有稳定
 
 - **FR**：模型/用户可观察的能力。**DP**：承载它的物理实体（模块、类、生成表、配置键、HTTP 路由、Python 注册面）。
 - **A_ij = X**（三者之一）：改 DP_j 会改变 FR_i 的**契约/回执格式**；改变 FR_i 依赖的**共享可变状态**；必须**同步修改** FR_i 的实现才能保持行为。
-- **不计 X**：只读、无副作用、稳定的基础库调用（如 `core/json.ts` 的 `isRecord`）。
+- **不计 X**：只读、无副作用、稳定的基础库调用（如 `foundation/json.ts` 的 `isRecord`）。
 - **三角化**：允许基础 DP 在左下、界面 DP 在右上；若仍存在双向边或反馈回路 → Coupled。
 - **信息量 I**：隐含前置条件、未声明调用顺序、同一事实副本数、配置自由度、跨进程握手点。
 - **之字形**：系统层 FR0/DP0 → 逐 DP 下钻（§6），找耦合**最早被引入的层**。
 
 ### 0.2 统计口径（可复现）
 
-| 指标 | 值 | 口径 |
-|---|---|---|
-| TS 源文件 / 相对导入边 | **295 / 987** | `src/**` + `runtime/**`，排除 `lib/`、`node_modules` |
-| 值级 SCC / 类型级 SCC | **0 / 6** | 排除 `import type` 后为 0 ◐；含类型为 6 ✅ |
-| `src` ↔ `runtime` 源码 import | **0** | 唯一跨界：`src/host/runtime-bridge.ts:8-50` → 编译产物 `lib/runtime/*.js` |
-| Python import / 跨域 import | **940 / 0** | 守卫：`tests/unit/python/test_runtime_layout.py:128-177` |
-| Python `K.<attr>` / 跨域 | **297 / 95** | ◐ python-audit 分域归属 |
-| 模块 fan-in 前 5 | config **57**、core/json **53**、contracts/dynamic **49**、paths **32**、src/constants **27** | 直接 import |
-| `DSH_*` 环境变量 | **46**（config.ts 独占 24 处读取）✅ / 后端口径 32 变量·45 读取点 ◐ | 排除 vendored |
-| 契约规模 | 6 工具 / 38 family / 270 op / 45 路由行 / 44 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12 | `capability.lock.json`、`routing.json`、`modules.json` |
-| 债务台账 | 函数预算 **110**（py 80）、路径例外 **17**（file-budget 5 / py-private-import 8 / reexport 4） | `config/*.json` |
-| 测试面 | **299** 文件（unit 177 / integration 39 / e2e 68 / helpers 14） | `tests/**` |
+| 指标 | 审计基线 | 当前（fbea0a3） | 口径 |
+|---|---|---|---|
+| TS 源文件 / 相对导入边 | 295 / 987 | **298 / 1000** | `src/**` + `runtime/**`，排除 `lib/`、`node_modules` |
+| 值级 SCC / 类型级 SCC | 0 / 6 | **0 / 6** | 排除 `import type` 后为 0 ◐；含类型为 6 ✅（全是 barrel） |
+| `execution → core` 反向边 | 45 | **0** | P0-2b 后 foundation/contracts 承接 |
+| `foundation → core/execution` | — | **0 / 0** | §9 复核 |
+| `core → execution` 正向边 | 17 | **16** | 编排依赖执行，方向正确 |
+| `src` ↔ `runtime` 源码 import | 0 | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
+| Python import / 跨域 import | 940 / 0 | **940 / 0** | 守卫：`tests/unit/python/test_runtime_layout.py:128-177` |
+| Python `K.<attr>` / 跨域 | 297 / 95 | **297 / 95**（P1-1a 进行中） | ◐ python-audit 分域归属 |
+| 模块 fan-in 前 5 | config 57、core/json 53（基线） | config **57**、foundation/json **53**、contracts/dynamic **50**、paths **32**、src/constants **27** | 直接 import |
+| `DSH_*` 环境变量 | 46 | **46**（config.ts 独占 24 处读取） | 排除 vendored |
+| 契约规模 | 6 / 38 / 270 / 45 / 44 / 25 / 29 / 12 | **不变** | `capability.lock.json`、`routing.json`、`modules.json` |
+| 债务台账 | 函数预算 110、路径例外 17 | **110 / 17**（stale 0） | `config/*.json` |
+| 测试面 | 299 | **308**（ts/mjs/py） | `tests/**` |
 
 ### 0.3 未做与 `[待核实]`
 
@@ -93,8 +96,8 @@ DP0：宿主插件（6 工具） + 本机 Gateway（HTTP + addon WS） + Blender
 | FR2 | **规划面解析与 op 调用**：38/270 可发现、可判定 needs_gui、可路由 GUI/本地无头 | `blender_op` | `catalog/data.ts`；`dispatcher/plan-call.ts:248-305`；`src/tools/op/local.ts:42-47` |
 | FR3 | **GUI 内执行与观察**：会话内 Python、取帧、事务、worker 热内核 | `blender_py`/`blender_see`/`worker` | `src/tools/py/execute.ts`、`see/capture.ts`、`runtime/py/core/worker.py` |
 | FR4 | **作业执行**：render/headless 提交、排队、执行、恢复、回收 | `blender_run` | `core/queue/manager.ts:74-323`、`execution/jobs/**` |
-| FR5 | **证据与验收**：provenance/verdict/receipt，三态判定 | 所有返回值 | `core/evidence.ts:315-324`；回执构造 `src/tools/run/presenter.ts:228-306`、`op/local.ts:174-229`（`headless/receipts` 已无生产调用，见 §5） |
-| FR6 | **装配与生命周期**：装载、Gateway 启停/热重载、显示、doctor | `blender_session action=doctor` | `src/plugin-lifecycle.ts`、`gateway/app.ts:87-170`、`core/layers.ts:400-500` |
+| FR5 | **证据与验收**：provenance/verdict/receipt，三态判定 | 所有返回值 | `runtime/foundation/evidence.ts`（`engineProvenance`）；回执构造 `src/tools/run/presenter.ts:228-306`、`op/local.ts:174-229`（`headless/receipts` 已无生产调用，见 §5） |
+| FR6 | **装配与生命周期**：装载、Gateway 启停/热重载、显示、doctor | `blender_session action=doctor` | `src/plugin-lifecycle.ts`、`gateway/app.ts:87-170`、`runtime/foundation/layers.ts` |
 | FR7 | **契约稳定**：6/38/270/25/29/12、单源、迁移门 | `test:contract` | `tests/unit/js/contract/single-source.test.ts`、`scripts/check-parity.mjs` |
 | FR8 | **人类可见面**：Web 面板/TUI/卡片；可批准同意 | 右侧栏 tab + chip | `src/client/index.js`（3058 行）、`src/tui/**` |
 | FR9 | **扩展命令执行**：25 命令在 bpy 内执行并回传 | `blender_inspect`/`/cmd` | `extension/.../command_registry.py`、`server.py` |
@@ -106,11 +109,11 @@ DP0：宿主插件（6 工具） + 本机 Gateway（HTTP + addon WS） + Blender
 | A | **宿主工具面** | `src/plugin*.ts`、`src/tools/*`、`src/host/*` | 87 TS / 11.5k 行 |
 | B | **HTTP 契约层** | `runtime/http/*`（router、29 路由、lease、session-gate、response） | 46 文件 |
 | C | **会话域** | `runtime/core/sessions/*`（registry、consent*、presence、virtual-gui） | 9 文件；registry 1193 行 |
-| D | **规划与目录** | `core/{dispatcher,catalog}`、`config/routing.json`、`routes.generated.ts` | dispatcher 5 + catalog 4 |
+| D | **规划与目录** | `runtime/core/{dispatcher,catalog}`、`config/routing.json`、`runtime/contracts/routes.generated.ts` | dispatcher 5 + catalog 4 |
 | E | **队列** | `core/queue/*`（manager、job-args、spawn-executor、handler） | 4 文件 / ~1.4k 行 |
 | F | **执行** | `runtime/execution/*`（headless、jobs、workers、ledger、local-op、txn、preset） | 40+ 文件 |
 | G | **传输 / Gateway** | `runtime/transport/*`、`runtime/gateway/*` | 10 文件 |
-| H | **内核与证据** | `core/{kernel,scripts,output,json,evidence*,layers,local-evidence,progress}` | ~3k 行 |
+| H | **内核与证据** | `runtime/foundation/{kernel,scripts,output,json,evidence*,layers}` + `runtime/core/local-evidence.ts` | ~3k 行 |
 | I | **Blender Python** | `runtime/py/{core,geometry,assembly,render,export}` + `modules.json` | 180 文件 / 44 模块 |
 | J | **扩展** | `extension/dsh_blender_bridge/*` | 73 文件 / 7.2k 行 |
 | K | **配置/路径/显示/启动** | `config.ts`(572)、`paths.ts`、`launch/*`、`display/*` | config fan-in 57 |
@@ -168,7 +171,7 @@ DP0：宿主插件（6 工具） + 本机 Gateway（HTTP + addon WS） + Blender
 - **E**：`JobQueue` 持 `JobStore`+`JobExecutor`+容量+GPU 预留（`manager.ts:74-92`）；作业状态 **3 副本**（内存 / queue.json / 台账）◐。
 - **F**：headless 子进程、worker 池、台账、local-op。
 - **G**：`gatewayInstances(addon)` 被 6 处消费（`engine/lifecycle.ts:88,135`、`engine-api/doctor.ts:101,436`、`routes/health.ts:192`、`gateway/app.ts:98`）。
-- **H**：注入 `core/kernel/api.ts:105-215`；provenance `evidence.ts:315`；层判定 `layers.ts:400-500`；宿主清单 `src/host/backend/host-manifest.ts:90-100`。
+- **H**：注入 `runtime/foundation/kernel/api.ts`；provenance `runtime/foundation/evidence.ts`；层判定 `runtime/foundation/layers.ts`；宿主清单 `src/host/backend/host-manifest.ts`。
 - **I**：五域 44 模块；内核命名空间 `K` 是真实连接面（§3.6）。
 - **J**：`command_registry.py` 唯一命令真源；`server.py`（469 行）混合传输+分派 ◐。
 - **K**：`config.ts` 五个 import 期求值点（`:117,401,407,415,527`）；`PATHS` 形状绑定 Blender 平台。
@@ -185,17 +188,18 @@ DP0：宿主插件（6 工具） + 本机 Gateway（HTTP + addon WS） + Blender
 
 ### 3.1 环清单（按严重度）
 
-| # | 环 | 类型 | 证据 | 后果 |
-|---|---|---|---|---|
-| **R1** | `core` ↔ `execution` | 包级双向 | core→execution 17 / execution→core 45 ✅ | 改内核/脚本必须重验作业；execution 难以单独测试 |
-| **R2** | 写鉴权双权威 | 状态 | `http/lease.ts:176-182` 的 `leaseGate` 内串联 registry 授权与 LEASE；各路由跳过规则不同（`act.ts:149`、`plan.ts:76`、`job.ts:52`、`headless.ts:21`、`commands.ts:48`、`worker.ts:125`）◐ | 同一入口里两套权威串联；跳过条件是散落的布尔公式；registry 未装配时放行 |
-| **R3** | 证据 ↔ 重载 | 跨进程控制回路 | 清单写入 `host-manifest.ts:90-100` → 读取 `layers.ts:400-435` → verdict `evidence-host.ts:156-175` → reload `src/host/reload/index.ts:77-82` ✅ | 唯一判据是被 reload 自己改写的事实；`unknown` 分支难以单测 |
-| **R4** | Python 五域 | 功能 SCC | core↔render、core↔export、geometry↔assembly、（弱）core↔assembly ◐ | 不存在拓扑序；改一域语义波及证据/交付/形状 |
-| **R5** | 会话 ⇄ 热更 ⇄ 生命周期 | 状态（两代写） | `session/reload.ts:18-28` → `host/reload/index.ts:206-270` → `plugin-lifecycle.ts:27-38` → `reload/index.ts:459-466` ◐ | 同一 reload 状态被两代 fiber 写；"第几代"靠 `globalThis` |
-| **D1** | **只读判定已腐坏** | 契约副本 | 宿主 98 项 vs catalog 104 项；缺 `fingerprint/asset_search/asset_help/anim_rig_report/anim_deform_audit/toon_outline_audit`；声称的 `op-read-only-parity.test.ts` **不存在** ✅ | 这 6 个只读 op 无会话时被判 `session_required` |
-| **D2** | op 可达性双向破洞 | 契约 | routing 有 `shape_solve`/`model_deliver` 而 catalog 无；catalog 有 `montage.help` 而空前缀 `ext-contract` catch-all 抢先 ◐ | 广告出来不可达 / 可路由但不可发现 |
-| **D3** | 本地车道 ↔ 作业回执 | 契约 | `op/local.ts:119-150` vs `run/execute.ts:253-298`；载荷剥离 `op/local.ts:107-116` 与提交白名单互不知情 ◐ | 改 `/job` submit 语义要同改两处，漏一处"提交得进、取不回" |
-| **D4** | py 抓帧 ↔ see 取帧 | 共享状态 | `py/frame.ts:29-37` → `utils/frame-cache.ts:11-34` ← `see/capture.ts:71,106,202`；键含/不含 caller 不对称 ◐ | 去重判据一侧改动会改变另一工具可见性 |
+| # | 环 | 类型 | 证据（P0 前基线，路径映射见 §9.1） | 后果 | 现状 |
+|---|---|---|---|---|---|
+| **R1** | `core` ↔ `execution` | 包级双向 | core→execution 17 / execution→core 45 ✅ | 改内核/脚本必须重验作业；execution 难以单独测试 | **已断（P0-2b）**：execution→core **0**；正向 core→execution 16 |
+| **R2** | 写鉴权双权威 | 状态 | `http/lease.ts:176-182` 的 `leaseGate` 内串联 registry 授权与 LEASE；各路由跳过规则不同 ◐ | 同一入口里两套权威串联；跳过条件是散落的布尔公式；registry 未装配时放行 | **部分（P0-3a）**：入口唯一 + fail-closed；跳过谓词仍在路由（P1 数据化） |
+| **R3** | 证据 ↔ 重载 | 跨进程控制回路 | 清单写入 `host-manifest.ts:90-100` → 读取 `layers.ts` → verdict → reload ✅ | 唯一判据是被 reload 自己改写的事实；`unknown` 难以单测 | **已断（P0-4a）**：显式快照入参；`unknown` 可单测 |
+| **R4** | Python 五域 | 功能 SCC | core↔render、core↔export、geometry↔assembly、（弱）core↔assembly ◐ | 不存在拓扑序；改一域语义波及证据/交付/形状 | **进行中（P1-1a）**：core→render/export 端口倒置 WIP；geometry↔assembly 待产品决策 |
+| **R5** | 会话 ⇄ 热更 ⇄ 生命周期 | 状态（两代写） | `session/reload.ts` → `hostReload` → `plugin-lifecycle.ts` → settle ◐ | 同一 reload 状态被两代 fiber 写 | **已断（P0-4b）**：`reloadOnce` 单入口；`globalThis` 探针收敛保留 |
+| **D1** | **只读判定已腐坏** | 契约副本 | 宿主 98 vs catalog 104；缺 6 个；声称的 parity 测试不存在 ✅ | 6 个只读 op 无会话时被判 `session_required` | **已修复（P0-1a）**：104 + parity 门 |
+| **D2** | op 可达性双向破洞 | 契约 | routing-only exact op；空前缀 catch-all 抢名 ◐ | 广告出来不可达 / 可路由但不可发现 | **已加 ratchet（P0-1d）**：exact op 可发现、catch-all 唯一且表尾、重名只允许 `help` |
+| **D3** | 本地车道 ↔ 作业回执 | 契约 | `op/local.ts` vs `run/execute.ts` 各懂一半 `/job` ◐ | 改 submit 语义要同改两处 | **部分（P0-1c）**：白名单单源；`/job` payload 构造仍两处 |
+| **D4** | py 抓帧 ↔ see 取帧 | 共享状态 | `py/frame.ts` → `frame-cache.ts` ← `see/capture.ts`；键含/不含 caller 不对称 ◐ | 去重判据互相影响 | **仍存在**（P1） |
+| **D5** | 通道词表 3 副本 | 契约 | TS 两处 + Python 一处 ✅ | 增删通道要同步三处 | **已加 parity 门（P0-1f）**，生成化 P1 |
 
 **文件级/类型级不算环**：6 个类型级 SCC 全是 barrel 与成员互指（`import type`），编译后消失；值级图是 DAG。它们的问题是**认知宿主**（改 deps 字段波及 7 个文件），不是运行期耦合。
 
@@ -214,11 +218,11 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 **根因**：`core` 同时是**基础层**（json/output/progress/evidence/kernel/scripts）与**编排层**（queue/sessions/dispatcher/engine）。execution 依赖前者，core/queue 与 core/engine 又依赖 execution——角色混装，环即出现。
 
 **风险（具体）**
-- 改 `core/kernel/api.ts` 注入格式 → 重验 `execution/jobs/script/*`、`headless/script.ts`、`workers/*`、`core/queue/job-args.ts`。
+- 改 `runtime/foundation/kernel/api.ts` 注入格式 → 重验 `execution/jobs/script/*`、`headless/script.ts`、`workers/*`、`core/queue/job-args.ts`。
 - 改 `execution/render-channels.ts` CHANNELS 标记 → 触及 `core/queue/spawn-executor.ts:8`、`src/tools/run/execute.ts:44`、`runtime/py/render/channels_impl/metrics.py:23`（D5）。
 - 单独测试 execution 不可能：45 条 import 里 20+ 指向 core 具体文件。
 
-**断环**：拆 `foundation`；`routes.generated`、`routeMatches` 与 `local-op/names.ts` 迁 `runtime/contracts/`。目标：**execution→core 反向边 0**；`queue/engine→execution` 的正向边保留（编排依赖执行，方向正确）。P0-2。
+**断环（已执行）**：拆 `foundation`；`routes.generated`、`routeMatches` 与 `local-op/names.ts` 迁 `runtime/contracts/`。结果：**execution→core 0**；`core→execution` 16 条为正向（queue/engine 依赖执行），方向正确。P0-2b 完成。
 
 ### 3.3 R2：写鉴权双权威
 
@@ -233,9 +237,9 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 ### 3.4 R3：证据 ↔ 重载（跨进程反馈）
 
 ```
-宿主装载  host-manifest.ts:90-100   写 manifest（globalThis 代际 :73-80）
-运行时    layers.ts:400-435         读 manifest + 扫 lib/
-合成      evidence-host.ts:156-175  current/stale/unknown
+宿主装载  host-manifest.ts:90-100        写 manifest（globalThis 代际 :73-80）
+运行时    foundation/layers.ts          读 manifest + 扫 lib/
+合成      foundation/evidence-host.ts    current/stale/unknown
 判定      reload/index.ts:77-82     reload 后"换干净没有"只看这个 verdict
 再装载    host 重启 → 重写 manifest …
 ```
@@ -271,7 +275,7 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 - **D1（真实缺陷）**：`src/tools/op/read-only.ts` 98 项 vs `runtime/catalog/data.ts:633-740` 104 项；缺 6 个；`op-read-only-parity.test.ts` 不存在；真实门 `op-contract.test.ts:107` 只比 data↔baseline ✅。
 - **D2**：`routing.json:196-254` 的 `shape_solve`/`model_deliver` 不在 catalog；catalog 的 `montage.help` 会落到空前缀 `ext-contract`（`routing.json` 表尾）◐。
 - **D5**：通道词表 3 份：`src/tools/run/execute.ts:44`、`runtime/execution/render-channels.ts:18`、`runtime/py/render/channels_impl/metrics.py:23` ✅。
-- 另：local-op 白名单 2 份（`src/tools/op/local.ts:28-47` ↔ `runtime/execution/local-op/names.ts:6-28`），由单测粘合 ✅。
+- 另（P0 前）：local-op 白名单 2 份（`src/tools/op/local.ts` ↔ `runtime/execution/local-op/names.ts`）；P0-1c 后已收敛为 `config/local-ops.json` 生成的两份常量（§9.3）。
 
 ### 3.8 重排结果与安全修改顺序
 
@@ -297,11 +301,11 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 
 ### 3.9 正式评级
 
-**Coupled（局部严重）**
+**当前评级：Decoupled（主干）/ Coupled（局部）**
 
-- **优点**（必须保留）：值级 DAG、三段进程边界、29 路由单源、`routing.json` 生成、能力计数有门、Python 跨域 import 守卫。
-- **判定依据**：R1/R2/R3/R4 难以通过行列重排消除；R2 含 fail-open；D1 已产生真实缺陷；D2/D3/D5 属变更传播型耦合。
-- **不是"全盘耦合"**：工具面与传输边界是健康的，P0 只需动 4 处。
+- **已消除**：R1（foundation 分层）、R3（显式快照）、R5（reloadOnce）、D1（只读 104 + 门）、D2/D5（ratchet/parity 门）。
+- **仍 Coupled**：R2 的跳过谓词仍散落在各路由；R4 的 Python 五域功能 SCC（P1-1a 正在断 core→render/export）；D3/D4 未收口。
+- **结论**：P0 前判定的四条结构环里 R1/R3/R5 已断、R4 进行中；主干可继续演进，P1 的靶子收敛到 Python 与两处契约/状态副本。
 
 ---
 
@@ -317,7 +321,7 @@ execution/local-op/table.ts:1-9    → core/dispatcher/{routes.generated,plan-ca
 | I4 | **路由字面量无门禁** | 工具 `'/job'`(`run/execute.ts:259`)、`'/lease'`(`shared/session.ts:36`)；客户端 13 端点；`CONTRACT_ROUTES` 29 条 | 契约存在但消费者不受约束 | 29 路由 vs 2 套手写消费面；`check-routes` 只查生成表 |
 | I5 | **回执/判定五个口径** | 派生 `op/plan-response.ts:186-189`、`envelope.ts:127-137`；硬编码 `op/local.ts:174-186,222-229`；透传 `session/execute.ts:204`；展示 `run/presenter.ts:151-154` ◐；`receipt.v2` 手写 6 处 | "degraded≠pass"没有单一载体 | 5 口径 + 6 手写 + ≈648 行 receipts 零生产调用 ✅ |
 | I6 | **会话/身份 7 处解析** | 正确入口 `shared/session.ts:144-166`；另 6 处自解（`session/execute.ts:150-174,254-265`、`op/execute.ts:59-67`、`op/local.ts:267-275`、`see/index.ts:89-91`、`run/execute.ts:384-386`）◐ | 每处各有一套"什么算 ready" | 7 处 / 2 套身份源；`see/index.ts:90` 丢弃 failure |
-| I7 | **全局可变单例** | `session-gate.ts:13`、`host-manifest.ts:73-80`、`consent-policy.ts:77`、`config.ts:117` 等 | 初始化顺序成为隐含前置 | 17 个可变模块级容器 ◐；4 个重点复核 ✅ |
+| I7 | **全局可变单例** | `session-gate.ts:13`（P0 后已删）、`host-manifest.ts:73-80`、`consent-policy.ts:77`、`config.ts:117` 等 | 初始化顺序成为隐含前置 | 17 个可变模块级容器 ◐；4 个重点复核 ✅ |
 | I8 | **作业状态 3 副本 + 389 行对账** | 内存 `manager.ts:81`、`queue.json`、`ledger/index.jsonl`；`ledger/recover.ts:139-260` ◐ | 三处可能漂移，恢复语义只在注释 | 3 副本 + 1 对账器 |
 | I9 | **渲染旗标 4 跳字符串契约** | `render-state.ts:23-24` → `assemble.ts:39,52` → `kernel/api.ts:439` → `render_guard.py:45`；回退路径两侧不一致（`render_guard.py:52` vs TS）◐ | 契约是"Python 全局变量名"，无类型无对拍 | 4 跳 / 1 字符串名 / 2 个不一致回退 |
 | I10 | **装配期可变袋** | `engine/assemble.ts:48,69-88` 8 次 `Object.assign`；12 文件 29 处 `as unknown as` ◐ | 初始化顺序隐含在语句顺序；类型系统被双重强转绕过 | 8 突变点 / 29 强转 |
@@ -410,20 +414,24 @@ FR7 契约              X              ·              ·          X         X
 
 （列按"基础→表面"排序；上三角只剩 §3.7 的契约多副本，由 P0-1 消除。）
 
-| 度量 | 现状 | P0 目标 | 验证方式 |
+| 度量 | 审计基线 | 当前（fbea0a3） | 验证方式 |
 |---|---|---|---|
-| `execution → core` 边 | **45** | **0**（反向边归零） | 重跑 §0.2 导入图 |
-| `core → execution` 边 | **17** | 17（正向依赖保留） | 同上；只断言方向 |
+| `execution → core` 边 | 45 | **0** | 重跑 §0.2 导入图 |
+| `core → execution` 边 | 17 | **16（正向，保留）** | 同上；只断言方向 |
 | execution → dispatcher 边 | 2 | **0** | 同上 |
-| 写门变体（gate/skip 组合） | ≥5 | **1** | 路由仿真测试 |
-| 会话解析点 | 7 | **1** | 用 rg 检查 `sessions` / `lease` 解析点 |
-| 只读清单副本 | 2（98 vs 104） | **1（生成）** | 新 parity 门 |
-| 通道词表副本 | 3 | **1 + 门禁** | 新 parity 门 |
-| verdict 口径 | 5 | **1** | `rg "verdict" src` |
-| `receipt.v2` 手写 | 6 | **1** | 构造器单测 |
-| 可变模块单例 | 17 | ≤6 | 静态扫描 |
-| `globalThis` 代际 | 2 键 | **0** | 静态扫描 |
-| Python 跨域 `K` 引用 | 95 | P1 目标 ≤30 | python-audit 脚本 |
+| 写门变体（gate/skip 组合） | ≥5 | **1 入口 + fail-closed；skip 谓词仍分散**（P1） | 路由仿真 + `write-authority.test.ts` |
+| 会话解析点 | 7 | **1 链（`resolveSession`）** | `session-ref.test.ts` |
+| 只读清单副本 | 2（98 vs 104） | **2（104/104）+ parity 门**（生成化 P1） | `op-read-only-parity.test.ts` |
+| 通道词表副本 | 3 | **3 + parity 门**（生成化 P1） | `channel-vocabulary.test.ts` |
+| verdict 口径 | 5 | **1 构造器（TS 侧）** | `receipt-constructor.test.ts` |
+| `receipt.v2` 手写 | 6 | **1** | `rg "receipt.v2" src` |
+| 可变模块单例 | 17 | **16**（session-gate 移除） | 静态扫描 |
+| `globalThis` 代际 | 2 键 | **2 键（收敛保留）** | 只在 `host-manifest.ts` |
+| Python 跨域 `K` 引用 | 95 | **95（P1-1a 进行中）** | python-audit 脚本 |
+| TS 文件 / 相对边 | 295 / 987 | **298 / 1000** | §0.2 口径 |
+| 类型级 SCC | 6 | **6（全 barrel）** | Tarjan |
+
+（矩阵图为 P0 前的目标形态；当前实际列顺序：foundation → execution → queue/http → host，已满足块下三角。）
 
 ---
 
@@ -438,58 +446,106 @@ FR7 契约              X              ·              ·          X         X
 | Python（runtime/py） | `.audit/task-3-python-domains.md` | 31078 B |
 | 扩展与跨边界 | `.audit/task-4-extension-boundary.md` | 33539 B |
 
-> 这些是本地审计产物（`.audit/` 未跟踪，`.review-tmp/` 已被 .gitignore 忽略），不随包发布。
+> 这些是本地审计产物：`.audit/` 与 `.review-tmp/` 均已由 `.gitignore` 忽略，不随提交/发布。
 
 **复现统计**
 
 ```text
-# 导入图 + SCC：本报告用 Node 直接解析 295 个 TS 文件的相对导入；
-#   产物 .review-tmp/import-graph.json（295 文件 / 987 边）
-# 值级 SCC（排除 import type）= 0；类型级 SCC = 6
+# 导入图 + SCC：Node 直接解析相对导入（当前 298 个 TS 文件 / 1000 条边）
+# 值级 SCC（排除 import type）= 0；类型级 SCC = 6（全是 barrel）
 # env / 副本计数：grep + 逐文件行数（node 统计，非 PowerShell Measure-Object）
 ```
 
 
 ---
 
-## 9 执行状态（2026-11-27，P0 落地后）
+## 9 当前状态（动态页）
 
-> 本节是审计报告的**执行回执**，不改变前文的诊断结论。度量口径同 §0.2；验证命令见 §9.2。
+> **最后核对**：2026-11-27，HEAD `fbea0a3`（P0 已合并）；工作区另有 **P1-1a（Python 端口倒置）** 未提交改动。
+> 本节是唯一“当前事实”页；§1–§8 保留审计基线，路径按 §9.1 映射到当前布局。
 
-### 9.1 逐项结果
+### 9.0 现在是什么状态
+
+- **已合并（P0）**：foundation 分层、契约单源、写门单入口 + fail-closed、SessionRef 收口、证据显式快照、reloadOnce、唯一 receipt。
+- **进行中（P1-1a）**：`core → render` / `core → export` 的端口倒置（`K.dsh_kit.register_port/call_port`）。目标：五域功能 SCC 缩到 `{geometry, assembly}`。
+- **下一刀候选**：`geometry ↔ assembly`（shapegen/vehicle 的产品归属决策）、`core/scene_ctx`、preload/DEPS 生成、`txn` 与 `worker.checkpoint` 合并。
+
+### 9.1 路径映射（审计基线 → 当前）
+
+| 基线路径 | 当前路径 | 说明 |
+|---|---|---|
+| `runtime/core/json.ts` | `runtime/foundation/json.ts` | P0-2b |
+| `runtime/core/errors.ts` · `progress.ts` · `scripts.ts` | `runtime/foundation/*` | P0-2b |
+| `runtime/core/output/**` | `runtime/foundation/output/**` | P0-2b |
+| `runtime/core/kernel/**` | `runtime/foundation/kernel/**` | P0-2b |
+| `runtime/core/evidence*.ts` | `runtime/foundation/evidence*.ts` | P0-2b |
+| `runtime/core/layers.ts` | `runtime/foundation/layers.ts` | P0-2b |
+| `runtime/core/dispatcher/routes.generated.ts` | `runtime/contracts/routes.generated.ts` | P0-2a |
+| `runtime/core/dispatcher/plan-call.ts` 的 `routeMatches` | `runtime/contracts/route-match.ts` | P0-2a |
+| `runtime/execution/local-op/names.ts` | `runtime/contracts/local-lane.ts`（生成） | P0-1c |
+| —（新增） | `src/contracts/local-lane.ts`（生成） | 宿主副本 |
+| —（新增） | `src/tools/receipt.ts` | 唯一 verdict/receipt 构造器 |
+| —（新增） | `config/local-ops.json` + `scripts/gen-local-ops.mjs` | 车道单源 |
+| `runtime/core/local-evidence.ts` | **未迁移**（仍在 core） | 只有 http/health 消费，且有 file-budget 例外 |
+
+### 9.2 当前度量（复核于 fbea0a3）
+
+- **TS**：298 文件 / 1000 相对边；类型级 SCC **6**（全是 barrel：engine-api、dispatcher、jobs/start、shape-search、engine、http/host）；值级环 0。
+- **跨层**：`execution → core` **0**；`foundation → core` **0**；`foundation → execution` **0**；`core → execution` **16**（正向，编排依赖执行）。
+- **fan-in 前 5**：`runtime/config.ts` 57、`foundation/json.ts` 53、`src/contracts/dynamic.ts` 50、`runtime/paths.ts` 32、`src/constants.ts` 27。
+- **行数热点**：`core/sessions/registry.ts` 1193、`config.ts` 572、`foundation/layers.ts` 578、`foundation/kernel/api.ts` 519、`foundation/evidence.ts` 388、`src/client/index.js` 3058。
+- **契约**：6 工具 / 38 family / 270 op / 45 路由行 / 44 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12（未变）。
+- **债务**：函数预算 110 条（stale 0）、路径例外 17 条。
+- **Python**：跨域 import 0；`K.<attr>` 297 / 跨域 95（P1-1a 进行中）。
+
+### 9.3 P0 逐项结果
 
 | 项 | 计划 | 实际 | 证据 |
 |---|---|---|---|
-| 只读清单 98/104 | 生成化 | **已修复为 104 + 强 parity 门**；生成化留 P1（104 条常量 + 一道门，I 已足够低） | `src/tools/op/read-only.ts`、`tests/unit/js/contract/op-read-only-parity.test.ts` |
-| 本地车道白名单 | 单源生成 | **完成**：`config/local-ops.json` → `runtime/contracts/local-lane.ts` + `src/contracts/local-lane.ts`，手写副本删除 | `scripts/gen-local-ops.mjs`、`scripts/check-local-ops.mjs` |
-| routing ↔ catalog | 双向门 | **完成（ratchet）**：exact op 可发现、空前缀 catch-all 唯一且表尾、op 重名只允许 `help` | `tests/unit/js/contract/route-catalog-parity.test.ts` |
-| 路由字面量消费者 | 门禁 | **完成**：覆盖 `src/tools` + `src/host` + `src/headless` + `src/client` | `tests/unit/js/contract/route-consumers.test.ts` |
-| 通道词表 | 3 → 1 或门禁 | **门禁完成**（生成化留 P1） | `tests/unit/js/contract/channel-vocabulary.test.ts` |
-| `core` ↔ `execution` | 反向边 0 | **完成**：`execution → core` **45 → 0**；`foundation → core/execution` **0**；正向 `queue/engine → execution` 15 条保留 | `runtime/foundation/`（15 文件）、121 处 import 重定向 |
-| 写鉴权 | 单一入口 + fail-closed | **完成**：模块级 `REGISTRY` 删除；`sessionWriteGate(payload, registry)`；缺装配时 `session_unavailable` | `runtime/http/session-gate.ts`、`tests/unit/js/write-authority.test.ts` |
-| 跳过规则数据化 | 8+ 变体 → 1 | **部分**：入口已唯一，跳过谓词仍留在各路由；数据化留 P1 | `runtime/http/routes/*` |
-| 会话解析 | 7 → 1 | **完成（链路）**：`resolveSession` 为唯一解析器；py/local 走兼容包装；session status/list 逻辑不等价，保留并注释 | `src/tools/shared/session.ts`、`tests/unit/js/session-ref.test.ts` |
-| 证据/重载 | 断反馈环 | **完成**：`engineProvenance({layers})` 显式快照、`hostProvenance(fresh, snapshot)`、HTTP 边界取一次快照；`reloadOnce` 收口 | `runtime/foundation/{evidence,evidence-host,layers}.ts`、`src/host/reload/index.ts` |
-| globalThis 代际 | 删除 | **改为收敛**：它是 HMR 模块复用的唯一判据，删除会退化“假 current”；保留并局限在 `host-manifest.ts` | `src/host/backend/host-manifest.ts:73-80` |
-| 回执构造器 | 唯一 | **完成**：`src/tools/receipt.ts`；`receipt.v2` 手写 6 → 1 | `src/tools/receipt.ts`、`tests/unit/js/receipt-constructor.test.ts` |
-| `headless/receipts` 648 行零调用 | 接入或删除 | **未动**（P1 清理，避免本刀触碰 `__internals` 与 lossless 契约测试） | `src/headless/receipts/**` |
+| 只读清单 98/104 | 生成化 | **104 + 强 parity 门**；生成化留 P1 | `src/tools/op/read-only.ts`、`tests/unit/js/contract/op-read-only-parity.test.ts` |
+| 本地车道白名单 | 单源生成 | **完成**：`config/local-ops.json` → 两份 `local-lane.ts` | `scripts/gen-local-ops.mjs`、`check-local-ops.mjs` |
+| routing ↔ catalog | 双向门 | **完成（ratchet）** | `tests/unit/js/contract/route-catalog-parity.test.ts` |
+| 路由字面量消费者 | 门禁 | **完成**（tools/host/headless/client） | `route-consumers.test.ts` |
+| 通道词表 | 3 → 1 或门禁 | **门禁完成**（生成化 P1） | `channel-vocabulary.test.ts` |
+| `core` ↔ `execution` | 反向边 0 | **完成**：45 → 0；正向 16 条保留 | `runtime/foundation/`（15 文件） |
+| 写鉴权 | 单一入口 + fail-closed | **完成**：模块级 `REGISTRY` 删除；缺装配 `session_unavailable` | `runtime/http/session-gate.ts`、`write-authority.test.ts` |
+| 跳过规则数据化 | 8+ → 1 | **部分**：入口唯一，谓词仍在路由（P1） | `runtime/http/routes/*` |
+| 会话解析 | 7 → 1 | **完成（链路）**：`resolveSession`；status/list 保留并注释 | `src/tools/shared/session.ts`、`session-ref.test.ts` |
+| 证据/重载 | 断反馈环 | **完成**：显式快照 + `reloadOnce` | `runtime/foundation/{evidence,evidence-host,layers}.ts`、`src/host/reload/index.ts` |
+| globalThis 代际 | 删除 | **改为收敛**（HMR 模块复用的判据；删除会退化“假 current”） | `src/host/backend/host-manifest.ts` |
+| 回执构造器 | 唯一 | **完成**：`receipt.v2` 手写 6 → 1 | `src/tools/receipt.ts`、`receipt-constructor.test.ts` |
+| `headless/receipts` 648 行零调用 | 接入或删除 | **未动**（P1 清理） | `src/headless/receipts/**` |
 
-### 9.2 合并验证（本次实际执行）
+### 9.4 合并验证（commit fbea0a3 时实际执行）
 
 | 命令 | 结果 |
 |---|---|
-| `npm run typecheck` | 0 error（runtime → build → src → tests） |
-| `npm run lint` | PASS（eslint / check:any / exceptions / plan-ids / doc-paths / local-ops / ports） |
-| `npm run test:contract` | **49 files / 432 tests 全绿** |
-| `node scripts/check-plan-ids.mjs --enforce` | PASS，residual 0（基线已按当前树重刷） |
-| `npm run check:structure` / `check:function-budget` / `check:exceptions` / `check:import-boundaries` / `check:routes` | 全 PASS |
-| 目标 Vitest（read-only / route / channel / write-authority / receipt / reload / provenance / session-ref） | **10 files / 99 tests 全绿** |
-| `npm run test:unit`（全量） | **134/134 文件、1194 passed / 2 skipped**；consent 套件已补策略文件隔离（不再读本机 profile） |
+| `npm run build` / `typecheck` / `check:build` | 全绿 |
+| `npm run lint` | PASS（eslint / any / exceptions / plan-ids / doc-paths / local-ops / ports） |
+| `npm run test:contract` | **49 files / 432 tests** |
+| `npm run test:unit` | **134/134 文件、1194 passed / 2 skipped**（consent 套件已做策略隔离） |
 | `npm run test:integration` | **32/32 文件、309 passed** |
+| `check:structure` / `check:function-budget` / `check:routes` / `check:no-shims` / `check:runtime-layout` | 全 PASS |
+| `check-plan-ids --enforce` | residual **0**（基线 114 文件 / 1517 tokens；审计文档 skipFiles） |
 
-### 9.3 遗留（P1/P2）
+### 9.5 如何保持本页同步
 
-- 只读清单 / 通道词表生成化为单文件；写路由跳过谓词数据化；`SessionRegistry` 拆分（1193 行）。
-- `src/headless/receipts/**` 清理或接入；`ADDRESS`、死导出、`T` 死键清理。
-- Python 五域断环（P1-1）：provider 倒置 + `scene_ctx` + preload 生成 + `txn/checkpoint` 合并。
-- 客户端 3058 行单文件拆分与类型化。
+```text
+git log -1 --format='%h %s'
+npm run typecheck && npm run lint
+npm run test:unit && npm run test:integration && npm run test:contract
+node scripts/check-structure.mjs        # 打印 files / edges / cycles / budgets
+.venv/Scripts/python.exe -m pytest tests/unit/python -q
+npm run check:python-static
+node scripts/sync_counts.mjs --dry      # 契约计数
+```
+
+度量口径：TS 只统计 `src/**` + `runtime/**`（排除 `lib/`、`node_modules`）；相对 import 解析 `.js` → `.ts`；SCC 用 Tarjan。
+
+### 9.6 遗留（P1/P2）
+
+- **P1-1a**（进行中）：core→render/export 端口倒置；完成后复核五域 SCC 是否只剩 `{geometry, assembly}`。
+- **P1-1b**：`geometry ↔ assembly` 的 shapegen/vehicle 归属（产品决策）。
+- **P1-1c**：`core/scene_ctx`、preload/DEPS 生成、`txn` 与 `worker.checkpoint` 合并。
+- **P1-2/3/4**：SessionRegistry 拆分、config 拆分、client 3058 行拆分与类型化。
+- **P2**：只读/通道生成化、跳过谓词数据化、`headless/receipts` 清理、availability/addon 出口收敛。
