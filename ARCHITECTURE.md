@@ -47,7 +47,7 @@
 
 | 指标 | 值 | 口径 |
 |---|---|---|
-| TS 源文件 / 相对导入边 | **298 / 1074** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
+| TS 源文件 / 相对导入边 | **299 / 1078** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
 | 值级 SCC / 类型级 SCC | **0 / 6** | 排除 `import type` 后为 0；含类型为 6（全 barrel） |
 | 跨层边 | execution→core **0**；foundation→core/execution **0**；core→execution **16** | 相对 import 解析 `.js`→`.ts` |
 | `src` ↔ `runtime` 源码 import | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
@@ -101,7 +101,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### 2.4 会话、写鉴权与同意
 
-- `runtime/core/sessions/registry.ts` 管归属/实例/租约/同意/授权/presence/selection/py 窗口（1193 行，P1-2 拆）。
+- `runtime/core/sessions/registry.ts` 管归属/实例/租约/同意/授权/presence/selection/py 窗口（**1021 行**，拆分第一刀已把写授权移到 `write-authority.ts`；剩余 consent/views/instances/lifecycle）。
 - **写鉴权单一入口**：`runtime/http/session-gate.ts` 的 `sessionWriteGate(payload, registry)`；`leaseGate(payload, registry)` 在 `gateway/app.ts` 绑定 registry。**带 caller 头但 registry 缺失 → fail-closed（`session_unavailable`）**；无 caller 头的旧客户端仍走 LEASE 兼容路径。
 - **跳过判据单入口（P2）**：`runtime/http/write-skip.ts` 的 `shouldGateWrite(path, payload)` 是唯一解释器；例外只有两条例外规则（`/act` 的 `py+caller`、`/worker` 的 `isolated`），路由只问“要不要过门”，不再自己拼三元式。默认是过门：未知路径/未知 op 一律落到写门。
 - virtual-gui 同意：`consent.ts`（一次性令牌）、`consent-requests.ts`（持久化、人类批准）、`consent-policy.ts`（env → policy 文件 → 配置 → 默认 manual，≤250 ms 生效）。
@@ -184,7 +184,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 ### 3.3 维度检查
 
 - **系统层**：9 FR / 12 DP；DP>FR 来自共享基础设施（A/H/K），不是过度分层。
-- **DP < FR（职责过度集中）**：`core/sessions/registry.ts`（1193 行 / 48 public / 9 子能力）、`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，且不在行预算门内）、`runtime/py/core/worker.py`（1452）。
+- **DP < FR（职责过度集中）**：`core/sessions/registry.ts`（1021 行 / 48 public / 9 子能力，拆分进行中）、`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，且不在行预算门内）、`runtime/py/core/worker.py`（1452）。
 - **DP > FR（透传/碎片）**：工具 presenter 链；队列四层（route → JobSurface → Queue → SpawnExecutor）；`PlanCallDeps` 40 字段。
 - **死质量**：`src/headless/receipts/**`（648 行、0 生产调用）已删除；当前无已知死模块。
 
@@ -373,6 +373,17 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 **验证**：unit 137 / 1210（2 skipped）；integration 32 / 309（两轮各有一个并发 flake，单跑均绿：`gateway-addon-channel`、`gateway-lifecycle`）；contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无（`shouldGateWrite` 对每条真实请求返回与旧三元式相同的结果，由 `write-skip.test.ts` 与 146 条 `route-matrix` 用例对拍）。
 
+### 7.7 registry 拆分第一刀（写授权移出）
+
+| 项 | 结果 |
+|---|---|
+| 新模块 | `runtime/core/sessions/write-authority.ts`（227 行）：`WriteAuthority` + `WriteAuthorityHost`（sessions 映射、prune、findForCaller、实例表） |
+| 迁走 | `authorizeWrite` / `writableSession` / 缺失实例探针 / `writeScopeFailure` / `writeFailureEvidence`（逐字搬运，含注释） |
+| 顺带 | 删除零引用的 `private mustOwn`；`registry.ts` 1193 → 1021 行 |
+| 表面不变 | `SessionRegistry.authorizeWrite` 签名与返回不变（`WriteAuthoritySource` 仍取 `Pick<SessionRegistry,'authorizeWrite'>`），`sessionWriteGate` 无需改 |
+
+**验证**：10 个会话相关单测文件 125 条全绿；unit 137 / 1210（2 skipped）、integration 32 / 309、contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无（逐字搬运；宿主接口只做取值转发）。
+
 ---
 
 ## 8 路线图
@@ -392,7 +403,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### P1-2/3/4
 
-- `SessionRegistry` 拆 ownership/consent/presence/virtual-gui（1193 → 4 个 ≤400 行模块）。
+- `SessionRegistry` 拆分：**第一刀已完成**（写授权 → `write-authority.ts`，227 行）；剩 consent / views / instances / lifecycle 四刀，目标是 registry ≤400 行 + 子模块各 ≤400，并去掉它的 file-budget 例外。
 - `config.ts` 拆 platform/paths/file/blender-detect，配置声明式化。
 - 客户端 3058 行拆分并纳入类型/行预算。
 
