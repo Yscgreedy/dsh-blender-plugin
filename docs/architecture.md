@@ -357,7 +357,8 @@ These are the rules that protect the architecture:
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by
-  check:structure.
+  check:structure, and the single-file browser bundle source has its own ratchet in
+  check:client-budget (it only ratchets down; raising the ceiling is a reviewed change).
 - The public surface is two registered facades (`src/index.ts`, `runtime/engine.ts`) whose exports and
   consumers are inventoried in `config/facades.json`. `npm run check:no-shims` fails on an
   unregistered facade export, a stale registration, a wildcard export, or a retired file that
@@ -427,9 +428,9 @@ Each entry has `id`, `kind`, `path`, `reason`, `owner`, and `reviewBy`; `npm run
 check:exceptions` (part of `npm run lint`) rejects an unknown kind, a missing path, a duplicate id,
 a reason shorter than 16 characters, and an expired `reviewBy`. Kinds: `file-budget`,
 `function-budget`, `python-static`, `single-line-reexport`, `facade-export`, `doc-path`,
-`matrix-row`, `python-private-import`. Sixteen entries exist today: five `file-budget` entries
-(`runtime/catalog/data.ts`, `runtime/core/sessions/registry.ts`, `runtime/core/local-evidence.ts`,
-and the two single-file Blender scripts `runtime/py/core/worker.py` and `runtime/py/render/view.py`);
+`matrix-row`, `python-private-import`. Fifteen entries exist today: four `file-budget` entries
+(`runtime/catalog/data.ts`, `runtime/core/local-evidence.ts`, and the two single-file Blender scripts
+`runtime/py/core/worker.py` and `runtime/py/render/view.py`);
 `single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`, and
 `runtime/execution/local-op/index.ts` (the documented src-to-lib bridge and two barrels); and eight
 `python-private-import` entries for the addon command modules that reuse private
@@ -510,6 +511,7 @@ policy; a floor must not be lowered without a documented policy change in this g
 | Python domains plus one modules.json registry | One place to add a module; no flat shims or duplicate path maps |
 | Two registered public facades plus implementation packages | Stable host and runtime entry imports; every export needs a registered consumer, and an unregistered export fails check:no-shims |
 | File, function, and coverage budgets | Reviewable size and measured debt; exceptions need owner, reason, and expiry |
+| Single-file client bundle with a line ratchet | The tab UI stays one reviewable artifact with no bundler; check:client-budget freezes src/client/index.js at its current line count and only ratchets down, so growth has to raise the ceiling on purpose |
 | One routing table plus codegen; one catalog <-> Python link table | GUI and worker routes cannot drift from config/routing.json; check:routes rejects stale generated tables, and the parity test rejects undeclared dispatch drift |
 | Kernel ports for cross-domain Python calls | The core can call view/deliver/gate capabilities without naming another domain's private API; the port name is the contract, and the layout test still enforces zero cross-domain imports |
 | One write authority with a fail-closed registry | A host-attributed write does not slip through when the Gateway has no session registry; legacy no-caller clients keep the lease path. Which requests skip the gate is one table plus one interpreter in `runtime/http/write-skip.ts` (`shouldGateWrite`); routes ask, they do not spell the predicate, and the default is to gate |

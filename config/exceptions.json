@@ -10,14 +10,6 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "id": "EXC-FILE-BUDGET-SESSION-REGISTRY",
-      "kind": "file-budget",
-      "path": "runtime/core/sessions/registry.ts",
-      "reason": "SessionRegistry 是 attach/claim/lease/virtual-gui/human-pause 的唯一编排器：约 40 个方法共享私有 sessions/instances/humanPaused 映射与 VirtualGuiLifecycle 句柄。把私有状态簇拆成 helper 属于行为敏感重构（3.1 GA 仍在动），本文件保留单类并在 2027-06-30 前复核；其余文件的行预算仍照常执行。",
-      "owner": "core-sessions",
-      "reviewBy": "2027-06-30"
-    },
-    {
       "id": "EXC-SINGLE-LINE-REEXPORT-CATALOG-BARREL",
       "kind": "single-line-reexport",
       "path": "runtime/catalog/index.ts",

@@ -1,4 +1,3 @@
-import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import { CFG } from '../../config.js'
 import { selectDisplayProvider } from '../../display/provider.js'
 import { systemVirtualGuiLimits } from '../../display/limits.js'
@@ -6,7 +5,7 @@ import type { VirtualGuiLimits } from '../../display/limits.js'
 import { applyHumanPause } from './human.js'
 import { applyHumanEditsToSessions, markHumanRead } from './human-edits.js'
 import type { HumanEditInput } from './human-edits.js'
-import { presenceRows, setSelection, setView, touchAgent } from './presence.js'
+import { presenceRows, setSelection, setView } from './presence.js'
 import { pyTimeoutFailure, waitForPyLock } from './py-lock.js'
 import { grantTo, listGrants, revokeFrom } from './grant-ops.js'
 import type { GrantOpsHost } from './grant-ops.js'
@@ -14,17 +13,15 @@ import { displayCapabilities } from '../../display/prerequisites.js'
 import type { DisplayCapabilities, DisplayProvider } from '../../display/types.js'
 import { ConsentBook } from './consent-book.js'
 import { InstanceBook } from './instance-book.js'
+import { SessionLifecycle } from './session-lifecycle.js'
 import { SessionViews } from './session-views.js'
 import { WriteAuthority } from './write-authority.js'
 import {
   callerKey,
   callerView,
   fail,
-  inOwnerFamily,
   isMain,
   ownerMatches,
-  ownerStale,
-  sameHost,
   sessionView,
 } from './types.js'
 import { findCallerSession, unownedSessions } from './lookup.js'
@@ -61,15 +58,9 @@ export class SessionRegistry {
   private sessions = new Map<string, SessionRecord>()
   /** Live instances + the prune they drive (registry 拆分第四刀). */
   private readonly instanceBook: InstanceBook
+  /** attach/claim/release/heartbeat + virtual-gui start/stop (registry 拆分第五刀). */
+  private readonly sessionLifecycle: SessionLifecycle
   private humanPaused = new Map<string, boolean>()
-  /**
-   * Last instance each caller attached. prune() releases a user-gui record the
-   * moment its socket drops (3.1 semantics: a reconnect claims fresh), so after a
-   * window reset attach used to answer "no ready instance" — which reads as "there
-   * is no session" when the truth is "your Blender just went away". The tombstone
-   * keeps the honest answer without keeping the ownership.
-   */
-  private lastInstance = new Map<string, { instanceId: string; at: number }>()
 
   constructor(
     instances: () => InstanceRef[],
@@ -98,12 +89,24 @@ export class SessionRegistry {
       limits: () => this.limitsFn(),
       waitForInstance: (instanceId, timeoutMs) => this.waitForInstanceFn(instanceId, timeoutMs),
     })
+    this.sessionLifecycle = new SessionLifecycle({
+      sessions: this.sessions,
+      prune: (now) => this.prune(now),
+      findForCaller: (c) => this.findForCaller(c),
+      liveness: (session) => this.instanceBook.liveness(session),
+      listInstances: () => this.listInstances(),
+      verify: this.verifyFn,
+      pausedFor: (instanceId) => this.humanPaused.get(instanceId) === true,
+      startVirtual: (c, opts) => this.lifecycle.start(c, opts),
+      stopVirtual: (c, sessionId) => this.lifecycle.stop(c, sessionId),
+      disposeVirtual: (session) => this.lifecycle.disposeSession(session),
+    })
     this.views = new SessionViews({
       sessions: this.sessions,
       instances: () => this.instanceBook.list(),
       prune: (now) => this.prune(now),
       findForCaller: (c) => this.findForCaller(c),
-      tombstoneFor: (c) => this.tombstoneFor(c),
+      tombstoneFor: (c) => this.sessionLifecycle.tombstoneFor(c),
       livenessOf: (session) => this.instanceBook.liveness(session),
     })
     this.consent = new ConsentBook({
@@ -153,82 +156,6 @@ export class SessionRegistry {
     return free.length === 1 ? (free[0] as SessionRecord) : null
   }
 
-  private ensureAttached(
-    c: CallerIdentity,
-    opts: { instanceId?: string; kind?: SessionKind } = {},
-  ): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
-    this.prune()
-    const requested = opts.instanceId ? 'user-gui:' + String(opts.instanceId) : ''
-    const existing = requested ? (this.sessions.get(requested) ?? null) : this.findForCaller(c)
-    if (existing) return this.adopt(claimExisting(existing, c, this.instanceBook.liveness(existing)), c)
-    const picked = pickInstance(this.listInstances(), opts)
-    if (!('instance' in picked)) {
-      // No live instance: prefer "your Blender disconnected" over "no session".
-      if (picked.code === 'session_unavailable') {
-        const gone = this.disconnectedFailure(c)
-        if (gone) return gone
-      }
-      return picked
-    }
-    const knownVirtual = this.sessions.get('virtual-gui:' + picked.instance.instanceId)
-    if (knownVirtual) {
-      if (knownVirtual.status !== 'ready')
-        return fail(
-          'session_unavailable',
-          'session',
-          'the virtual-gui session is not ready yet',
-          'wait for the addon handshake, or check blender_session status',
-          { sessionId: knownVirtual.id },
-        )
-      // claimExisting owns the owner/viewer decision (same-host viewers are allowed,
-      // writes still need a grant); owner 过期被 prune 清掉的会话可以重新认领.
-      return this.adopt(claimExisting(knownVirtual, c, this.instanceBook.liveness(knownVirtual)), c)
-    }
-    const known = this.sessions.get('user-gui:' + picked.instance.instanceId)
-    if (known) return this.adopt(claimExisting(known, c, this.instanceBook.liveness(known)), c)
-    const created = createSession(picked.instance, c)
-    created.paused = this.humanPaused.get(picked.instance.instanceId) === true
-    if (created.paused) created.pausedAt = Date.now()
-    this.sessions.set(created.id, created)
-    touchAgent(created, c)
-    return this.adopt({ ok: true, session: created }, c)
-  }
-
-  private adopt(
-    result: SessionResult<{ session: SessionRecord; viewer?: boolean }>,
-    c: CallerIdentity,
-  ): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
-    if (result.ok) {
-      touchAgent(result.session, c)
-      if (result.session.instanceId)
-        this.lastInstance.set(callerKey(c), {
-          instanceId: result.session.instanceId,
-          at: Date.now(),
-        })
-    }
-    return result
-  }
-
-  /** The instance this caller attached last, while that memory is still fresh. */
-  private tombstoneFor(c: CallerIdentity): string | null {
-    const last = this.lastInstance.get(callerKey(c))
-    return last && Date.now() - last.at < 30 * 60_000 ? last.instanceId : null
-  }
-
-  private disconnectedFailure(c: CallerIdentity): SessionResult<never> | null {
-    const instanceId = this.tombstoneFor(c)
-    if (!instanceId) return null
-    return fail(
-      'addon_disconnected',
-      'session',
-      'the Blender instance you were attached to is no longer connected (' + instanceId + ')',
-      're-enable DSH Blender Bridge 2.0.0 in that Blender and press Connect in the N panel, then ' +
-        'blender_session action=attach; a window reset (wm.read_factory_settings / read_homefile) ' +
-        'disables the addon, so the session cannot come back on its own',
-      { instanceId: instanceId, ready_instances: 0, tombstone: true },
-    ) as SessionResult<never>
-  }
-
   list(): Record<string, unknown>[] {
     return this.views.list()
   }
@@ -262,79 +189,25 @@ export class SessionRegistry {
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
   ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean; note?: string }> {
-    if (opts.kind && opts.kind !== 'user-gui') {
-      return fail(
-        'invalid_params',
-        'session',
-        'attach only applies to user-gui; virtual-gui sessions are started by the Gateway',
-        'use blender_session start kind=virtual-gui',
-        { kind: opts.kind },
-      )
-    }
-    const r = this.ensureAttached(c, opts)
-    if (!('session' in r)) return r
-    return {
-      ok: true,
-      session: sessionView(r.session, c),
-      ...(r.viewer === true
-        ? { viewer: true, note: 'subagent of the owner: read-only viewer (writes need a grant)' }
-        : {}),
-    }
+    return this.sessionLifecycle.attach(c, opts)
   }
 
   claim(
     c: CallerIdentity,
     opts: { instanceId?: string } = {},
   ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean; note?: string }> {
-    return this.attach(c, opts)
+    return this.sessionLifecycle.claim(c, opts)
   }
 
-  /**
-   * attach + a live ping. The static receipt answers "is there a session record
-   * that matches you"; this answers "does the Blender behind it still talk".
-   * A silent socket is reported as addon_unresponsive and the record is dropped
-   * to stopped so the next attach is a fresh claim instead of a stale one.
-   */
   async attachChecked(
     c: CallerIdentity,
     opts: { instanceId?: string; kind?: SessionKind } = {},
   ): Promise<SessionResult<{ session: Record<string, unknown> }>> {
-    const attached = this.attach(c, opts)
-    if (!attached.ok) return attached
-    const instanceId = String(attached.session.instanceId || '')
-    if (!this.verifyFn || !instanceId) return attached
-    const alive = await this.verifyFn(instanceId).catch(() => false)
-    if (alive) return attached
-    const record = this.sessions.get(String(attached.session.id || ''))
-    if (record) {
-      record.status = 'stopped'
-      record.owner = null
-      record.agents.clear()
-      record.grants.clear()
-      record.activePy = null
-    }
-    return fail(
-      'addon_unresponsive',
-      'session',
-      'the Blender instance behind this session is listed but did not answer a live ping (' +
-        instanceId +
-        ')',
-      'the addon is not running inside that Blender: re-enable DSH Blender Bridge 2.0.0 and ' +
-        'press Connect in the N panel, then blender_session action=attach again',
-      { instanceId: instanceId, probe: 'ping', sessionId: attached.session.id || null },
-    )
+    return this.sessionLifecycle.attachChecked(c, opts)
   }
 
   detach(c: CallerIdentity, sessionId?: string): SessionResult<{ released: boolean }> {
-    this.prune()
-    const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session) return { ok: true, released: false }
-    if (session.owner && ownerMatches(session.owner, c) && isMain(session, c)) {
-      this.releaseSession(session)
-      return { ok: true, released: true }
-    }
-    session.agents.delete(callerKey(c))
-    return { ok: true, released: false }
+    return this.sessionLifecycle.detach(c, sessionId)
   }
 
   release(
@@ -342,85 +215,11 @@ export class SessionRegistry {
     sessionId?: string,
     opts: { force?: boolean } = {},
   ): SessionResult<{ released: boolean; reason: string; previous_owner?: Owner }> {
-    this.prune()
-    const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session) {
-      // 静默 ok 是现场踩过的坑：调用方以为会话已经放掉，实际什么都没发生。
-      return fail(
-        'session_not_found',
-        'session',
-        'the session does not exist (nothing was released)',
-        'call blender_session action=list to see live sessions',
-        { sessionId: sessionId || null, released: false, reason: 'not_found' },
-      )
-    }
-    if (session.owner && !ownerMatches(session.owner, c)) {
-      // 反馈 2: a crashed subagent must not lock the GUI forever. Two escape
-      // hatches, both explicit in the receipt:
-      //   1) force=true from a main agent on the same host (the human's agent);
-      //   2) the owner's heartbeat is stale (subagent 30 s / main 30 min).
-      const forceHostMain = opts.force === true && c.role === 'main' && sameHost(session.owner, c)
-      if (forceHostMain || ownerStale(session.owner)) {
-        const reason = forceHostMain ? 'forced_by_host_main' : 'stale_owner'
-        const previous = session.owner
-        this.releaseSession(session)
-        return { ok: true, released: true, reason, previous_owner: previous ?? undefined }
-      }
-      return fail(
-        'session_in_use',
-        'session',
-        'only the owning DSH session (or a same-host main agent with force=true) can release this GUI session',
-        c.role === 'main' && sameHost(session.owner, c)
-          ? 'retry with force=true (same-host main agent), or wait for the owner heartbeat to go stale'
-          : 'ask the owner to release it; a stale owner heartbeat is reclaimed automatically',
-        {
-          sessionId: session.id,
-          owner: session.owner,
-          released: false,
-          reason: 'owner_mismatch',
-          stale: ownerStale(session.owner),
-          force_allowed: c.role === 'main' && sameHost(session.owner, c),
-        },
-      )
-    }
-    // owner 心跳过期（主 30 min / 子 agent 30 s）后 prune 只清 owner、保留 agents：此时仍挂在这个会话上的
-    // agent 必须能释放它，否则 release 会回 released:false 而会话照旧 ready（现场误判源）。
-    const mine = session.agents.has(callerKey(c))
-    if (!session.owner && !mine) {
-      return fail(
-        'session_unowned',
-        'session',
-        'the session has no owner (owner heartbeat expired) and this caller is not attached to it',
-        'attach it first (blender_session action=attach) and then release; or let the main agent release it',
-        {
-          sessionId: session.id,
-          released: false,
-          reason: 'owner_expired',
-          agents: [...session.agents.keys()],
-        },
-      )
-    }
-    const reason = session.owner ? 'owner' : 'owner_expired'
-    this.releaseSession(session)
-    return { ok: true, released: true, reason }
+    return this.sessionLifecycle.release(c, sessionId, opts)
   }
 
   releaseSession(s: SessionRecord): void {
-    s.owner = null
-    s.agents.clear()
-    s.grants.clear()
-    s.activePy = null
-    s.paused = false
-    s.pausedAt = null
-    s.humanEdits.clear()
-    s.humanModifiedAt = null
-    s.status = 'stopped'
-    if (s.kind === 'virtual-gui') {
-      // Releasing the owner tears the provider down too; stop() awaits the same
-      // dispose path, while detach/release can stay synchronous at the API edge.
-      this.sessions.delete(s.id)
-      void this.lifecycle.disposeSession(s)
-    }
+    this.sessionLifecycle.releaseSession(s)
   }
 
   getSession(sessionId: string): SessionRecord | null {
@@ -456,31 +255,7 @@ export class SessionRegistry {
     c: CallerIdentity,
     sessionId?: string,
   ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean }> {
-    this.prune()
-    const session = sessionId ? this.sessions.get(String(sessionId)) : this.findForCaller(c)
-    if (!session)
-      return fail(
-        'session_not_found',
-        'session',
-        'the session does not exist',
-        're-attach the GUI session',
-        {},
-      )
-    if (session.owner && !ownerMatches(session.owner, c)) {
-      if (inOwnerFamily(session.owner, c) || sameHost(session.owner, c)) {
-        touchAgent(session, c)
-        return { ok: true, session: sessionView(session, c), viewer: true }
-      }
-      return fail(
-        'session_in_use',
-        'session',
-        'another DSH session owns this GUI session',
-        'reads are allowed on the same host; writes need a grant from the owner',
-        { sessionId: session.id, owner: session.owner, is_mine: false },
-      )
-    }
-    claimFreeSession(session, c)
-    return { ok: true, session: sessionView(session, c) }
+    return this.sessionLifecycle.heartbeat(c, sessionId)
   }
 
   doctor(
@@ -516,9 +291,9 @@ export class SessionRegistry {
     c: CallerIdentity,
     opts: { kind?: SessionKind; consentToken?: string; waitMs?: number } = {},
   ): Promise<SessionResult<{ session: Record<string, unknown> }>> {
-    this.prune()
-    return this.lifecycle.start(c, opts)
+    return this.sessionLifecycle.start(c, opts)
   }
+
   issueConsent(c: CallerIdentity): SessionResult<{ consentToken: string; expiresAt: number }> {
     return this.consent.issueConsent(c)
   }
@@ -557,8 +332,7 @@ export class SessionRegistry {
   }
 
   async stop(c: CallerIdentity, sessionId?: string): Promise<SessionResult<{ stopped: boolean }>> {
-    this.prune()
-    return this.lifecycle.stop(c, sessionId)
+    return this.sessionLifecycle.stop(c, sessionId)
   }
 
   /**
@@ -570,19 +344,7 @@ export class SessionRegistry {
    * 不依赖任何调用者身份 —— 关停不是权限动作。
    */
   async disposeAll(): Promise<{ stopped: string[]; failed: string[] }> {
-    const stopped: string[] = []
-    const failed: string[] = []
-    for (const session of Array.from(this.sessions.values())) {
-      if (session.kind !== 'virtual-gui') continue
-      try {
-        this.sessions.delete(session.id)
-        await this.lifecycle.disposeSession(session)
-        stopped.push(session.id)
-      } catch (e) {
-        failed.push(session.id + ': ' + String((e as Error).message || e))
-      }
-    }
-    return { stopped, failed }
+    return this.sessionLifecycle.disposeAll()
   }
 
   grant(

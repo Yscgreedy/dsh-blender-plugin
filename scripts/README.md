@@ -45,6 +45,7 @@ npm package. npm scripts in package.json call these files; tests live under test
 | check-any.mjs               | Explicit-any AST gate                                                        | npm run lint / check:any                     | stdout only                              |
 | check-behavior-matrix.mjs   | Validate the behavior coverage matrix against live catalogs (tools, routes, addon commands, plan ops) | npm run test:matrix | coverage/matrix artifacts when requested |
 | check-build.mjs             | Verify lib/ is current and entry/client are synchronized                     | npm run check:build                          | stdout only                              |
+| check-client-budget.mjs     | Line ratchet for the single-file client source (src/client/index.js); the ceiling only moves down on purpose | npm run lint / check:client-budget | stdout only |
 | check-coverage.mjs          | Single coverage gate: JS global/changed, critical/execution, Python, E2E     | npm run check:coverage                       | stdout only                              |
 | check-doc-paths.mjs         | Check doc links, commands, inbound links and nonexistent path refs; --enforce ratchets against config/doc-links-baseline.json (orphan list intentionally empty) | npm run check:doc-paths / check:finalization | stdout only |
 | check-exceptions.mjs        | Validate config/exceptions.json: kind enum, path exists, owned and unexpired | npm run lint / check:exceptions              | stdout only                              |

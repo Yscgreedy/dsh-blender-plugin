@@ -47,7 +47,7 @@
 
 | 指标 | 值 | 口径 |
 |---|---|---|
-| TS 源文件 / 相对导入边 | **302 / 1092** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
+| TS 源文件 / 相对导入边 | **303 / 1094** | `src/**` + `runtime/**` 的 `.ts`（不含 `.d.ts`）；相对 import/export 解析 `.js`→`.ts`（含 type import） |
 | 值级 SCC / 类型级 SCC | **0 / 6** | 排除 `import type` 后为 0；含类型为 6（全 barrel） |
 | 跨层边 | execution→core **0**；foundation→core/execution **0**；core→execution **16** | 相对 import 解析 `.js`→`.ts` |
 | `src` ↔ `runtime` 源码 import | **0** | 唯一跨界：`src/host/runtime-bridge.ts` → 编译产物 `lib/runtime/*.js` |
@@ -56,7 +56,7 @@
 | 模块 fan-in 前 5 | config **57**、foundation/json **53**、contracts/dynamic **50**、paths **32**、src/constants **27** | 直接 import |
 | `DSH_*` 环境变量 | **46**（config.ts 独占 24 处读取） | 排除 vendored |
 | 契约规模 | 6 / 38 / 270 / 45 / 44 / 25 / 29 / 12 | 见 §2.8 |
-| 债务台账 | 函数预算 **110**、路径例外 **16**（file-budget 5 / py-private-import 8 / reexport 3） | `config/*.json` |
+| 债务台账 | 函数预算 **110**、路径例外 **15**（file-budget 4 / py-private-import 8 / reexport 3） | `config/*.json` |
 | 测试面 | **312** 文件（ts/mjs/py） | `tests/**` |
 
 ### 1.3 未做与 `[待核实]`
@@ -101,7 +101,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### 2.4 会话、写鉴权与同意
 
-- `runtime/core/sessions/registry.ts` 管归属/租约/presence/selection/py 窗口（**773 行**）：拆分已移出写授权、同意面、只读视图与实例簿（`write-authority` / `consent-book` / `session-views` / `instance-book`）；剩余 lifecycle 一刀。
+- `runtime/core/sessions/registry.ts` 管归属/租约/presence/selection/py 窗口（**535 行**）：五刀拆分完成——写授权、同意面、只读视图、实例簿、生命周期各成一个协作者，registry 只做装配与转发。
 - **写鉴权单一入口**：`runtime/http/session-gate.ts` 的 `sessionWriteGate(payload, registry)`；`leaseGate(payload, registry)` 在 `gateway/app.ts` 绑定 registry。**带 caller 头但 registry 缺失 → fail-closed（`session_unavailable`）**；无 caller 头的旧客户端仍走 LEASE 兼容路径。
 - **跳过判据单入口（P2）**：`runtime/http/write-skip.ts` 的 `shouldGateWrite(path, payload)` 是唯一解释器；例外只有两条例外规则（`/act` 的 `py+caller`、`/worker` 的 `isolated`），路由只问“要不要过门”，不再自己拼三元式。默认是过门：未知路径/未知 op 一律落到写门。
 - virtual-gui 同意：`consent.ts`（一次性令牌）、`consent-requests.ts`（持久化、人类批准）、`consent-policy.ts`（env → policy 文件 → 配置 → 默认 manual，≤250 ms 生效）。
@@ -184,7 +184,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 ### 3.3 维度检查
 
 - **系统层**：9 FR / 12 DP；DP>FR 来自共享基础设施（A/H/K），不是过度分层。
-- **DP < FR（职责过度集中）**：`core/sessions/registry.ts`（773 行 / 48 public / 9 子能力，拆分进行中）、`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，且不在行预算门内）、`runtime/py/core/worker.py`（1452）。
+- **DP < FR（职责过度集中）**：`core/local-evidence.ts`（817）、`config.ts`（572）、`src/client/index.js`（3058，行 ratchet 门已接 `check:client-budget`）、`runtime/py/core/worker.py`（1452）。
 - **DP > FR（透传/碎片）**：工具 presenter 链；队列四层（route → JobSurface → Queue → SpawnExecutor）；`PlanCallDeps` 40 字段。
 - **死质量**：`src/headless/receipts/**`（648 行、0 生产调用）已删除；当前无已知死模块。
 
@@ -417,6 +417,18 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 **验证**：9 个会话相关单测文件 119 条绿；unit 137 / 1210、integration 串行 32 / 309、contract 49 / 432；`typecheck` / `lint` / `check:build` 全绿。**行为差异**：无。
 
+### 7.11 registry 拆分第五刀（生命周期移出，P1-2 收口）
+
+| 项 | 结果 |
+|---|---|
+| 新模块 | `runtime/core/sessions/session-lifecycle.ts`（377 行）：`SessionLifecycle` + `SessionLifecycleHost`（sessions、prune、findForCaller、liveness、实例表、verify、pausedFor、virtual start/stop/dispose） |
+| 迁走 | `ensureAttached` / `adopt` / `tombstoneFor` / `disconnectedFailure` / `attach` / `claim` / `attachChecked` / `detach` / `release` / `releaseSession` / `heartbeat` / `start` / `stop` / `disposeAll`，以及 `lastInstance` 墓碑表 |
+| 保留语义 | carry-over 认领（`claimExisting`）、viewer 只读（`inOwnerFamily/sameHost`）、tombstone 提示（`addon_disconnected` 30 min）、force/stale 释放的三种原因、`attachChecked` 的 ping 失败降级 |
+| 累计 | registry 1193 → **535** 行（五刀移出 601 行）；协作者：227 / 206 / 156 / 112 / 377 |
+| 债务 | `config/exceptions.json` 删除 `EXC-FILE-BUDGET-SESSION-REGISTRY`，路径例外 16 → **15**（file-budget 5 → 4）；registry 首次进入 600 行预算 |
+
+**验证**：8 个会话相关单测文件 101 条绿；unit 138 / 1214（2 skipped，含新客户端门 4 条）、integration 串行 32 / 309、contract 50 / 436；`check-structure` 行预算 368/368 ≤600、`typecheck` / `lint` 全绿。**行为差异**：无。
+
 ---
 
 ## 8 路线图
@@ -436,9 +448,9 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### P1-2/3/4
 
-- `SessionRegistry` 拆分：**已完成四刀**（写授权 227 / 同意面 206 / 只读视图 156 / 实例簿 112 行），registry 1193 → 773；剩 lifecycle 一刀，做完可压到 600 行预算内并去掉它的 file-budget 例外。
+- `SessionRegistry` 拆分：**收口**（五刀：写授权 227 / 同意面 206 / 只读视图 156 / 实例簿 112 / 生命周期 377），registry 1193 → 535 行，file-budget 例外已删除（豁免 15 条）。
 - `config.ts` 拆 platform/paths/file/blender-detect，配置声明式化。
-- 客户端 3058 行拆分并纳入类型/行预算。
+- 客户端 3058 行拆分并纳入类型/行预算：门已就绪（ratchet），拆分仍未做。
 
 ### P2
 
