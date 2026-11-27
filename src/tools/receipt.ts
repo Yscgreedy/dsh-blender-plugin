@@ -6,8 +6,9 @@
  * 而回执是模型与脚本**唯一**的验收面。字段顺序也是契约，所以构造器只固定 contract 打头，
  * 其余按调用方给的键序（字节兼容靠这一条）。
  *
- * 边界：src/headless/receipts/** 与本文件无关（生产零调用，后续单独清理）；
- * 也不接管 plugin.ts 的 __internals。
+ * 本文件是**唯一**回执构造器：成功回执由调用点用 receiptV2 起头、withEvidence 并证据；
+ * 失败回执先用 src/tools/errors.ts 的 toolError 拿 envelope，再并进同一个 receipt.v2 形状。
+ * 它也不经过 plugin.ts 的 __internals —— 测试直接 import 本模块。
  */
 import { asRecord } from '../contracts/dynamic.js'
 

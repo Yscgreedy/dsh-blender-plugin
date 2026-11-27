@@ -1,11 +1,11 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-27T02:21:08.748Z",
+  "generatedAt": "2026-11-27T03:43:00.406Z",
   "mode": "warn",
   "totals": {
-    "all": 1517,
-    "exempt": 1517,
+    "all": 1522,
+    "exempt": 1522,
     "residual": 0
   },
   "byPrefix": {},
@@ -37,8 +37,8 @@
       "residual": 0
     },
     "docs/architecture.md": {
-      "count": 4,
-      "exempt": 4,
+      "count": 8,
+      "exempt": 8,
       "residual": 0
     },
     "docs/archive/2026-11-20-角色动画与卡通渲染需求.md": {
@@ -202,8 +202,8 @@
       "residual": 0
     },
     "runtime/py/geometry/shapegen.py": {
-      "count": 45,
-      "exempt": 45,
+      "count": 46,
+      "exempt": 46,
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/advmath.py": {

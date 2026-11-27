@@ -156,55 +156,46 @@ def shape_plan(object_class="generic", family=None):
                        "换类别只换协议（视图/比例/验收），不换机制"})
 
 
-def shape_sections(**kw):
-    """通用量具：三视图 → 站表 + 截面轮廓 + 包络（委托 vehicle_sections；轮轴检测只在有轮时命中）。"""
+def _shell(op, kw, layer):
+    """通用壳层几何的**唯一**委托入口（归属待定，见 P1-1b）。
+
+    shape_sections/loft/fit/regions/panels 的实现现在由 assembly 的 vehicle_* 提供：它们与"车"
+    无关（逐列/逐行量轮廓、按站表放样、折线族拟合、按区间分块、按缝分件），只是先在那边落地。
+    这里把 5 处查找 + 5 份"缺少 vehicle"的文案收成 1 处 —— 将来把实现上提到 geometry，或换成
+    内核端口（K.dsh_ports.call_port("shell_ops", …)），只改这一个函数，5 个 op 面不动。
+    """
     api = _api("vehicle")
     if api is None:
         return _j({"ok": False, "error": "需要 vehicle 模块（preload 里加 vehicle）"})
-    out = api("sections", kw)
-    out["layer"] = "shape/measure"
+    out = api(op, kw)
+    out["layer"] = layer
     return _j(out)
+
+
+def shape_sections(**kw):
+    """通用量具：三视图 → 站表 + 截面轮廓 + 包络（委托 vehicle_sections；轮轴检测只在有轮时命中）。"""
+    return _shell("sections", kw, "shape/measure")
 
 
 def shape_loft(**kw):
     """通用放样：站表 → 壳（截面轮廓 + 特征线 + 圆角 + 轮眉外扩）。委托 vehicle_loft。"""
-    api = _api("vehicle")
-    if api is None:
-        return _j({"ok": False, "error": "需要 vehicle 模块"})
-    out = api("loft", kw)
-    out["layer"] = "shape/loft"
-    return _j(out)
+    return _shell("loft", kw, "shape/loft")
 
 
 def shape_fit(**kw):
     """通用参数化：站表 → 折线族 + K 扫描（默认 family=polyline；它不依赖任何"车"的假设）。"""
-    api = _api("vehicle")
-    if api is None:
-        return _j({"ok": False, "error": "需要 vehicle 模块"})
     kw.setdefault("family", "polyline")
-    out = api("fit", kw)
-    out["layer"] = "shape/fit"
-    return _j(out)
+    return _shell("fit", kw, "shape/fit")
 
 
 def shape_regions(**kw):
     """通用多体量：按区间分块，每块一个独立体量。委托 vehicle_regions。"""
-    api = _api("vehicle")
-    if api is None:
-        return _j({"ok": False, "error": "需要 vehicle 模块"})
-    out = api("regions", kw)
-    out["layer"] = "shape/regions"
-    return _j(out)
+    return _shell("regions", kw, "shape/regions")
 
 
 def shape_panels(**kw):
     """通用分件：在给定位置减薄板 ⇒ 真实缝，可选分离成多件。委托 vehicle_panels。"""
-    api = _api("vehicle")
-    if api is None:
-        return _j({"ok": False, "error": "需要 vehicle 模块"})
-    out = api("panels", kw)
-    out["layer"] = "shape/panels"
-    return _j(out)
+    return _shell("panels", kw, "shape/panels")
 
 
 def shape_revolve(profile=None, name="Revolved", axis="Z", segments=48, angle_deg=360.0, parts=None):

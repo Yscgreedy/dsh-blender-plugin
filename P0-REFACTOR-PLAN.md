@@ -291,10 +291,9 @@ npm run test:integration
    `deriveVerdict({ ok, degraded, channels, job })`、`receiptV2({ contract, verdict, evidence, next_actions })`、`withEvidence()`。
 2. 替换 6 处手写 `contract: 'receipt.v2'`：`op/local.ts:175,224`、`run/presenter.ts:228,259,297`、`op/plan-response.ts:227`。
 3. `op/local.ts:174-186,222-229` 的恒 `degraded` 改由 `deriveVerdict` 产出；`run/presenter.ts:151-154` 只展示。
-4. `src/headless/receipts/**`（≈648 行、0 生产调用）：二选一，**同刀决定**：
-   - 接入：让 `blender_run` 的 submit/wait/collect 走它；
-   - 删除：保留 `HEADLESS_WAIT_MS` 常量到 `src/constants.ts`，删 3 文件与 `__internals` 对应项。
-   建议删除（P0 减表面积；测试接缝迁移到 `receipt.ts`）。
+4. `src/headless/receipts/**`（≈648 行、0 生产调用）：**已删除**（P2 第一批，见
+   [ARCHITECTURE.md](ARCHITECTURE.md) §7.5）。3 文件与 `__internals` 四项一并移除，测试接缝迁到
+   `src/tools/receipt.ts` 的生产构造器；`HEADLESS_WAIT_MS` 的唯一读者随模块消失，常量不再保留。
 
 **验收**：`rg "receipt.v2" src` 只剩 1 处；`tests/unit/js/run-receipt.test.ts`、`worker-receipt.test.ts`、`act-receipt.test.ts`、`tool-presenter.test.ts` 全绿。
 

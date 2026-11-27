@@ -44,8 +44,8 @@ const NON_LITERAL_CALLS: string[] = []
 /** 不是端点、只是路径分隔符的字面量（'/' + x、lastIndexOf('/')）。 */
 const NON_ENDPOINT_LITERALS = new Set(['/'])
 
-/** 消费端扫描根：工具、宿主生命周期、无头回执。 */
-const BACKEND_SCAN_ROOTS = ['src/tools', 'src/host', 'src/headless']
+/** 消费端扫描根：工具、宿主生命周期。 */
+const BACKEND_SCAN_ROOTS = ['src/tools', 'src/host']
 
 /** src/host/http.ts 是 backend* 的实现本身（路径参数是变量），不是消费端。 */
 const BACKEND_SCAN_SKIP = new Set(['src/host/http.ts'])
@@ -149,7 +149,9 @@ describe('route literal consumers', () => {
     expect(
       scan.literals.length,
       '消费端没扫到 backend* 路径字面量，提取规则已失真',
-    ).toBeGreaterThanOrEqual(28)
+      // 删掉 src/headless/receipts/** 后是 24（少了 /headless ×1、/job ×3）：
+      // 低于它说明扫描根或 backend* 提取规则又失真了。
+    ).toBeGreaterThanOrEqual(24)
     const bad = offenders(scan.literals)
     expect(bad, '路由字面量不在 CONTRACT_ROUTES 里（改路径或改契约）：\n' + bad.join('\n')).toEqual(
       [],

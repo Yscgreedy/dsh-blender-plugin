@@ -15,16 +15,19 @@ import type { AvailabilityStage } from '../../contracts/availability.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
 import { LOCAL_OP_NAMES, LOCAL_OP_PREFIXES, isLocalOpName } from '../../contracts/local-lane.js'
 import type { HostContext } from '../../host/context.js'
-import { backendPost } from '../../host/http.js'
 import { workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
 import type { ToolFailure } from '../errors.js'
 import { deriveVerdict, receiptV2, withEvidence } from '../receipt.js'
+import { postJobSubmit } from '../shared/queue-job.js'
 import { requireReadySession } from '../shared/session.js'
 
 const LF = String.fromCharCode(10)
 const BLEND_END = '.blend'
+/** Gateway 不可达时的补救建议（与 blender_run 同一条提示，不各写一份）。 */
+const LOCAL_LANE_HINT =
+  'blender_session action=doctor 看 Gateway/addon；或 blender_run action=list 查作业是否已建'
 
 /**
  * 本地可执行白名单：唯一定义在 config/local-ops.json，生成到 src/contracts/local-lane.ts
@@ -119,28 +122,18 @@ async function submitLocalJob(input: {
   ctx: HostContext
 }): Promise<Record<string, unknown>> {
   const view = workspaceRoots(input.exec, input.ctx)
-  const body: Record<string, unknown> = {
-    surface: 'queue',
-    op: 'submit',
+  // 提交体与 blender_run 同源（shared/queue-job.ts）：surface / op=submit 只在那里写一次。
+  const fields: Record<string, unknown> = {
     kind: 'headless',
     file: input.file,
     catalog_op: input.op,
     op_args: opPayloadOf(input.payload),
   }
   const workspace = workspacePayload(view)
-  if (workspace) body.workspace = workspace
+  if (workspace) fields.workspace = workspace
   const outdir = resolveOutdir(text(input.payload.outdir).trim(), view)
-  if (outdir) body.outdir = outdir
-  try {
-    return await backendPost(input.port, '/job', body, 60000)
-  } catch (e: unknown) {
-    return {
-      ok: false,
-      code: 'gateway_unreachable',
-      stage: 'transport',
-      root_cause: 'Gateway 不可达 · ' + text(e instanceof Error ? e.message : e),
-    }
-  }
+  if (outdir) fields.outdir = outdir
+  return await postJobSubmit(input.port, fields, 60000, LOCAL_LANE_HINT)
 }
 
 /** 成功回执：job_id + 取件方式 + degraded 语义（异步作业在取件前不是 pass）。 */

@@ -61,8 +61,8 @@ export const T = {
   loop: 360000, // /loop 内部 300s（内环预算在 spec.budget_ms 里另算）
   perf: 660000, // /perf 内部 600s
   opt: 660000, // /opt 内部 600s
-  // v0.9.3：headless 不再"陪跑到超时" —— 客户端等待窗口（DSH_HEADLESS_WAIT_MS，默认 100 s）到点就回
-  // promoted 回执（jobId），服务端子进程继续跑。静态截止留大余量即可（自定义大窗口的用户也不会被判超时）。
+  // headless 一律走作业层：submit 立刻回 jobId，结果用 blender_run(action="wait"|"collect", id=…)。
+  // 静态截止只给足余量，不由"客户端等待窗口"决定（那个窗口是调用方传 timeout_ms）。
   headless: 1200000,
   plan: 360000, // /plan 内部 300s
   worker: 1920000, // exec timeout_ms 由调用方给；静态上限取 32min

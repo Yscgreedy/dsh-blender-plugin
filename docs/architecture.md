@@ -427,14 +427,13 @@ Each entry has `id`, `kind`, `path`, `reason`, `owner`, and `reviewBy`; `npm run
 check:exceptions` (part of `npm run lint`) rejects an unknown kind, a missing path, a duplicate id,
 a reason shorter than 16 characters, and an expired `reviewBy`. Kinds: `file-budget`,
 `function-budget`, `python-static`, `single-line-reexport`, `facade-export`, `doc-path`,
-`matrix-row`, `python-private-import`. Seventeen entries exist today: five `file-budget` entries
+`matrix-row`, `python-private-import`. Sixteen entries exist today: five `file-budget` entries
 (`runtime/catalog/data.ts`, `runtime/core/sessions/registry.ts`, `runtime/core/local-evidence.ts`,
 and the two single-file Blender scripts `runtime/py/core/worker.py` and `runtime/py/render/view.py`);
-`single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`,
-`src/headless/receipts/index.ts`, and `runtime/execution/local-op/index.ts` (the documented
-src-to-lib bridge and three barrels); and eight `python-private-import` entries for the addon
-command modules that reuse private `_polyhaven_*` / `_polypizza_*` helpers from
-`integrations/*_client.py`.
+`single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`, and
+`runtime/execution/local-op/index.ts` (the documented src-to-lib bridge and two barrels); and eight
+`python-private-import` entries for the addon command modules that reuse private
+`_polyhaven_*` / `_polypizza_*` helpers from `integrations/*_client.py`.
 `tests/unit/python/test_private_import_contract.py` scans the addon with `ast` for every
 `_`-prefixed name imported from `integrations/*_client.py`, derives the expected count from
 `config/exceptions.json`, and fails on an unregistered pair or a stale entry, so the registry and
@@ -514,6 +513,8 @@ policy; a floor must not be lowered without a documented policy change in this g
 | One routing table plus codegen; one catalog <-> Python link table | GUI and worker routes cannot drift from config/routing.json; check:routes rejects stale generated tables, and the parity test rejects undeclared dispatch drift |
 | Kernel ports for cross-domain Python calls | The core can call view/deliver/gate capabilities without naming another domain's private API; the port name is the contract, and the layout test still enforces zero cross-domain imports |
 | One write authority with a fail-closed registry | A host-attributed write does not slip through when the Gateway has no session registry; legacy no-caller clients keep the lease path, and per-route skip rules remain the one local decision point |
+| One queue transport constructor | `src/tools/shared/queue-job.ts` owns the `/job` body (`surface=queue`, `op=submit`) and the gateway-unreachable receipt; the run lane and the local headless lane cannot drift apart, and a source-scan test keeps `/job` out of every other module |
+| Caller-scoped frame dedupe keys | `src/tools/shared/frame-key.ts` builds `channel:caller:parts`; a frame one agent already saw never makes another agent's receipt say "identical to the last one" while dropping the image |
 
 ## 10. How to change safely
 
@@ -522,7 +523,8 @@ policy; a floor must not be lowered without a documented policy change in this g
    migration notes together. Routing changes start in config/routing.json and regenerate through
    node scripts/gen-routes.mjs; catalog op changes must also update config/contracts.json. A
    cross-domain Python capability is registered as a port in `core/kit.py` (provider side) and called
-   through `call_port` (consumer side); it must not take another domain's `K.dsh_*_api`.
+   through `call_port` (consumer side); it must not take another domain's `K.dsh_*_api`. Queue job
+   bodies start in `src/tools/shared/queue-job.ts`, not in the lane that happens to send them.
 3. Add or update a failing test before the behavior change. Keep unit tests free of Blender, display,
    network, and user profile dependencies.
 4. Run the layer gates for what changed, then the full test and static gates. Run real-Blender E2E for
@@ -540,8 +542,11 @@ scripts/check-plan-ids.mjs is the ratchet that keeps new ones out.
 
 The 2026-11 P0/P1-1a refactor moved the shared runtime helpers into `runtime/foundation/`, the shared
 tables into `runtime/contracts/`, removed the last module-global write registry, and replaced the
-view/deliver/gate cross-domain API calls with kernel ports. Current metrics, the coupling inventory and
-the remaining roadmap live in [ARCHITECTURE.md](../ARCHITECTURE.md).
+view/deliver/gate cross-domain API calls with kernel ports. The P2 batch that followed collapsed the
+queue transport, the frame dedupe key and the receipt seam into single constructors, deleted the
+unused headless-receipt module (three files, 648 lines), and retired the two `DSH_HEADLESS_*` variables
+that no longer had a reader. Current metrics, the coupling inventory and the remaining roadmap live in
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
 Two historical analyses are kept for traceability, not as current guidance:
 [Procedura fusion analysis](Procedura-融合分析.md) (2026-09-17) and

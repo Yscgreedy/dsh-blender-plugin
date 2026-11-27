@@ -2,7 +2,7 @@
  * dsh-blender-plugin —— host 侧生命周期与工具面装配。
  *
  * 这里只做装配：配置 schema / 看护 / 15 个工具注册 / 测试接缝。
- * 具体实现按层拆在 contracts/ host/ tools/ plan/ headless/ utils/ ui/。
+ * 具体实现按层拆在 contracts/ host/ tools/ plan/ utils/ ui/。
  */
 import { PLUGIN_VERSION } from './constants.js'
 import { z, schemaResolve } from './contracts/tool.js'
@@ -23,12 +23,6 @@ import {
   registerBundledSkill,
 } from './host/skill.js'
 import { frameDedupe, resetFrameCache } from './utils/frame-cache.js'
-import {
-  HEADLESS_WAIT_MS,
-  headlessReceipt,
-  promotedReceipt,
-  receiptEnvelope,
-} from './headless/receipts/index.js'
 import { CARD_SPECS, cardPresenters } from './ui/cards.js'
 import type { HostContext } from './host/context.js'
 
@@ -88,9 +82,10 @@ export function apply(ctx: HostContext, config: Config): void {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * v0.9.4：**测试接缝**。tests/lossless_guard.mjs 直接 import 本模块，就能拿到
- *   ① 真实回执构造器（receiptEnvelope / headlessReceipt / promotedReceipt）
- *   ② 出口消毒器（losslessSanitize）
+ * v0.9.4：**测试接缝**。tests/unit/js/contract/lossless.test.ts 直接 import 本模块，就能拿到
+ *   ① 失败回执构造点（toolError）与出口消毒器（losslessSanitize）
+ *   ② 随包 skill / 卡片等装配面
+ * 回执本身的构造在 src/tools/receipt.ts（唯一构造器），不从这里转出。
  * 然后用**宿主的真校验器**（dsh-util-values 的 snapshotJsonValue）断言：
  * "本插件任何一个回执都过得了 lossless-JSON 门"。
  * 这是把「返回通道」从"靠人记得别写 undefined"变成"机器每次回归都验"的唯一办法。
@@ -102,10 +97,6 @@ export const __internals = {
   toolError: toolError,
   redactSecrets: redactSecrets,
   errorLine: errorLine,
-  receiptEnvelope: receiptEnvelope,
-  headlessReceipt: headlessReceipt,
-  promotedReceipt: promotedReceipt,
-  HEADLESS_WAIT_MS: HEADLESS_WAIT_MS,
   PLUGIN_VERSION: PLUGIN_VERSION,
   schemaResolve: schemaResolve,
   bundledSkill: {

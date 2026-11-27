@@ -5,10 +5,10 @@
  * 同画面默认不重复附图（frameDedupe），force=true 强制重发。
  */
 import type { HostContext } from '../../host/context.js'
-import { execCaller } from '../../host/exec-context.js'
 import { fetchFrame } from '../../host/http.js'
 import { text } from '../../contracts/dynamic.js'
 import { dedupeNote, frameDedupe } from '../../utils/frame-cache.js'
+import { frameKey } from '../shared/frame-key.js'
 import { toAttachment } from '../../utils/image.js'
 
 const LF = String.fromCharCode(10)
@@ -26,11 +26,9 @@ export async function withFrame(
   } catch {
     return out
   }
-  // C-5：去重键必须带调用方。旧键只有尺寸，A 看过的画面会让 B 收到"与上一张相同、
-  // 未重复附图"，而 B 从没见过那张图 —— 去重变成"信息被吞"。
-  const caller = execCaller()
-  const who = caller ? String(caller.agentId || caller.dshSessionId || 'unknown') : 'no-caller'
-  const dd = frameDedupe('py-see:' + who + ':' + String(size), f.hash, !!args.force)
+  // C-5：去重键必须带调用方（键构造在 shared/frame-key.ts）。旧键只有尺寸，
+  // A 看过的画面会让 B 收到"与上一张相同、未重复附图"，而 B 从没见过那张图 —— 去重变成"信息被吞"。
+  const dd = frameDedupe(frameKey('py-see', size), f.hash, !!args.force)
   if (dd.dup) {
     out.text = text(out.text) + dedupeNote(dd.repeats)
     return out

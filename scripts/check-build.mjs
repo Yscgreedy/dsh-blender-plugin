@@ -93,7 +93,7 @@ if (!failures.length) {
       'lib/host/backend/index.js',
       'lib/host/http.js',
       'lib/ui/cards.js',
-      'lib/headless/receipts/index.js',
+      'lib/tools/shared/queue-job.js',
       'lib/types/index.d.ts',
     ]
     const missing = required.filter((f) => !fs.existsSync(path.join(tmp, f)))

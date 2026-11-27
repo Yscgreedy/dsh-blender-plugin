@@ -15,6 +15,7 @@ import { backendPost, jsonPayload } from '../../host/http.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { workspaceNote, workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
+import { postJobSubmit, postQueueJob } from '../shared/queue-job.js'
 import { resolveSession } from '../shared/session.js'
 import { executeWorker } from './worker.js'
 import {
@@ -251,29 +252,21 @@ function failureOf(body: Record<string, unknown>, action: string): unknown {
   )
 }
 
-async function postQueue(
+/** 队列动作走唯一传输面（surface=queue 与不可达回执都在 shared/queue-job.ts）。 */
+function postQueue(
   port: number,
   payload: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<Record<string, unknown>> {
-  try {
-    return await backendPost(port, '/job', { surface: 'queue', ...payload }, timeoutMs)
-  } catch (e: unknown) {
-    return {
-      ok: false,
-      code: 'gateway_unreachable',
-      stage: 'transport',
-      root_cause: 'Gateway 不可达 · ' + text(e instanceof Error ? e.message : e),
-      fix: BACKEND_HINT,
-    }
-  }
+  return postQueueJob(port, payload, timeoutMs, BACKEND_HINT)
 }
 
 function submitPayload(args: Record<string, unknown>): Record<string, unknown> | string {
   const kind = text(args.kind).trim()
   if (kind !== 'render' && kind !== 'headless')
     return 'submit 需要 kind=render|headless（render=声明式最终渲染；headless=跑脚本）'
-  const payload: Record<string, unknown> = { op: 'submit', kind }
+  // op="submit" 由 jobSubmitBody 写（本地无头车道共用同一个构造器）。
+  const payload: Record<string, unknown> = { kind }
   if (present(args.priority)) payload.priority = Number(args.priority)
   if (kind === 'render') {
     if (present(args.script) || present(args.script_file))
@@ -340,7 +333,7 @@ async function submitRun(
       '给绝对路径，或传 workdir=<工作区根>',
       workspaceNote(ws),
     )
-  const body = await postQueue(port, built, 60000)
+  const body = await postJobSubmit(port, built, 60000, BACKEND_HINT)
   if (body.ok !== true) return failureOf(body, 'submit')
   // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与回执信封同源。
   const job = asRecord(body.job)

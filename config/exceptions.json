@@ -34,14 +34,6 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "id": "EXC-SINGLE-LINE-REEXPORT-HEADLESS-RECEIPTS",
-      "kind": "single-line-reexport",
-      "path": "src/headless/receipts/index.ts",
-      "reason": "Split barrel for the headless receipt helpers (split / normalize / format). Callers and tests import the receipt surface from this single path; the module files keep the implementation and unit tests target them directly.",
-      "owner": "s2-facade",
-      "reviewBy": "2027-06-30"
-    },
-    {
       "id": "EXC-PRIVATE-IMPORT-POLYHAVEN-ASSETS",
       "kind": "python-private-import",
       "path": "extension/dsh_blender_bridge/commands/assets_polyhaven.py",

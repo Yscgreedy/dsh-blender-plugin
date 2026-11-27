@@ -10,8 +10,7 @@ import { setPaused } from '../../../../src/host/backend/index'
 import { validateAvailabilityEnvelope } from '../../../../src/contracts/availability'
 import { formatActText } from '../../../../src/tools/py/envelope.js'
 
-const { losslessSanitize, errorLine, redactSecrets, toolError, headlessReceipt } =
-  plugin.__internals
+const { losslessSanitize, errorLine, redactSecrets, toolError } = plugin.__internals
 
 const CASES: Array<[string, Record<string, unknown>]> = [
   ['blender_session', { action: 'list' }],
@@ -107,7 +106,7 @@ describe('error, lossless and security contract', () => {
     }
   })
 
-  it('redacts tracebacks and secrets in Python and headless receipts', () => {
+  it('redacts tracebacks and secrets in Python and failed receipts', () => {
     const RAW =
       'Traceback (most recent call last):\n  File "C:/secret.py", line 1\nsk-abcdefghijklmnop\nBearer abcdefghijkl'
     const act = formatActText({ ok: true, ms: 3, stdout: RAW, stderr: RAW }).join(
@@ -117,10 +116,30 @@ describe('error, lossless and security contract', () => {
     expect(act).not.toContain('Traceback')
     expect(act).not.toContain('sk-abcdefghijklmnop')
     expect(act).not.toContain('Bearer abcdefghijkl')
-    const receipt = headlessReceipt({ ok: false, error: 'boom', traceback: RAW }, {})
-    expect(String(receipt.text)).not.toContain('Traceback')
-    expect(String(receipt.text)).not.toContain('sk-abcdefghijklmnop')
-    expect(String(receipt.text)).not.toContain('Bearer abcdefghijkl')
+    // 失败回执的构造点（src/tools/errors.ts）：text 是模型读的那一通道，
+    // envelope.error.message / error.detail 是脚本读的那一通道 —— 两处都不许漏原文。
+    const failure = toolError(
+      'headless_failed',
+      RAW,
+      'blender_run action=collect 取回结果，或按 stderr 修脚本',
+      RAW,
+    )
+    const receiptText = String(failure.text)
+    expect(receiptText).toContain('code: headless_failed')
+    expect(receiptText).toContain('next_action: blender_run action=collect')
+    expect(receiptText).not.toContain('Traceback')
+    expect(receiptText).not.toContain('File "')
+    expect(receiptText).not.toContain('sk-abcdefghijklmnop')
+    expect(receiptText).not.toContain('Bearer abcdefghijkl')
+
+    const detail = String(failure.envelope.error.detail || '')
+    expect(detail.length).toBeGreaterThan(0)
+    expect(detail).not.toContain('Traceback')
+    expect(detail).not.toContain('sk-abcdefghijklmnop')
+    expect(detail).not.toContain('Bearer abcdefghijkl')
+    expect(String(failure.envelope.error.message)).not.toContain('sk-abcdefghijklmnop')
+    expect(String(failure.envelope.root_cause)).not.toContain('Bearer abcdefghijkl')
+    expect(JSON.stringify(failure.envelope)).not.toContain('sk-abcdefghijklmnop')
   })
 
   it('rejects symlinked file= paths', () => {
