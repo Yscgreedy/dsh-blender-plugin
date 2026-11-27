@@ -175,10 +175,12 @@ if _K is not None:
 # 端口是 core 自己的稳定契约：payload = gate_run 的 kwargs（spec / preset / overrides / detail / out_json …）。
 # 注册在模块尾部，与 dsh_gate_api 同一时机：谁加载了 gate，谁就提供这个端口。
 def _port_gate_run(payload):
-    """端口 gate_run：dict 或 JSON 文本 → gate_run(**payload)（返回回执，call_port 会把 JSON 文本解析成对象）。"""
-    if isinstance(payload, str):
-        payload = json.loads(payload) if payload.strip() else {}
-    return gate_run(**dict(payload or {}))
+    """端口 gate_run：与旧 API 形态走同一条 dispatch。
+
+    这样端口调用仍经过参数白名单与 @工件 解析；返回值是 JSON 文本，由 call_port 解析成对象。
+    """
+    args = payload if isinstance(payload, str) else json.dumps(payload or {})
+    return gate_dispatch("run", args)
 
 
 _KIT.register_port("gate_run", _port_gate_run, GATE_VERSION)

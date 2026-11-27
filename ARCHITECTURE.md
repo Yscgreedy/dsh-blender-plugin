@@ -527,7 +527,7 @@ FR7 契约              X              ·              ·          X         X
 | 端口机制 | `K.dsh_ports` + `register_port / port_available / call_port / port_names`（`core/kit.py`）；`modules.json` 仍 **44** |
 | core→render | `c_evidence` 走 `view_capture`（`render/view.py` 注册 v4）；缺端口时同形错误、全程不触 bpy |
 | core→export | `gate_deliver` 走 `deliver_export` / `deliver_verify`；gate plan 的 `deliver_verify` 端口优先 + `dsh_<short>_api` 运行时回退 |
-| export→core | `require_gate` 的 gate 调用走 core 注册的 `gate_run` 端口；端口缺失才运行时构造回退名 |
+| export→core | `require_gate` 的 gate 调用走 core 注册的 `gate_run` 端口；端口内部仍走 `gate_dispatch`（参数白名单 + @工件解析），缺失才运行时构造回退名 |
 | 字面归零 | `runtime/py/core` 的 `dsh_view_api`/`dsh_deliver_api` **0**；`runtime/py/export` 的 `dsh_gate_api` **0**；core↔export 双向 API 字面 **0** |
 | 仍存在 | `core→render` 2 条（`dsh_calib_api`、`dsh_material_api`）；`core→assembly` 9 条；`core→geometry` 1 条 |
 | 源码层功能图 | `[core] [geometry] [assembly] [render] [export]` — **5 个单点**（import + API 字面） |
