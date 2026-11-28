@@ -5,7 +5,7 @@
  * before any provider start and that the receipt carries the numbers behind
  * the decision (limit / used / free / per_instance / reserve).
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { isolateConsentDir } from '../../helpers/consent-dir'
 import { buildDisplayCapabilities } from '../../../runtime/display/prerequisites.js'
 import {
@@ -16,6 +16,7 @@ import {
   VIRTUAL_GUI_PER_INSTANCE_BYTES,
 } from '../../../runtime/display/limits.js'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
+import { VIRTUAL_GUI_BUDGET_RECHECK_MS } from '../../../runtime/core/sessions/virtual-gui.js'
 import type { VirtualGuiLimits } from '../../../runtime/display/limits.js'
 import type { CallerIdentity } from '../../../runtime/core/sessions/types.js'
 import type {
@@ -72,6 +73,7 @@ function liveBudget(input: { limit?: number; configured?: number; total?: number
 
 function makeRegistry(budget: ReturnType<typeof liveBudget>) {
   const started: DisplayStartRequest[] = []
+  const stopped: DisplayInstance[] = []
   const provider: DisplayProvider = {
     kind: 'fake',
     capabilities: readyCap,
@@ -85,7 +87,9 @@ function makeRegistry(budget: ReturnType<typeof liveBudget>) {
       }
       return display
     },
-    async stop() {},
+    async stop(instance) {
+      stopped.push(instance)
+    },
     async health(): Promise<DisplayHealth> {
       return { ok: true, detail: 'fake' }
     },
@@ -96,7 +100,7 @@ function makeRegistry(budget: ReturnType<typeof liveBudget>) {
     waitForInstance: async () => true,
     limits: budget.snapshot,
   })
-  return { reg, started }
+  return { reg, started, stopped }
 }
 
 async function startAs(reg: SessionRegistry, caller: CallerIdentity) {
@@ -307,5 +311,141 @@ describe('virtual-gui memory budget (registry start)', () => {
     expect(refused.evidence.reason).toBe('limit')
     expect(refused.evidence.free).toBe(1 * GIB)
     expect(started).toHaveLength(2)
+  })
+})
+
+/**
+ * S-5b: admission is a prediction, so price the instance again after it is real.
+ *
+ * Five seconds after ready the same budget runs with the free memory of that
+ * moment and the instance count that now includes the newcomer. A verdict is
+ * recorded on the session; the process is never stopped for accounting.
+ */
+describe('virtual-gui post-ready budget recheck (S-5b)', () => {
+  it('records a memory degradation after 5 s without killing the instance', async () => {
+    vi.useFakeTimers()
+    try {
+      const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+      const { reg, stopped } = makeRegistry(budget)
+      const started = await startAs(reg, MAIN)
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      const id = String(started.session.id)
+      // Healthy at admission: no verdict on the start receipt.
+      expect(started.session.degradation).toBeUndefined()
+
+      // The spawned Blender ate more than its reservation.
+      budget.state.free = 4.5 * GIB
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS)
+
+      const status = reg.status(MAIN, id)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      const degradation = status.session.degradation as Record<string, unknown>
+      expect(degradation.reason).toBe('memory')
+      expect(degradation.free).toBe(4.5 * GIB)
+      // It is resident now, so the budget prices used=1: 2 * 1.5 GiB + 2 GiB.
+      expect(degradation.required).toBe(5 * GIB)
+      expect(degradation.limit).toBe(4)
+      expect(typeof degradation.at).toBe('number')
+      expect(Number(degradation.at)).toBeGreaterThan(0)
+
+      // The list projection says the same thing as status (one view, one source).
+      const row = reg.listFor(MAIN).find((entry) => entry.id === id)
+      expect(row?.degradation).toMatchObject({ reason: 'memory', free: 4.5 * GIB })
+
+      // The accounting never kills the process.
+      expect(stopped).toHaveLength(0)
+      expect(reg.virtualGuiCount()).toBe(1)
+      expect(reg.getSession(id)?.status).toBe('ready')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves a healthy instance without a degradation block', async () => {
+    vi.useFakeTimers()
+    try {
+      const budget = liveBudget({ free: 16 * GIB, total: 32 * GIB })
+      const { reg, stopped } = makeRegistry(budget)
+      const started = await startAs(reg, MAIN)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS)
+
+      const status = reg.status(MAIN, id)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.session.degradation).toBeUndefined()
+      expect(stopped).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not brand a session degraded when only the structural cap is reached', async () => {
+    vi.useFakeTimers()
+    try {
+      const budget = liveBudget({ limit: 1, configured: 1, free: 8 * GIB, total: 32 * GIB })
+      const { reg } = makeRegistry(budget)
+      const started = await startAs(reg, MAIN)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS)
+
+      const status = reg.status(MAIN, id)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      // used=1 >= limit=1 is the operator's cap working, not a shortfall: a
+      // degradation badge here would brand every session at virtualGuiMax=1.
+      expect(status.session.degradation).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the recheck when the session is stopped', async () => {
+    vi.useFakeTimers()
+    try {
+      const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+      const { reg } = makeRegistry(budget)
+      const started = await startAs(reg, MAIN)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      // The recheck is armed on the way in, and dropping the session is what
+      // disarms it — both halves matter, so the count is asserted on both sides.
+      expect(vi.getTimerCount()).toBe(1)
+      const stopped = await reg.stop(MAIN, id)
+      expect(stopped.ok).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+
+      budget.state.free = 1 * GIB
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS * 2)
+      expect(reg.getSession(id)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the recheck when the owner releases the session', async () => {
+    vi.useFakeTimers()
+    try {
+      const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+      const { reg } = makeRegistry(budget)
+      const started = await startAs(reg, MAIN)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      expect(vi.getTimerCount()).toBe(1)
+      const released = reg.release(MAIN, id)
+      expect(released.ok).toBe(true)
+      expect(reg.getSession(id)).toBeNull()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

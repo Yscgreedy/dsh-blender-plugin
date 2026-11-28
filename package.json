@@ -65,18 +65,10 @@
     "@deepseek-ai/cordis": ">=4.0.0-rc <5",
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "@deepseek-ai/schemastery": "^3.18.0",
-    "cordis": ">=4.0.0-rc <5",
-    "schemastery": "^3.18.0"
+    "@deepseek-ai/schemastery": "^3.18.0"
   },
-  "//peerDependenciesMeta": "schemastery / cordis 在不同 DSH 版本间是有 scope / 无 scope 两种形态。两个名字都声明且都标 optional —— 任一满足即可，宿主给了哪个就用哪个（见 src/index.ts 的运行时解析）。",
+  "//peerDependenciesMeta": "只声明 @deepseek-ai/* 谱系（源码只 import type @deepseek-ai/*，不 import 裸名 cordis / schemastery）；裸名是 npm 上另一条谱系，声明它会在 registry 安装时拉进第二份实现（H-1 / DSH-更新适配 R7，2026-11-28）。scope 版 cordis / schemastery 标 optional，宿主没装也能走 link 装配。",
   "peerDependenciesMeta": {
-    "cordis": {
-      "optional": true
-    },
-    "schemastery": {
-      "optional": true
-    },
     "@deepseek-ai/cordis": {
       "optional": true
     },

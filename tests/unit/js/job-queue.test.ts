@@ -9,7 +9,8 @@ import type { JobExecutor, JobHandle, JobRecord } from '../../../runtime/core/qu
 import { JobSurface, callerFromHeaders } from '../../../runtime/core/queue/handler.js'
 import { SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
 import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
-import { CFG, resolveQueueSetting } from '../../../runtime/config.js'
+import { CFG } from '../../../runtime/config.js'
+import { resolveQueueSetting } from '../../../runtime/config-queue.js'
 import { listRows } from '../../../src/tools/run/presenter.js'
 import type { CallerIdentity, SessionRecord } from '../../../runtime/core/sessions/types.js'
 
@@ -536,63 +537,63 @@ describe('3.1 collect tail never cuts a line in half (T-1)', () => {
   })
 })
 
+interface FakeProcess {
+  pid: number
+  stdout: EventEmitter
+  stderr: EventEmitter
+  kill: () => void
+  once: EventEmitter['once']
+  on: EventEmitter['on']
+  emit: EventEmitter['emit']
+  removeListener: EventEmitter['removeListener']
+}
+
+function fakeChild(): FakeProcess {
+  const child = new EventEmitter() as unknown as FakeProcess
+  child.pid = 4242
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.kill = () => {}
+  return child
+}
+
+function jobRecord(kind: 'render' | 'headless', params: Record<string, unknown>): JobRecord {
+  return {
+    id: 'job-t2',
+    kind,
+    params,
+    state: 'running',
+    priority: 0,
+    slot: kind === 'render' ? 'gpu' : 'cpu',
+    owner: { hostId: 'h', dshSessionId: 'd', agentId: 'a' },
+    createdAt: 1,
+    updatedAt: 1,
+    assignedAt: 1,
+    startedAt: 1,
+    finishedAt: null,
+    pid: null,
+    decision: null,
+    result: null,
+    artifacts: [],
+    logs: { stdout: '', stderr: '' },
+    error: null,
+    events: [],
+  }
+}
+
+function executorWith(child: FakeProcess, tempRoot: string): SpawnJobExecutor {
+  return new SpawnJobExecutor({
+    blenderExe: 'blender-test',
+    tempRoot,
+    spawnImpl: (() => child) as unknown as (typeof import('node:child_process'))['spawn'],
+  })
+}
+
+function scriptMapOf(provenance: Record<string, unknown> | undefined): Record<string, unknown> {
+  return (provenance?.script_map || {}) as Record<string, unknown>
+}
+
 describe('3.1 headless script_map points tracebacks at the source file (T-2)', () => {
-  interface FakeProcess {
-    pid: number
-    stdout: EventEmitter
-    stderr: EventEmitter
-    kill: () => void
-    once: EventEmitter['once']
-    on: EventEmitter['on']
-    emit: EventEmitter['emit']
-    removeListener: EventEmitter['removeListener']
-  }
-
-  function fakeChild(): FakeProcess {
-    const child = new EventEmitter() as unknown as FakeProcess
-    child.pid = 4242
-    child.stdout = new EventEmitter()
-    child.stderr = new EventEmitter()
-    child.kill = () => {}
-    return child
-  }
-
-  function jobRecord(kind: 'render' | 'headless', params: Record<string, unknown>): JobRecord {
-    return {
-      id: 'job-t2',
-      kind,
-      params,
-      state: 'running',
-      priority: 0,
-      slot: kind === 'render' ? 'gpu' : 'cpu',
-      owner: { hostId: 'h', dshSessionId: 'd', agentId: 'a' },
-      createdAt: 1,
-      updatedAt: 1,
-      assignedAt: 1,
-      startedAt: 1,
-      finishedAt: null,
-      pid: null,
-      decision: null,
-      result: null,
-      artifacts: [],
-      logs: { stdout: '', stderr: '' },
-      error: null,
-      events: [],
-    }
-  }
-
-  function executorWith(child: FakeProcess, tempRoot: string): SpawnJobExecutor {
-    return new SpawnJobExecutor({
-      blenderExe: 'blender-test',
-      tempRoot,
-      spawnImpl: (() => child) as unknown as (typeof import('node:child_process'))['spawn'],
-    })
-  }
-
-  function scriptMapOf(provenance: Record<string, unknown> | undefined): Record<string, unknown> {
-    return (provenance?.script_map || {}) as Record<string, unknown>
-  }
-
   it('maps the temp job.py back to the caller script_file', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-t2-src-'))
     const source = path.join(dir, 'user_script.py')
@@ -644,6 +645,80 @@ describe('3.1 headless script_map points tracebacks at the source file (T-2)', (
     const collected = queue.collect(main(), submitted.id, 4000)
     const job = collected.job as JobRecord
     expect(scriptMapOf(job.result?.provenance).source_path).toBe(source)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('3.1 render pre_script runs before the prelude (Q-5)', () => {
+  const PRE = 'PRE_SECRET = 1\nprint("PRE_SECRET", PRE)'
+
+  it('accepts pre_script on render and keeps rejecting script / script_file', () => {
+    const { queue } = setup()
+    const job = queue.submit(main(), { kind: 'render', pre_script: PRE })
+    expect(job.params.pre_script).toBe(PRE)
+    expect(() => queue.submit(main(), { kind: 'render', script: 'print(1)' })).toThrow(QueueError)
+    try {
+      queue.submit(main(), { kind: 'render', script_file: 'x.py' })
+      throw new Error('expected queue_render_script')
+    } catch (e) {
+      expect(e).toBeInstanceOf(QueueError)
+      const failure = (e as QueueError).failure
+      expect(failure.code).toBe('queue_render_script')
+      // 文案要把唯一放行的钩子说清，否则调用方只知道"被拒"。
+      expect(failure.fix).toContain('pre_script')
+    }
+  })
+
+  it('puts -P <tmp>/pre.py before --python-expr and keeps args untouched without it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pre-'))
+    const blend = path.join(dir, 'scene.blend')
+    fs.writeFileSync(blend, 'x')
+    const base = { file: blend, resolution: [16, 16], frames: [1, 1] }
+
+    const built = buildJobArgs(jobRecord('render', { ...base, pre_script: PRE }), dir)
+    // 顺序：-b --factory-startup -P pre.py --python-expr <prelude>：pre_script 在 prelude **之前**。
+    expect(built.args[1]).toBe('-b')
+    expect(built.args[2]).toBe('--factory-startup')
+    expect(built.args[3]).toBe('-P')
+    expect(String(built.args[4]).endsWith('pre.py')).toBe(true)
+    expect(built.args[5]).toBe('--python-expr')
+    // 内容只落临时文件，不进 argv / argsTail（回执里也就没有脚本正文）。
+    expect(fs.readdirSync(dir)).toContain('pre.py')
+    expect(fs.readFileSync(path.join(dir, 'pre.py'), 'utf8')).toContain('PRE_SECRET')
+    expect(built.args.join(' ')).not.toContain('PRE_SECRET')
+    expect(JSON.stringify(built.argsTail)).not.toContain('PRE_SECRET')
+
+    const plain = buildJobArgs(jobRecord('render', base), dir)
+    expect(plain.args).not.toContain('-P')
+    expect(plain.args[1]).toBe('-b')
+    expect(plain.args[2]).toBe('--factory-startup')
+    expect(plain.args[3]).toBe('--python-expr')
+    expect(plain.args.filter((a) => a === '--python-expr')).toHaveLength(1)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('never echoes the pre_script body into the job stdout', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pre-run-'))
+    const blend = path.join(dir, 'scene.blend')
+    fs.writeFileSync(blend, 'x')
+    const child = fakeChild()
+    const executor = executorWith(child, path.join(dir, 'tmp'))
+    const handle = executor.start(
+      jobRecord('render', {
+        file: blend,
+        resolution: [8, 8],
+        frames: [1, 1],
+        pre_script: PRE,
+      }),
+    )
+    child.stdout.emit('data', Buffer.from('DSH_RENDER {"device":"cpu"}\n'))
+    child.emit('close', 0, null)
+    const result = await handle.done
+    expect(result.stdout).not.toContain('PRE_SECRET')
+    expect(JSON.stringify(result.provenance)).not.toContain('PRE_SECRET')
+    // 作业结束临时目录被删：pre.py 不留在盘上。
+    const tempRoot = path.join(dir, 'tmp')
+    expect(fs.readdirSync(tempRoot)).toEqual([])
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })

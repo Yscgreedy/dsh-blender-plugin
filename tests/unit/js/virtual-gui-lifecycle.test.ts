@@ -330,6 +330,47 @@ describe('S-4 user-gui no longer blocks a same-host virtual-gui', () => {
     expect(userGuiClaim({ ...record, owner: null }, MAIN)).toBe('unowned')
   })
 
+  it('passes existing_user_gui through the start receipt when policy=allow (S-4b)', async () => {
+    const { reg } = withUserGui()
+    const previous = process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+    // allow = pre-approved: the start succeeds without a token, so the receipt is
+    // the only place the caller can learn that someone else's window exists.
+    process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT = 'allow'
+    try {
+      const started = await reg.start(OTHER, {})
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      expect(started.session.consent_source).toBe('policy:allow')
+      const note = started.session.existing_user_gui as Record<string, unknown>
+      expect(note.claim).toBe('others')
+      expect(note.blocking).toBe(false)
+      expect(note.owner_agent).toBe('a')
+      expect((note.options as string[]).length).toBeGreaterThanOrEqual(2)
+      // The user-gui keeps its owner; the new window is the caller's own.
+      expect(reg.getSession('user-gui:inst-1')?.owner?.agentId).toBe('a')
+    } finally {
+      if (previous === undefined) delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+      else process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT = previous
+    }
+  })
+
+  it('omits existing_user_gui when no user-gui was in the way (S-4b)', async () => {
+    const list = [{ instanceId: 'inst-1', ready: true }]
+    const { provider } = fakeProvider()
+    const reg = makeRegistry({ provider, instances: list })
+    const previous = process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+    process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT = 'allow'
+    try {
+      const started = await reg.start(MAIN, {})
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      expect(started.session.existing_user_gui).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+      else process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT = previous
+    }
+  })
+
   it('carries the non-blocking wording for others / unowned instead of refusing', async () => {
     const { record } = withUserGui()
     expect(record.owner?.agentId).toBe('a')

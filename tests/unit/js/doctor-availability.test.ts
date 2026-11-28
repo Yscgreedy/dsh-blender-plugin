@@ -9,7 +9,8 @@
  * 本文件只测纯函数 + doctor 回执的 additive 形状；不碰 HTTP、不落 consent 请求。
  */
 import { describe, expect, it } from 'vitest'
-import { createDoctorApi, virtualGuiAvailability } from '../../../runtime/core/engine-api/doctor.js'
+import { createDoctorApi } from '../../../runtime/core/engine-api/doctor.js'
+import { virtualGuiAvailability } from '../../../runtime/core/engine-api/doctor-virtualgui.js'
 import type { EngineApiDeps } from '../../../runtime/core/engine-api/index.js'
 import type { CallerIdentity } from '../../../runtime/core/sessions/types.js'
 import { buildDisplayCapabilities } from '../../../runtime/display/prerequisites.js'

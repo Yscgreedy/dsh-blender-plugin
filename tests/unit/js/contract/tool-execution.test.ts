@@ -272,6 +272,35 @@ describe('model tool execution semantics (six-tool surface)', () => {
     expect(requestsSince(mark).some((r: any) => r.path === '/job')).toBe(false)
   })
 
+  it('blender_run forwards render pre_script and still refuses script/script_file', async () => {
+    backend.setHandler('POST /job', () => ({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(JSON.stringify({ ok: true, op: 'submit', job: QUEUED_JOB })),
+    }))
+    const PRE = 'import bpy\nbpy.data.objects["HELPER"].hide_render = True'
+    const mark = backend.requests.length
+    const out = await run('blender_run', {
+      action: 'submit',
+      kind: 'render',
+      file: '',
+      frames: [1, 2],
+      pre_script: PRE,
+    })
+    expect(out.text).toContain('RUN job-1 · render · queued')
+    // 白名单漏了它就会静默丢弃：这里直接看发出去的 /job body。
+    const body = requestSince(mark, 'POST', '/job')?.body
+    expect(body).toMatchObject({ surface: 'queue', op: 'submit', kind: 'render', pre_script: PRE })
+    // 整段脚本的两种写法仍被拒，且一次 /job 都不发。
+    for (const bad of [{ script: 'print(1)' }, { script_file: 'C:/tmp/x.py' }]) {
+      const badMark = backend.requests.length
+      const denied = await run('blender_run', { action: 'submit', kind: 'render', ...bad })
+      expect(denied.text).toContain('render 不接受 script/script_file')
+      expect(requestsSince(badMark).some((r: any) => r.path === '/job')).toBe(false)
+    }
+    backend.setHandler('POST /job')
+  })
+
   it('blender_run requires a script or file for a headless submit', async () => {
     const out = await run('blender_run', { action: 'submit', kind: 'headless' })
     expect(out.text).toContain('headless 需要 script / script_file / file 之一')

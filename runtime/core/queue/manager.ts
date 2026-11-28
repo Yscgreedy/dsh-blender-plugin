@@ -137,7 +137,8 @@ export class JobQueue {
         queueFailure(
           'queue_render_script',
           'render does not execute Python scripts',
-          'Use kind=headless for a script.',
+          // Q-5 方案 a：render 只放行 pre_script（渲染前跑一次的场景准备），整段脚本仍走 headless。
+          'Use kind=headless for a script, or pass render pre_script=<inline Python> for scene preparation (it runs once, before the declarative render prelude).',
         ),
       )
     if (pendingCount(this.jobs) >= this.capacity.pending) {

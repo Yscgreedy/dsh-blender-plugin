@@ -28,6 +28,15 @@ export const VIRTUAL_GUI_HANDSHAKE_TIMEOUT_MS = 30_000
  * tool call; afterwards the record still expires and stays reclaimable.
  */
 export const VIRTUAL_GUI_SUBAGENT_OWNER_STALE_MS = 300_000
+/**
+ * How long after "ready" the budget is priced again (S-5b).
+ *
+ * Long enough for the spawned Blender to have loaded its startup scene (that is
+ * where the memory actually goes), short enough to be inside the same tool call
+ * the caller is still waiting on. The timer is unref'd and cancelled on
+ * stop/release, so it never holds the Gateway open for accounting.
+ */
+export const VIRTUAL_GUI_BUDGET_RECHECK_MS = 5_000
 const HANDSHAKE_POLL_MS = 100
 
 /** Everything the lifecycle needs from the registry it belongs to. */
@@ -184,6 +193,8 @@ function handshakeFailure(
 export class VirtualGuiLifecycle {
   private readonly host: VirtualGuiHost
   private readonly selectProvider: ProviderSelector
+  /** Pending post-ready budget rechecks, keyed by session id (S-5b). */
+  private readonly rechecks = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(host: VirtualGuiHost, selectProvider: ProviderSelector = () => null) {
     this.host = host
@@ -237,14 +248,45 @@ export class VirtualGuiLifecycle {
       await this.dispose(display, provider)
       return handshakeFailure(instanceId, display, VIRTUAL_GUI_HANDSHAKE_TIMEOUT_MS)
     }
+    const session = this.readySession(caller, instanceId, display, provider)
+    this.host.addSession(session)
+    this.scheduleRecheck(session)
+    // consent_source tells the caller why it was allowed (policy / token / human
+    // approval) — the field the 3.1 receipt was missing when start was refused.
+    // existing_user_gui (S-4b) is the gate's three-way note about a user-gui this
+    // start did not have to obey: without it, policy=allow succeeded silently and
+    // the caller could not tell "nobody else is here" from "someone else is, and
+    // it does not block you".
+    return {
+      ok: true,
+      session: {
+        ...sessionView(session),
+        consent_source: gated.consent_source,
+        ...(gated.existing_user_gui ? { existing_user_gui: gated.existing_user_gui } : {}),
+      },
+    }
+  }
+
+  /**
+   * The ready session record for one spawned instance.
+   *
+   * Ownership: the starter owns the window it spawned (S-6) — a subagent keeps it
+   * for a full job wait instead of the generic 30 s, a main agent keeps 30 min.
+   * Split out of start() so the pre-spawn / admission / receipt flow stays one
+   * readable sequence and this literal keeps its per-field comments.
+   */
+  private readySession(
+    caller: CallerIdentity,
+    instanceId: string,
+    display: DisplayInstance,
+    provider: DisplayProvider,
+  ): SessionRecord {
     const now = Date.now()
-    const session: SessionRecord = {
+    return {
       id: 'virtual-gui:' + instanceId,
       kind: 'virtual-gui',
       instanceId,
       status: 'ready',
-      // The starter owns the window it spawned (S-6): a subagent keeps it for a
-      // full job wait instead of the generic 30 s, a main agent keeps 30 min.
       owner: ownerOf(
         caller,
         caller.role === 'subagent' ? VIRTUAL_GUI_SUBAGENT_OWNER_STALE_MS : undefined,
@@ -261,10 +303,6 @@ export class VirtualGuiLifecycle {
       createdAt: now,
       lastActivityAt: now,
     }
-    this.host.addSession(session)
-    // consent_source tells the caller why it was allowed (policy / token / human
-    // approval) — the field the 3.1 receipt was missing when start was refused.
-    return { ok: true, session: { ...sessionView(session), consent_source: gated.consent_source } }
   }
 
   async stop(
@@ -300,12 +338,75 @@ export class VirtualGuiLifecycle {
     return { ok: true, stopped: true }
   }
 
-  /** Stop a virtual-gui session whose owner no longer exists (best effort). */
+  /**
+   * Stop a virtual-gui session whose owner no longer exists (best effort).
+   *
+   * This is the single teardown choke point (stop / release / disposeAll /
+   * instance-gone all land here), so a pending budget recheck is cancelled first:
+   * a timer that outlived its session would price an instance that no longer
+   * exists and could mark a stopped record degraded.
+   */
   async disposeSession(session: SessionRecord): Promise<void> {
+    this.cancelRecheck(session.id)
     if (session.provider && session.display) await this.dispose(session.display, session.provider)
     session.display = null
     session.provider = null
     session.status = 'stopped'
+  }
+
+  /** Arm the post-ready budget recheck (S-5b); replaces any pending one. */
+  private scheduleRecheck(session: SessionRecord): void {
+    this.cancelRecheck(session.id)
+    const timer = setTimeout(() => {
+      this.rechecks.delete(session.id)
+      this.recheckBudget(session)
+    }, VIRTUAL_GUI_BUDGET_RECHECK_MS)
+    // Accounting must never be a reason for the process to stay alive.
+    const unref = (timer as unknown as { unref?: () => void }).unref
+    if (typeof unref === 'function') unref.call(timer)
+    this.rechecks.set(session.id, timer)
+  }
+
+  /** Drop a pending recheck (stop / release / dispose). */
+  private cancelRecheck(sessionId: string): void {
+    const timer = this.rechecks.get(sessionId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.rechecks.delete(sessionId)
+  }
+
+  /**
+   * Price the instance again once it is real (S-5b).
+   *
+   * The same budget admitVirtualGui runs before a spawn, with the free memory of
+   * *now* and the count that includes this instance: a verdict of "no" means the
+   * machine can no longer pay for one more window, which is exactly the pressure
+   * this instance added. The verdict is recorded on the session and never stops
+   * the process — the caller may be mid-scene, and accounting is not a kill
+   * switch; the next start is priced from live numbers again anyway.
+   */
+  private recheckBudget(session: SessionRecord): void {
+    if (session.status !== 'ready') return
+    // A session removed without disposeSession (registry restart) must not be
+    // resurrected by a stale timer.
+    if (this.host.getSession(session.id) !== session) return
+    const limits = this.host.limits()
+    const admission = admitVirtualGui({
+      used: this.host.virtualGuiCount(),
+      configured: Math.min(limits.limit, limits.configured),
+      freeMemBytes: limits.free_mem_bytes,
+      totalMemBytes: limits.total_mem_bytes,
+    })
+    // Only memory pressure is a degradation of this instance; 'limit' means the
+    // operator's cap was reached, which is the cap working, not a shortfall.
+    if (admission.reason !== 'memory') return
+    session.degradation = {
+      reason: 'memory',
+      at: Date.now(),
+      free: admission.free,
+      required: admission.required_bytes,
+      limit: admission.limit,
+    }
   }
 
   private async dispose(display: DisplayInstance, provider: DisplayProvider): Promise<void> {

@@ -20,11 +20,7 @@ import { COMMAND_CATALOG } from '../../catalog/index.js'
 import { errorMessage } from '../../foundation/json.js'
 import type { EngineApiDeps } from './index.js'
 import { metricsView } from './metrics.js'
-import { displayCapabilities } from '../../display/prerequisites.js'
-import { buildInstallPlans } from '../../display/install.js'
-import type { DisplayCapabilities } from '../../display/types.js'
-import type { UserGuiClaim } from '../sessions/display-gate.js'
-import type { CallerIdentity } from '../sessions/types.js'
+import { virtualGuiSection, virtualGuiView } from './doctor-virtualgui.js'
 
 /**
  * addon 侧阶段预算。宿主 backendJson 默认 20s、T.commands 静态截止 60s；
@@ -424,93 +420,6 @@ function forcedDoctor(E: EngineApiDeps, opts: Record<string, unknown>): Record<s
     virtualGui: virtualGuiSection(opts, true),
     metrics: metricsView(E),
   }
-}
-
-/**
- * S-1（台账 优先级 1）：doctor 原来只说能力的 enabled/ready，不说「**本 caller** 现在
- * 能不能开」，于是 doctor 说 ready、start 却以 session_already_available /
- * feature_disabled 拒 —— 两个回执互相矛盾。
- *
- * 判据与 start 同源、但只读：归属关系用 display-gate 导出的 userGuiClaim 在路由层
- * 算好（S-4：只有「我自己的 ready user-gui」挡 start，别人的/无主的窗口不挡），
- * 能力用 displayCapabilities()，失败 reason 直接沿用 start 的 code。consent 解析、
- * 启动、任何写动作都不在这里发生。
- */
-export interface VirtualGuiAvailability {
-  available_for_caller: boolean
-  reason: string
-}
-
-export interface VirtualGuiAvailabilityInput {
-  /** DSH 身份；null = 无 caller（curl /doctor、没带身份头）。 */
-  caller: CallerIdentity | null
-  /** start 的同一个归属判据（display-gate:userGuiClaim）的结论；null = 没有挡住 start 的窗口。 */
-  claim?: UserGuiClaim | null
-  capability: DisplayCapabilities
-}
-
-export function virtualGuiAvailability(input: VirtualGuiAvailabilityInput): VirtualGuiAvailability {
-  const { caller, claim, capability } = input
-  // 没有身份就没有「本 caller」可言：如实 false，而不是替别人报 ready。
-  if (!caller) return { available_for_caller: false, reason: 'caller_identity_required' }
-  // S-4：只有自己已经拥有一扇就绪的 user-gui 才会挡住 start。
-  if (claim === 'mine') return { available_for_caller: false, reason: 'session_already_available' }
-  if (!capability.enabled) return { available_for_caller: false, reason: 'feature_disabled' }
-  if (!capability.ready)
-    return {
-      available_for_caller: false,
-      reason:
-        String(capability.reason || '').indexOf('prerequisites') === 0
-          ? 'prerequisites_missing'
-          : 'provider_unavailable',
-    }
-  return { available_for_caller: true, reason: 'ready' }
-}
-
-/** opts.caller → CallerIdentity（HTTP 边界递进来的普通对象；坏形状按「无身份」处理）。 */
-function callerOf(opts: Record<string, unknown>): CallerIdentity | null {
-  const raw = opts.caller
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const view = raw as Record<string, unknown>
-  const hostId = String(view.hostId || '')
-  const dshSessionId = String(view.dshSessionId || '')
-  const agentId = String(view.agentId || '')
-  if (!hostId || !dshSessionId || !agentId) return null
-  return { hostId, dshSessionId, agentId, role: view.role === 'main' ? 'main' : 'subagent' }
-}
-
-/** opts.claim → start 的归属结论（坏值按「没有挡住 start」处理）。 */
-function claimOf(opts: Record<string, unknown>): UserGuiClaim | null {
-  const raw = opts.claim
-  return raw === 'mine' || raw === 'others' || raw === 'unowned' ? raw : null
-}
-
-/**
- * doctor 的 virtualGui 段：能力 + 本 caller 的只读判定（additive）。
- * withInstallPlans 只在原来就带它的分支（forced / gateway-required）保留：正常分支
- * 不多出安装计划，既有形状一个字不动。
- */
-function virtualGuiSection(
-  opts: Record<string, unknown>,
-  withInstallPlans: boolean,
-): Record<string, unknown> {
-  const capability = displayCapabilities()
-  const availability = virtualGuiAvailability({
-    caller: callerOf(opts),
-    claim: claimOf(opts),
-    capability,
-  })
-  return {
-    ...capability,
-    ...(withInstallPlans ? { installPlans: buildInstallPlans(capability) } : {}),
-    ...availability,
-  }
-}
-
-/** Capabilities plus the guided-install plans shared by doctor --fix and the add-on button. */
-function virtualGuiView(): Record<string, unknown> {
-  const capabilities = displayCapabilities()
-  return { ...capabilities, installPlans: buildInstallPlans(capabilities) }
 }
 
 export function createDoctorApi(E: EngineApiDeps) {

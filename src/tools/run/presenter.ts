@@ -427,7 +427,9 @@ export function runHelp(): string {
   return [
     'blender_run 动作（唯一作业入口：submit → jobId → status/wait/collect/cancel；无同步模式）：',
     '  action=submit kind=render|headless + 参数',
-    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/device/compute_device_type/channels/priority',
+    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/device/compute_device_type/channels/priority/pre_script',
+    '      · pre_script=Python 源码：渲染前跑一次，只做场景准备（隐藏对象/切可见性/材质）；' +
+      'engine/resolution/samples/format/output/camera 由 render prelude 在它之后设置，脚本改不动这些输出参数',
     '      · channels=["render","alpha","mask","ink"]（默认 ["render"]）：每通道给路径 + foreground_px/coverage/n_components/bbox；' +
       '缺 ink 对象时该通道 skipped、整体 verdict=degraded（degraded ≠ 通过，但不是失败）',
     '      · device=auto（默认，能绑 GPU 就绑）/gpu/cpu + compute_device_type=OPTIX|CUDA|HIP|ONEAPI|METAL|NONE；' +

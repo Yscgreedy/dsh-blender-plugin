@@ -123,6 +123,34 @@ export interface Owner {
   staleMs?: number
 }
 
+/**
+ * Post-ready budget verdict for one virtual-gui session (S-5b).
+ *
+ * Admission is a prediction made before the spawn; five seconds after the window
+ * is ready the same budget is re-run with the free memory of that moment and the
+ * instance count that now includes it. When it no longer holds, the verdict is
+ * recorded here and nowhere else: the instance keeps running (a scene lives in
+ * it), and the field is what makes the next admission and the session view speak
+ * from measurement instead of the pre-spawn estimate.
+ */
+export interface SessionDegradation {
+  /**
+   * Why the instance is over budget. Only memory pressure is a degradation: a
+   * 'limit' verdict would just mean the operator's own virtualGuiMax cap is doing
+   * its job (every session would be branded degraded at limit=1), so that case is
+   * not recorded — the cap is visible in `limit` and in the admission receipt.
+   */
+  reason: 'memory'
+  /** When the recheck ran (epoch ms). */
+  at: number
+  /** Free memory measured at that moment (0 = the platform did not report it). */
+  free: number
+  /** Budget the next instance would need then: (used + 1) * per-instance + reserve. */
+  required: number
+  /** Structural ceiling that applied at that moment. */
+  limit: number
+}
+
 export interface SessionRecord {
   id: string
   kind: SessionKind
@@ -141,6 +169,8 @@ export interface SessionRecord {
   provider: DisplayProvider | null
   createdAt: number
   lastActivityAt: number
+  /** Post-ready budget verdict (S-5b); absent = the budget still holds. */
+  degradation?: SessionDegradation | null
 }
 
 export type SessionResult<T> = ({ ok: true } & T) | AvailabilityFailure
@@ -372,6 +402,8 @@ export function sessionView(s: SessionRecord, caller?: CallerIdentity): Record<s
           pid: s.display.pid,
         }
       : null,
+    // Additive: only a virtual-gui whose post-ready recheck failed carries it.
+    ...(s.degradation ? { degradation: s.degradation } : {}),
     humanModified: s.humanEdits.size
       ? {
           at: s.humanModifiedAt,

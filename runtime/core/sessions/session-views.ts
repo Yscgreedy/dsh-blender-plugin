@@ -101,6 +101,9 @@ export class SessionViews {
         : null,
       is_mine: mine,
       borrowed: !mine && sameHost(session.owner, c),
+      // Additive attribution for op receipts: the instance is over its budget
+      // (S-5b) — readable, still alive, and honest about the pressure it adds.
+      ...(session.degradation ? { degradation: session.degradation } : {}),
     }
   }
 
@@ -110,7 +113,9 @@ export class SessionViews {
   ): SessionResult<{ session: Record<string, unknown> }> {
     this.host.prune()
     this.refreshOwner(c)
-    const session = sessionId ? this.host.sessions.get(String(sessionId)) : this.host.findForCaller(c)
+    const session = sessionId
+      ? this.host.sessions.get(String(sessionId))
+      : this.host.findForCaller(c)
     if (!session) {
       // A released record is gone by design; still answer what happened instead of
       // a bare session_not_found, using the last instance this caller attached.

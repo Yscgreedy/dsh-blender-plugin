@@ -92,6 +92,11 @@ const RUN_PARAMETERS = {
   camera: { type: 'string', description: 'render：camera=true 用场景相机，或相机对象名' },
   ...RENDER_DEVICE_PARAMS,
   channels: { type: 'json', description: CHANNELS_DESCRIPTION },
+  pre_script: {
+    type: 'string',
+    description:
+      'render：渲染前跑一次的 Python 源码，只做场景准备；engine/resolution/samples/format/output/camera 由 render prelude 之后设置，脚本改不动',
+  },
   script: {
     type: 'string',
     description:

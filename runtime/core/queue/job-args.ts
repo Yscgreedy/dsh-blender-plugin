@@ -292,6 +292,30 @@ export interface BuiltJobArgs {
   bootstrap: boolean
 }
 
+/**
+ * render 的固定入口 argv：`-b --factory-startup [-P <tmp>/pre.py] --python-expr <prelude>`。
+ *
+ * Q-5 方案 a：`pre_script` 写成临时 pre.py，`-P` **必须排在 prelude 之前** —— prelude 之后才
+ * 设置 engine/resolution/samples/format/output/camera，所以 pre_script 只做场景准备、
+ * 改不动输出参数。内容只落临时文件，不上命令行/回执。无 pre_script 时 argv 与加这个功能之前逐字一致。
+ */
+function renderEntryArgs(
+  params: Record<string, unknown>,
+  tempDir: string,
+  renderParams: Record<string, unknown>,
+): string[] {
+  const args = ['-b', '--factory-startup']
+  const preScript = asString(params.pre_script)
+  if (preScript.trim()) {
+    const prePath = path.join(tempDir, 'pre.py')
+    fs.writeFileSync(prePath, preScript.endsWith('\n') ? preScript : preScript + '\n', 'utf8')
+    // 与 file 参数同口径：交给 Blender 的是它那一侧的路径（WSL 里 /mnt/... 它打不开）。
+    args.push('-P', wslToWin(prePath))
+  }
+  args.push('--python-expr', renderPrelude(renderParams))
+  return args
+}
+
 export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
   const params = job.params
   let outdir = asString(params.outdir) || null
@@ -328,7 +352,7 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
       ensureRenderDir(outdir, output)
     }
     const renderParams = { ...params, output }
-    args.push('-b', '--factory-startup', '--python-expr', renderPrelude(renderParams))
+    args.push(...renderEntryArgs(params, tempDir, renderParams))
     const frames = frameRange(params)
     if (frames) args.push('-s', String(frames.start), '-e', String(frames.end), '-a')
     // render channels：-a 之后追加一次 numpy 收尾（没传 channels 时一个参数都不加）

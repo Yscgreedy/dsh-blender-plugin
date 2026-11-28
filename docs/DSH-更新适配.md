@@ -62,7 +62,7 @@ dsh --profile web --dump-config | grep -A3 dsh-blender-plugin
 | R4 | 0.1.7 把 spill 口径从 `maxInlineBytes: 50000` 改成 `maxInlineTokens: 12500`，且图片会计入省略 → 大文本可能改为落盘 spill、长会话图片可能被省略 | **观察项**：升级后按 token 重新校准本插件自己的 12KB 截断阈值 |
 | R5 | 新版 `plugin-manager` 按 `dsh.bundle` 判定 bundle | **已声明**（`package.json` + `cordis.patch.yml`），可切 §4 |
 | R6 | 0.1.7 把官方 HMR 行 `cordis-plugin-hmr` 换成 `@deepseek-ai/dsh-hmr`、`dsh-settings-file` → `dsh-settings` | 本插件不依赖这些 id；injector 已删除 —— 代价是不再有第三方"运行时热注入"，改配置需重启（官方 HMR 行在 0.1.7 才启用） |
-| R7 | `peerDependencies` 写的是裸名 `cordis`/`schemastery`（npm 上是另一条谱系），宿主用的是 `@deepseek-ai/*` | 现在走 **link 装配**（profile node_modules → 本目录 → 全局安装）→ 无影响；**改成 registry 安装**（`pnpm add`）前必须先解决，否则会引入第二份实现 |
+| R7 | 曾把裸名 `cordis`/`schemastery` 写进 `peerDependencies`（npm 上是另一条谱系），宿主用的是 `@deepseek-ai/*` | **已解决（2026-11-28）**：只声明四个 `@deepseek-ai/*` peer（`cordis`/`schemastery` 标 optional，`dsh-llm`/`dsh-tools` 保持原样），裸名已从 `package.json` 与 `package-lock.json` 的根 `peerDependencies`/`peerDependenciesMeta` 删除；源码只 `import type @deepseek-ai/*`，registry 安装（`pnpm add`）不会再拉进第二份实现 |
 | R8 | 图片回传失败被 `catch` 吞掉，纯文本结果无告警 | **已修**（当前 v3.3.0 仍成立：`{ref}`/`{why}` + `⚠ 图片未回传：<原因>`） |
 | R9 | 6 个工具 + 超长中文描述全量进 prompt；新版 dsh-tools 已有 `deferLoading` | **优化项**：上游若默认延迟加载，需评估"描述即文档"策略 |
 

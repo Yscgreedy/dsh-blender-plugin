@@ -125,6 +125,8 @@ const RENDER_KEYS = [
   'camera',
   'device',
   'compute_device_type',
+  // Q-5：render 唯一放行的脚本钩子（渲染前跑一次的场景准备）。漏在这里 = 静默丢弃。
+  'pre_script',
 ]
 const HEADLESS_KEYS = [
   'script',
