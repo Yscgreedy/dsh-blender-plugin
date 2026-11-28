@@ -10,6 +10,10 @@ import { readReloadState } from '../../core/reload-state.js'
 import { blenderExeInfo } from '../../blender-exe.js'
 import { collectLocalEvidence } from '../../core/local-evidence.js'
 import { gatewayInstances } from '../../transport/addon-ws.js'
+import { currentCaller } from '../caller.js'
+import { userGuiClaim } from '../../core/sessions/display-gate.js'
+import type { UserGuiClaim } from '../../core/sessions/display-gate.js'
+import type { CallerIdentity } from '../../core/sessions/types.js'
 
 /**
  * 4a：宿主层快照的 HTTP 边界取法。
@@ -260,6 +264,22 @@ async function statusRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
   }
 }
 
+/**
+ * S-1：doctor 的 virtualGui 判定必须和 start 用**同一个**判据 ——
+ * `registry.findForCaller(caller)`（不是 listFor，它会把别人的会话也列进来）
+ * 命中一扇就绪的 user-gui 时，归属直接问 display-gate 导出的 userGuiClaim。
+ * 只读：注册表坏了就按「没有窗口」算，/doctor 不许因此 500。
+ */
+function callerUserGuiClaim(E: HttpRouteDeps, caller: CallerIdentity): UserGuiClaim | null {
+  try {
+    const session = E.sessionRegistry.findForCaller(caller)
+    if (!session || session.kind !== 'user-gui' || session.status !== 'ready') return null
+    return userGuiClaim(session, caller)
+  } catch {
+    return null
+  }
+}
+
 /** GET /doctor：forced no-addon / fixture 回放 + 同源证据（6b/c）。 */
 async function doctorRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Promise<void> {
   const { PORT, describeConfig, engine, json, stats } = E
@@ -281,8 +301,26 @@ async function doctorRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
         )
       })
     })
+    // S-1：把 caller（以及它与 start 同源的归属结论）递进 engine —— doctor 的
+    // virtualGui.available_for_caller 就是在这一次调用里算出来的；没有身份就如实 null。
+    const caller = currentCaller()
+    const claim = caller ? callerUserGuiClaim(E, caller) : null
     // 4a：doctor 内部的 statusView → engineProvenance 也吃这份显式快照。
-    const d = objArg(await engine.doctor({ ...opts, layers: { host: hostLayerAtEdge() } }))
+    const d = objArg(
+      await engine.doctor({
+        ...opts,
+        caller: caller
+          ? {
+              hostId: caller.hostId,
+              dshSessionId: caller.dshSessionId,
+              agentId: caller.agentId,
+              role: caller.role,
+            }
+          : null,
+        claim,
+        layers: { host: hostLayerAtEdge() },
+      }),
+    )
     // 工单 6：no-addon 态也必须给端口证据 —— 证据在路由层合并，engine 不必知道扫描。
     d.local_evidence = await evidencePromise
     const evidence = objArg(d.local_evidence)

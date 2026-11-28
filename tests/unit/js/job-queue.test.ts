@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { JobQueue, QueueError } from '../../../runtime/core/queue/manager.js'
 import { MemoryJobStore, JsonJobStore } from '../../../runtime/core/queue/store.js'
@@ -471,6 +472,179 @@ describe('3.1 wait timeout says still_running and list rows carry decision detai
       detail: 'target slot is busy',
     })
     expect(rows[1].decision).toBeNull()
+  })
+})
+
+describe('3.1 collect tail never cuts a line in half (T-1)', () => {
+  // 固定宽度：任何"半行"都会让长度对不上，测试就能抓住按字符切的行为。
+  const WIDTH = 96
+  const lines: string[] = []
+  for (let i = 0; i < 100_000; i++)
+    lines.push('STK_JSON ' + String(i).padStart(8, '0') + ' ' + 'x'.repeat(WIDTH - 18))
+  const bigLog = lines.join('\n') + '\n'
+
+  function collectText(logText: string, tail: number): string {
+    const store = new MemoryJobStore()
+    store.save([
+      {
+        id: 'job-big',
+        kind: 'headless',
+        params: { kind: 'headless' },
+        state: 'completed',
+        priority: 0,
+        slot: 'cpu',
+        owner: { hostId: 'host-a', dshSessionId: 'dsh-1', agentId: 'agent-main' },
+        createdAt: 1,
+        updatedAt: 2,
+        assignedAt: 1,
+        startedAt: 1,
+        finishedAt: 2,
+        pid: null,
+        decision: null,
+        result: { exitCode: 0, signal: null, ms: 1 },
+        artifacts: [],
+        logs: { stdout: logText, stderr: '' },
+        error: null,
+        events: [],
+      } satisfies JobRecord,
+    ])
+    const { queue } = setup({ store })
+    const out = queue.collect(main(), 'job-big', tail)
+    return String((out.job as JobRecord).logs.stdout)
+  }
+
+  it('keeps every returned line intact and ends on the real last line', () => {
+    const out = collectText(bigLog, 2000)
+    expect(out.length).toBeLessThanOrEqual(2000)
+    expect(out.endsWith('\n')).toBe(true)
+    const returned = out.split('\n').filter(Boolean)
+    expect(returned.length).toBeGreaterThan(5)
+    for (const line of returned) expect(line).toHaveLength(WIDTH)
+    expect(returned[returned.length - 1]).toBe(lines[lines.length - 1])
+  })
+
+  it('drops the half line at the window start and keeps a clean boundary', () => {
+    // 窗口起点正落在换行后 → 首行本来就完整，不该被丢掉。
+    expect(collectText('aaa\nbbb\nccc\n', 8)).toBe('bbb\nccc\n')
+    // 起点落在行中间 → 丢掉那半行，从下一个换行之后开始。
+    expect(collectText('aaa\nbbb\nccc\n', 7)).toBe('ccc\n')
+  })
+
+  it('keeps the old character slice when the text has no newline at all', () => {
+    const single = 'x'.repeat(9000)
+    expect(collectText(single, 100)).toBe(single.slice(-100))
+  })
+})
+
+describe('3.1 headless script_map points tracebacks at the source file (T-2)', () => {
+  interface FakeProcess {
+    pid: number
+    stdout: EventEmitter
+    stderr: EventEmitter
+    kill: () => void
+    once: EventEmitter['once']
+    on: EventEmitter['on']
+    emit: EventEmitter['emit']
+    removeListener: EventEmitter['removeListener']
+  }
+
+  function fakeChild(): FakeProcess {
+    const child = new EventEmitter() as unknown as FakeProcess
+    child.pid = 4242
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {}
+    return child
+  }
+
+  function jobRecord(kind: 'render' | 'headless', params: Record<string, unknown>): JobRecord {
+    return {
+      id: 'job-t2',
+      kind,
+      params,
+      state: 'running',
+      priority: 0,
+      slot: kind === 'render' ? 'gpu' : 'cpu',
+      owner: { hostId: 'h', dshSessionId: 'd', agentId: 'a' },
+      createdAt: 1,
+      updatedAt: 1,
+      assignedAt: 1,
+      startedAt: 1,
+      finishedAt: null,
+      pid: null,
+      decision: null,
+      result: null,
+      artifacts: [],
+      logs: { stdout: '', stderr: '' },
+      error: null,
+      events: [],
+    }
+  }
+
+  function executorWith(child: FakeProcess, tempRoot: string): SpawnJobExecutor {
+    return new SpawnJobExecutor({
+      blenderExe: 'blender-test',
+      tempRoot,
+      spawnImpl: (() => child) as unknown as (typeof import('node:child_process'))['spawn'],
+    })
+  }
+
+  function scriptMapOf(provenance: Record<string, unknown> | undefined): Record<string, unknown> {
+    return (provenance?.script_map || {}) as Record<string, unknown>
+  }
+
+  it('maps the temp job.py back to the caller script_file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-t2-src-'))
+    const source = path.join(dir, 'user_script.py')
+    fs.writeFileSync(source, 'print("hi")\n', 'utf8')
+    const child = fakeChild()
+    const executor = executorWith(child, path.join(dir, 'tmp'))
+    const handle = executor.start(jobRecord('headless', { script_file: source }))
+    child.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    child.emit('close', 0, null)
+    const result = await handle.done
+    const map = scriptMapOf(result.provenance)
+    expect(map.source_path).toBe(source)
+    expect(String(map.temp_path)).toMatch(/dsh-job-.+job\.py$/)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('stays absent for an inline script, a render, and carries through collect', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-t2-inline-'))
+    const inlineChild = fakeChild()
+    const inline = executorWith(inlineChild, path.join(dir, 'tmp'))
+    const inlineHandle = inline.start(jobRecord('headless', { script: 'print(1)' }))
+    inlineChild.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    inlineChild.emit('close', 0, null)
+    expect((await inlineHandle.done).provenance?.script_map).toBeUndefined()
+
+    const blend = path.join(dir, 'a.blend')
+    fs.writeFileSync(blend, 'x')
+    const renderChild = fakeChild()
+    const render = executorWith(renderChild, path.join(dir, 'tmp'))
+    const renderHandle = render.start(
+      jobRecord('render', { file: blend, resolution: [8, 8], frames: [1, 1] }),
+    )
+    renderChild.stdout.emit('data', Buffer.from('DSH_RENDER {"device":"cpu"}\n'))
+    renderChild.emit('close', 0, null)
+    expect((await renderHandle.done).provenance?.script_map).toBeUndefined()
+
+    // 队列层把 provenance 原样留在 collect 回执的 job.result 里。
+    const source = path.join(dir, 'queued.py')
+    fs.writeFileSync(source, 'print("queued")\n', 'utf8')
+    const queueChild = fakeChild()
+    const queue = new JobQueue({
+      executor: executorWith(queueChild, path.join(dir, 'tmp-queue')),
+      store: new MemoryJobStore(),
+    })
+    const submitted = queue.submit(main(), { kind: 'headless', script_file: source })
+    queueChild.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    queueChild.emit('close', 0, null)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const collected = queue.collect(main(), submitted.id, 4000)
+    const job = collected.job as JobRecord
+    expect(scriptMapOf(job.result?.provenance).source_path).toBe(source)
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 })
 

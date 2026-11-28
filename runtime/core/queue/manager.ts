@@ -533,7 +533,22 @@ function cap(text: string): string {
   return text.length > LOG_CAP ? text.slice(-LOG_CAP) : text
 }
 
+/**
+ * 日志尾部（T-1）：`tail` 仍是**字符上限**，但窗口起点不落在行中间。
+ *
+ * 按字符 slice 会把一行切成两半：JSON / `HEADLESS {...}` 这类结构化行一旦断在开头，
+ * 逐行解析就失败（现场看到的 "STK_JSON 解析不出来"，其实是回执把行截断了）。
+ * 所以只做一件事：窗口起点在行中间时，丢掉那半行、从下一个换行之后开始。
+ *
+ * 两条保持原样：整段没有换行（单行超长输出只能按字符切），以及窗口本来就落在换行后。
+ */
 function tailText(text: string, tail: number): string {
   const n = Math.max(0, Math.min(LOG_CAP, Number(tail) || 4000))
-  return text.length > n ? text.slice(-n) : text
+  if (text.length <= n) return text
+  const cut = text.length - n
+  const slice = text.slice(cut)
+  // 上一字符是换行 ⇒ 窗口正好从行首开始，整段都能用。
+  if (text.slice(cut - 1, cut) === '\n') return slice
+  const at = slice.indexOf('\n')
+  return at < 0 ? slice : slice.slice(at + 1)
 }

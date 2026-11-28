@@ -26,6 +26,31 @@ export interface SpawnExecutorOptions {
 const MAX_LOG = 262144
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000
 
+/**
+ * T-2：headless 的临时入口 `<tempDir>/job.py` → 调用方源脚本的映射。
+ *
+ * buildJobArgs 会把 prelude 与用户脚本合成一个 job.py 放到临时目录里执行，于是 traceback
+ * 里出现的行号指的是那份临时副本（内联 script 更是只有在临时文件里才存在）。这里把两个路径
+ * 都记下来，让 wait/collect 的回执能说清"traceback 指向哪里"。只有 headless 且确实给了
+ * script_file（有源文件可映射）、临时入口真的写出来了时才返回。
+ */
+function scriptMapFor(
+  job: JobRecord,
+  tempDir: string | null,
+): { temp_path: string; source_path: string } | null {
+  if (job.kind !== 'headless' || !tempDir) return null
+  // 调用方给的原始值（相对路径原样保留：这里只做溯源，不替调用方猜基准目录）。
+  const source = String(job.params.script_file || '').trim()
+  if (!source) return null
+  const tempPath = path.join(tempDir, 'job.py')
+  try {
+    if (!fs.statSync(tempPath).isFile()) return null
+  } catch {
+    return null
+  }
+  return { temp_path: tempPath, source_path: source }
+}
+
 function prepare(job: JobRecord, spawnOptions: SpawnExecutorOptions): Prepared {
   const tempRoot = spawnOptions.tempRoot || path.join(workRoot(), 'tmp')
   ensureDir(tempRoot)
@@ -192,6 +217,8 @@ export class SpawnJobExecutor implements JobExecutor {
         ),
       }
     }
+    // 临时入口在 prepare 里刚写好：趁 tempDir 还在，把映射固定下来（finish 会删目录）。
+    const scriptMap = scriptMapFor(job, prepared.tempDir)
     let child: ChildProcess
     try {
       child = spawnBlender(this.opts, prepared, job.id)
@@ -250,6 +277,8 @@ export class SpawnJobExecutor implements JobExecutor {
             env_keys: prepared.envKeys,
             preloads: prepared.preloads,
             bootstrap: prepared.bootstrap,
+            // T-2：additive，只有 headless + 临时脚本时出现。
+            ...(scriptMap ? { script_map: scriptMap } : {}),
           },
           ...(timedOut
             ? {

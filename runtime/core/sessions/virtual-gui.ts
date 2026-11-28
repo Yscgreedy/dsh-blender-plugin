@@ -10,7 +10,8 @@ import { isRecord } from '../../foundation/json.js'
 import { startVirtualGuiGate } from './display-gate.js'
 import { fail, ownerMatches, ownerOf, sessionView } from './types.js'
 import type { CallerIdentity, InstanceRef, SessionRecord, SessionResult } from './types.js'
-import type { VirtualGuiLimits } from '../../display/limits.js'
+import { admitVirtualGui } from '../../display/limits.js'
+import type { VirtualGuiAdmission, VirtualGuiLimits } from '../../display/limits.js'
 import type { DisplayCapabilities, DisplayInstance, DisplayProvider } from '../../display/types.js'
 
 export const VIRTUAL_GUI_HANDSHAKE_TIMEOUT_MS = 30_000
@@ -88,24 +89,64 @@ function providerFailure(error: unknown): AvailabilityFailure {
   })
 }
 
-function capacityFailure(used: number, limits: VirtualGuiLimits): AvailabilityFailure {
+function gib(bytes: number): string {
+  return (bytes / 1024 ** 3).toFixed(1) + ' GiB'
+}
+
+/**
+ * Refuse an admission (S-5).
+ *
+ * Both refusals keep the historical `stage=session` / `code=capacity` pair —
+ * the caller-visible contract — and differ only in the reason and the numbers
+ * behind it. evidence.reason is now the admission verdict (`limit` / `memory`);
+ * the limit resolver's own verdict stays under `limit_reason` and
+ * `low_resource` keeps its meaning, so old readers still find their fields.
+ */
+function capacityFailure(
+  admission: VirtualGuiAdmission,
+  limits: VirtualGuiLimits,
+): AvailabilityFailure {
+  const overMemory = admission.reason === 'memory'
+  const shortBy = Math.max(0, admission.required_bytes - admission.free)
   return availabilityFailure({
     stage: 'session',
     code: 'capacity',
-    rootCause: 'virtual-gui instance limit reached (' + used + '/' + String(limits.limit) + ')',
-    fix:
-      'stop an existing virtual-gui session, or raise features.virtualGuiMax ' +
-      '(env DSH_BLENDER_VIRTUAL_GUI_MAX) within 1-16',
+    rootCause: overMemory
+      ? 'not enough free memory for another virtual-gui: ' +
+        gib(admission.required_bytes) +
+        ' needed (' +
+        gib(admission.per_instance_bytes) +
+        ' per instance + ' +
+        gib(admission.reserve_host_bytes) +
+        ' host reserve), ' +
+        gib(admission.free) +
+        ' free'
+      : 'virtual-gui instance limit reached (' +
+        String(admission.used) +
+        '/' +
+        String(admission.limit) +
+        ')',
+    fix: overMemory
+      ? 'free about ' +
+        gib(shortBy) +
+        ' (close applications or stop a virtual-gui session), then retry'
+      : 'stop an existing virtual-gui session, or raise features.virtualGuiMax ' +
+        '(env DSH_BLENDER_VIRTUAL_GUI_MAX) within 1-16',
     fallback: {
       kind: 'degraded',
       summary: 'no extra Blender process was started; reuse or stop an existing session',
     },
     evidence: {
-      used,
-      limit: limits.limit,
+      used: admission.used,
+      limit: admission.limit,
       configured: limits.configured,
-      low_resource: limits.low_resource,
-      reason: limits.reason,
+      low_resource: admission.low_resource,
+      reason: admission.reason,
+      limit_reason: limits.reason,
+      free: admission.free,
+      per_instance: admission.per_instance_bytes,
+      reserve: admission.reserve_host_bytes,
+      required: admission.required_bytes,
     },
   })
 }
@@ -164,8 +205,17 @@ export class VirtualGuiLifecycle {
     })
     if (!gated.ok) return gated
     const limits = this.host.limits()
-    const used = this.host.virtualGuiCount()
-    if (used >= limits.limit) return capacityFailure(used, limits)
+    // The registry's effective limit is the structural ceiling: it is what every
+    // other surface (consent panel, status) advertises, so a deliberately
+    // lowered cap is never raised here. Under it, the budget decides with the
+    // free memory read right now — not with a value cached at startup (S-5).
+    const admission = admitVirtualGui({
+      used: this.host.virtualGuiCount(),
+      configured: Math.min(limits.limit, limits.configured),
+      freeMemBytes: limits.free_mem_bytes,
+      totalMemBytes: limits.total_mem_bytes,
+    })
+    if (!admission.ok) return capacityFailure(admission, limits)
     const provider = this.selectProvider(capability)
     if (!provider)
       return fail(

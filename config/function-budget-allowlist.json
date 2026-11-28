@@ -139,6 +139,24 @@
       "reviewBy": "2027-06-30"
     },
     {
+      "file": "runtime/core/sessions/display-gate.ts",
+      "name": "capabilityGate",
+      "lines": 87,
+      "classification": "validation",
+      "reason": "Pre-spawn gate for start kind=virtual-gui: one rule block per criterion (kind, user-gui claim, feature enabled, capability ready), each refusing with its own availability evidence; S-4 leaves only the caller's own ready user-gui blocking.",
+      "owner": "qa",
+      "reviewBy": "2027-06-30"
+    },
+    {
+      "file": "runtime/core/sessions/display-gate.ts",
+      "name": "startVirtualGuiGate",
+      "lines": 85,
+      "classification": "linear-pipeline",
+      "reason": "Consent resolution in contract order - host policy, one-time token, approved request, then the panel wait - with the S-4 non-blocking user-gui note carried onto whichever receipt the call ends with.",
+      "owner": "runtime",
+      "reviewBy": "2027-06-30"
+    },
+    {
       "file": "runtime/execution/headless/process.ts",
       "name": "<anonymous>",
       "lines": 91,

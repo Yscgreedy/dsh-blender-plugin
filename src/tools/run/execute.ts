@@ -38,6 +38,32 @@ import {
 const LF = String.fromCharCode(10)
 
 /**
+ * T-2：headless 的临时脚本映射（executor 写在 result.provenance.script_map 里）。
+ * 两个路径都在才算数；render / 内联脚本 / 老记录一律没有这个键。
+ */
+function scriptMapOf(job: Record<string, unknown>): Record<string, string> | null {
+  const map = asRecord(asRecord(asRecord(job.result).provenance).script_map)
+  const tempPath = text(map.temp_path)
+  const sourcePath = text(map.source_path)
+  if (!tempPath || !sourcePath) return null
+  return { temp_path: tempPath, source_path: sourcePath }
+}
+
+/** 一行提示：traceback 的行号指的是那份临时副本，不是源脚本。 */
+function withScriptMapHint(body: string, map: Record<string, string> | null): string {
+  if (!map) return body
+  return (
+    body +
+    LF +
+    'script_map  traceback 行号对应临时副本 ' +
+    map.temp_path +
+    '（源脚本 ' +
+    map.source_path +
+    '）'
+  )
+}
+
+/**
  * 渲染通道（render / alpha / mask / ink）：允许列表与默认值只在这一处。
  *
  * 台账（docs/archive/2026-11-20-角色动画与卡通渲染需求.md 第 72-74 行，render channels 条）：
@@ -358,6 +384,32 @@ async function listOwner(port: number, ownerArg: string): Promise<string> {
   return String(execCaller()?.dshSessionId || '')
 }
 
+/**
+ * wait 回执（T-1/T-2/Q-4 的字段都在这里组装）：队列层单独成一块，executeRun 只留一行分支。
+ * 字段与语义与拆分前逐字一致（waited_ms / timed_out / still_running / script_map / envelope）。
+ */
+async function waitRun(port: number, id: string, args: Record<string, unknown>): Promise<unknown> {
+  const action = 'wait'
+  const timeoutMs = Number(args.timeout_ms) || 120000
+  const budget = Math.min(600000, Math.max(1000, timeoutMs)) + 30000
+  const body = await postQueue(port, { op: 'wait', id, timeout_ms: timeoutMs }, budget)
+  if (body.ok !== true) return failureOf(body, action)
+  const job = asRecord(body.job)
+  const scriptMap = scriptMapOf(job)
+  return {
+    text: withScriptMapHint(formatWait(job, body.waitedMs, body.waitTimedOut), scriptMap),
+    ...jobFields(job),
+    applied: jobApplied(job),
+    waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
+    timed_out: body.waitTimedOut === true,
+    // Q-4：超时不是失败。终态时队列层不带这个字段，这里如实落 false（不编造"还在跑"）。
+    still_running: body.still_running === true,
+    // T-2：additive；只有 headless 临时脚本才有值。
+    ...(scriptMap ? { script_map: scriptMap } : {}),
+    envelope: jobEnvelope(action, job),
+  }
+}
+
 export async function executeRun(
   ctx: unknown,
   port: number,
@@ -433,23 +485,7 @@ export async function executeRun(
       envelope: jobEnvelope(action, job),
     }
   }
-  if (action === 'wait') {
-    const timeoutMs = Number(args.timeout_ms) || 120000
-    const budget = Math.min(600000, Math.max(1000, timeoutMs)) + 30000
-    const body = await postQueue(port, { op: 'wait', id, timeout_ms: timeoutMs }, budget)
-    if (body.ok !== true) return failureOf(body, action)
-    const job = asRecord(body.job)
-    return {
-      text: formatWait(job, body.waitedMs, body.waitTimedOut),
-      ...jobFields(job),
-      applied: jobApplied(job),
-      waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
-      timed_out: body.waitTimedOut === true,
-      // Q-4：超时不是失败。终态时队列层不带这个字段，这里如实落 false（不编造"还在跑"）。
-      still_running: body.still_running === true,
-      envelope: jobEnvelope(action, job),
-    }
-  }
+  if (action === 'wait') return waitRun(port, id, args)
   if (action === 'collect') {
     const body = await postQueue(
       port,
@@ -458,10 +494,13 @@ export async function executeRun(
     )
     if (body.ok !== true) return failureOf(body, action)
     const job = asRecord(body.job)
+    const scriptMap = scriptMapOf(job)
     return {
-      text: formatCollect(job),
+      text: withScriptMapHint(formatCollect(job), scriptMap),
       ...jobFields(job),
       applied: jobApplied(job),
+      // T-2：additive；只有 headless 临时脚本才有值。
+      ...(scriptMap ? { script_map: scriptMap } : {}),
       envelope: jobEnvelope(action, job),
     }
   }

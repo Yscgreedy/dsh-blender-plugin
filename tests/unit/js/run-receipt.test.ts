@@ -139,6 +139,57 @@ describe('blender_run structured receipts', () => {
     backend.setHandler('POST /job')
   })
 
+  it('surfaces script_map on wait/collect with a one-line hint', async () => {
+    const mapped = {
+      ...JOB,
+      state: 'completed',
+      result: {
+        exitCode: 0,
+        signal: null,
+        ms: 12,
+        provenance: {
+          script_map: { temp_path: 'C:/rt/tmp/dsh-job-x/job.py', source_path: 'C:/proj/user.py' },
+        },
+      },
+      logs: { stdout: '', stderr: '' },
+    }
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'wait', job: mapped, waitedMs: 5, waitTimedOut: false }),
+    )
+    const wait = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(wait.script_map).toEqual({
+      temp_path: 'C:/rt/tmp/dsh-job-x/job.py',
+      source_path: 'C:/proj/user.py',
+    })
+    expect(wait.text).toContain('script_map')
+    expect(wait.text).toContain('traceback')
+
+    backend.setHandler('POST /job', () => json({ ok: true, op: 'collect', job: mapped }))
+    const collect = await run('blender_run', { action: 'collect', id: 'job-9' })
+    expect(collect.script_map).toEqual({
+      temp_path: 'C:/rt/tmp/dsh-job-x/job.py',
+      source_path: 'C:/proj/user.py',
+    })
+    expect(collect.text).toContain('script_map')
+    backend.setHandler('POST /job')
+  })
+
+  it('omits script_map for a job that never used a temp script', async () => {
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'wait', job: JOB, waitedMs: 5, waitTimedOut: false }),
+    )
+    const wait = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(wait).not.toHaveProperty('script_map')
+    expect(wait.text).not.toContain('script_map')
+
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'collect', job: { ...JOB, logs: { stdout: '', stderr: '' } } }),
+    )
+    const collect = await run('blender_run', { action: 'collect', id: 'job-9' })
+    expect(collect).not.toHaveProperty('script_map')
+    backend.setHandler('POST /job')
+  })
+
   it('puts audit source/file_load/cleanup into the receipt envelope', () => {
     const env = planEnvelope('audit_mesh', {
       ok: true,

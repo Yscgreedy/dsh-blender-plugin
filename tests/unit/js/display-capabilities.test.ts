@@ -357,7 +357,7 @@ describe('blender_session start pre-spawn gate', () => {
     expect(reg.listFor(caller)).toHaveLength(1)
   })
 
-  it('C-1: 借读别人的会话时回执写清 viewer，而不是让人去 attach 一个只读会话', async () => {
+  it('S-4: 别人占着 user-gui 时不再阻塞同机 caller 的 start（借读语义保留）', async () => {
     const reg = new SessionRegistry(() => [{ instanceId: 'gui-1', ready: true }], {
       display: readyCap,
       selectProvider: () => null,
@@ -370,13 +370,26 @@ describe('blender_session start pre-spawn gate', () => {
       agentId: 'other',
       role: 'main' as const,
     }
-    const blocked = await reg.start(other, { waitMs: 0 })
-    expect(blocked.ok).toBe(false)
-    if (blocked.ok) return
-    expect(blocked.code).toBe('session_already_available')
-    expect(blocked.evidence.is_mine).toBe(false)
-    expect(blocked.evidence.viewer).toBe(true)
-    expect(String(blocked.fix)).toContain('read-only viewer')
+    const started = await reg.start(other, { waitMs: 0 })
+    expect(started.ok).toBe(false)
+    if (started.ok) return
+    // ① 这不再是「同机有人在用」的拒绝：user-gui 检查放行，落到 consent 闸门。
+    expect(started.code).not.toBe('session_already_available')
+    expect(started.code).toBe('consent_required')
+    expect(started.evidence.state).toBe('pending')
+    expect(started.evidence.mode).toBe('manual')
+    // ② 归属没被动过：gui-1 仍是主控的。
+    expect(reg.getSession('user-gui:gui-1')?.owner?.agentId).toBe('a')
+    // ③ 借读语义仍在：同机 caller 看得到它，但 is_mine=false / read_only=true。
+    const borrowed = reg.listFor(other).find((row) => row.id === 'user-gui:gui-1')
+    expect(borrowed).toBeTruthy()
+    expect(borrowed?.is_mine).toBe(false)
+    expect(borrowed?.read_only).toBe(true)
+    // ④ 旧口径的「别人持有 → 只读 viewer」拒绝文案已消失，换成不阻塞的三分说明。
+    const note = started.evidence.existing_user_gui as Record<string, unknown>
+    expect(note.claim).toBe('others')
+    expect(note.blocking).toBe(false)
+    expect(String(started.fix)).not.toContain('read-only viewer')
   })
 
   it('binds consent tokens to the caller', async () => {
