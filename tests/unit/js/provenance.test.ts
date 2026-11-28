@@ -118,7 +118,9 @@ describe('host layer provenance (H1: the loaded side is the host manifest)', () 
     fs.writeFileSync(path.join(HOSTLIB, 'index.js'), 'export default {}\n', 'utf8')
     fs.writeFileSync(CONSTANTS, 'export const PLUGIN_VERSION = "probe-1"\n', 'utf8')
     layers = await import(
-      pathToFileURL(path.join(COPY_RT, 'core', 'layers.js')).href + '?layers=' + String(Date.now())
+      pathToFileURL(path.join(COPY_RT, 'foundation', 'layers.js')).href +
+        '?layers=' +
+        String(Date.now())
     )
   })
 
@@ -204,7 +206,9 @@ describe('host manifest identity + load-time scan (round 4)', () => {
       'utf8',
     )
     layers = await import(
-      pathToFileURL(path.join(COPY_RT, 'core', 'layers.js')).href + '?layers4=' + String(Date.now())
+      pathToFileURL(path.join(COPY_RT, 'foundation', 'layers.js')).href +
+        '?layers4=' +
+        String(Date.now())
     )
   })
 
