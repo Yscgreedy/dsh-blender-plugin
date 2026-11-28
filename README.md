@@ -35,28 +35,31 @@ DSH × Blender connects DeepSeek Harness to Blender so an agent can build, inspe
 ### Requirements
 
 - DSH (DeepSeek Harness) installed and working.
-- Node.js 24.9 or newer is needed only for source builds; installing from npm uses the runtime bundled with DSH. Node.js 24.9 is the minimum supported version; CI runs on Node 24.
+- Node.js 24.9 or newer is needed only for source builds and the `npm run dsh:install` path; the runtime that executes the plugin is the one bundled with DSH. Node.js 24.9 is the minimum supported version; CI runs on Node 24.
 - Blender 4.2 LTS is the tested version. Blender 4.x may work; Blender 5.x is not yet validated. GUI mode requires the bundled addon (install it first); headless mode only needs the Blender executable.
 - Addon compatibility: the bundled addon is the only required addon and the only supported agent bridge. Other addons do not conflict; an old `MCP for Blender` / `blender_mcp` is unsupported (it still listens on 127.0.0.1:9876) — disable it, no need to uninstall.
 - Optional: a DSH source checkout when rebuilding the host side; otherwise the build links against this repository's installed dependencies.
 
-### Option A: install from npm
+### Option A: install from a checkout or the release tarball
 
-This is the supported installation path. It does not require `git clone`, `npm ci`, or `npm run build`.
+The supported installation source is **this repository and its GitHub Releases**. registry publishing is closed: the `dsh-blender-plugin` name on the public npm registry belongs to a third party (3.0.6). **Do not install the same-name package from the registry** — neither a global `npm i -g` nor `dsh plugin add` with the registry name: that installs **someone else's package**.
 
 1. **Install the bundled addon first.** Download `dsh_blender_bridge.zip` from the [latest GitHub Release](https://github.com/sixtysevenlf/dsh-blender-plugin/releases/latest), then in Blender open `Edit > Preferences > Extensions > Install from Disk...`, select the zip, enable **DSH Blender Bridge**, open the `N` panel in the 3D view, and click **Connect**.
 
-2. **Install the DSH plugin from npm.** Choose the path for your DSH host:
+2. **Install the DSH plugin from a checkout (recommended) or from the release tarball.**
 
-   - **DSH Web or DSH TUI:** install into the profile you actually run:
+   - **From a checkout.** This is the path the repository documents and tests:
 
-         dsh plugin --profile <profile> add dsh-blender-plugin@3.3.1
+         git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
+         cd dsh-blender-plugin
+         npm ci --legacy-peer-deps && npm run build
+         npm run dsh:install          # overlay the packed layout into your DSH profile, then reload it
 
-     Then restart DSH in step 3.
+   - **From the GitHub Release tarball.** Every release ships `dsh-blender-plugin-<version>.tgz` plus `SHA256SUMS`. Verify the checksum, then install that tarball into the DSH profile directory your host loads (the same layout `npm run dsh:install` produces).
 
-   - **DSH Desktop:** open the Plugins page and install the bundle `dsh-blender-plugin@3.3.1`. DSH Desktop applies the bundle from the Plugins page and does not need a DSH restart.
+   - **DSH Desktop:** point the Plugins page at the release artifact, or use the checkout flow above. The same-name entry in the registry is the third-party package, not this plugin.
 
-3. **Restart DSH (DSH Web and DSH TUI only).** If you installed from the DSH Desktop Plugins page, skip this step.
+3. **Restart DSH (DSH Web and DSH TUI only).** `npm run dsh:install` already triggers a reload; if you installed from the DSH Desktop Plugins page, skip this step.
 
 4. **Verify the installation.** The only acceptance criterion for the GUI route is `doctor` returning `kind` equal to `ok`:
 
@@ -77,8 +80,10 @@ Copy this prompt into an agent that can run commands:
     (MCP for Blender / blender_mcp, or anything else serving Blender on
     ), disable it; do not uninstall the user's other addons and
     do not ask them to.
-    Then install the DSH × Blender plugin from npm for my DSH profile:
-    dsh plugin --profile <profile> add dsh-blender-plugin@3.3.1
+    Then install the DSH × Blender plugin from a repository checkout:
+    git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
+    cd dsh-blender-plugin && npm ci --legacy-peer-deps && npm run build && npm run dsh:install
+    (never install the plugin from the npm registry: that name is a third-party package)
     Read docs/AI-安装提示词.md first, follow it exactly,
     and finish with the acceptance check: doctor must return kind=ok for the
     GUI route, or a blender_run headless submit + wait must return outputs for the headless-only route.
@@ -100,7 +105,7 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
    Keep this addon as your only agent bridge. If `MCP for Blender` / `blender_mcp` (or any other Blender-side agent bridge) is enabled, turn it off — uninstalling is not required. Your other addons can stay. If the rest of the installation does not work, check this step first.
 
-2. **Developer path:** clone the repository and build it. `lib/` is a build artifact and is not committed, so a fresh clone must build once before use. `npm run setup:dev` installs the npm and Python development dependencies (creating `.venv`); unless you are developing the plugin, use the npm install above.
+2. **Developer path:** clone the repository and build it. `lib/` is a build artifact and is not committed, so a fresh clone must build once before use. `npm run setup:dev` installs the npm and Python development dependencies (creating `.venv`); unless you are developing the plugin, use the checkout or release-tarball path above.
 
         git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
         cd dsh-blender-plugin

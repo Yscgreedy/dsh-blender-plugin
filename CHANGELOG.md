@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 2026-11-28 npm 发布关闭（包名冲突）：安装改走 GitHub Release / checkout
+
+> `dsh-blender-plugin` 在公共 npm registry 上由第三方用户持有（最新 3.0.6），本账号无发布权；
+> 保留 publish 入口只会诱导用户装到别人的包。
+
+- **workflow**：删掉 npm 发布输入与整个发布 job（含 registry 上传步骤与 OIDC `id-token` 权限）；release 只产出 GitHub Release 资产（tarball + extension zip + SHA256SUMS）。
+- **包元数据**：`package.json` 置 `private: true`，误触发 registry 上传直接被拒；`npm pack` / `npm pack --dry-run` 仍可用（release 与 clean-install smoke 依赖它）。
+- **安装文档**：README / docs/zh/README / 操作教程 / 给第三方的安装清单 / 部署SOP / AI-安装提示词 / 配置参考 改为主路径 checkout（`npm ci --legacy-peer-deps && npm run build` → `npm run dsh:install`），备选 GitHub Release 的 `dsh-blender-plugin-<version>.tgz` + `SHA256SUMS`；并加粗警告 registry 同名包是第三方旧版。
+- **契约测试**：`release-workflow` / `ci-workflow` 改为断言 workflow **不含** npm 发布入口、OIDC 权限与 registry 域名；`docs-bilingual` 改断言文档含 checkout / release 安装路径且不含 registry 包名 spec。
+- **文档**：CONTRIBUTING / docs/zh/CONTRIBUTING 的 Manual CD 输入表删掉 npm 发布开关；台账 H-9 改为「npm 发布已关闭（决策）」。
+
 ### 2026-11-21 一条命令安装/升级：`scripts/install-dsh.mjs`
 
 > 实测痛点：手工 `npm pack` + `robocopy /MIR` + 恢复 `runtime/ext` + reload + 手工 attach/验证，

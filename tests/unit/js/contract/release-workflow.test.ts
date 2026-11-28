@@ -10,13 +10,14 @@ describe('manual CD workflow', () => {
     expect(workflow).not.toMatch(/^ {2}(push|pull_request|pull_request_target|schedule):/m)
   })
 
-  it('defaults to a dry run and keeps npm publishing opt-in', () => {
+  it('defaults to a dry run and has no registry publishing input', () => {
     expect(workflow).toContain("default: '3.3.1'")
     expect(workflow).toMatch(/dry_run:[\s\S]*?default: true/)
-    expect(workflow).toMatch(/publish_npm:[\s\S]*?default: false/)
     expect(workflow).toContain('if: ${{ !inputs.dry_run }}')
-    expect(workflow).toContain('if: ${{ !inputs.dry_run && inputs.publish_npm }}')
     expect(workflow).not.toContain('github.event.inputs')
+    expect(workflow).not.toContain('publish_npm')
+    expect(workflow).not.toContain('publish-npm')
+    expect(workflow).not.toContain('npm publish')
   })
 
   it('requires the release environment and only creates a draft release', () => {
@@ -37,14 +38,15 @@ describe('manual CD workflow', () => {
     )
   })
 
-  it('publishes npm from the packed tarball with OIDC provenance', () => {
-    expect(workflow).toContain('npm publish ./release/*.tgz --access public --provenance')
-    expect(workflow).toContain('NPM_TAG=alpha')
-    expect(workflow).toContain('--tag "${NPM_TAG}"')
-    expect(workflow).toContain('id-token: write')
+  it('does not publish to npm and ships the tarball as a release asset only', () => {
+    expect(workflow).not.toContain('npm publish')
+    expect(workflow).not.toContain('registry.npmjs.org')
+    expect(workflow).not.toContain('id-token: write')
     expect(workflow).not.toContain('NPM_TOKEN')
     expect(workflow).not.toContain('NODE_AUTH_TOKEN')
+    expect(workflow).toContain('npm pack --json --pack-destination release-assets')
     const pkg = JSON.parse(fs.readFileSync(repoPath('package.json'), 'utf8'))
+    expect(pkg.private).toBe(true)
     expect(pkg.repository && pkg.repository.url).toContain('dsh-blender-plugin')
   })
 })

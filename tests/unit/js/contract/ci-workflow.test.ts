@@ -49,7 +49,8 @@ describe('CI workflow hygiene', () => {
     expect(pr).toMatch(/^permissions:\n {2}contents: read$/m)
     expect(release).toMatch(/^permissions:\n {2}contents: read$/m)
     expect(release).toMatch(/permissions:\n {6}contents: write/)
-    expect(release).toMatch(/id-token: write/)
+    // registry publishing is closed, so the workflow carries no OIDC token scope.
+    expect(release).not.toContain('id-token: write')
   })
 
   it('pins every action to a full commit SHA', () => {
@@ -115,8 +116,8 @@ describe('CI workflow hygiene', () => {
 
   it('keeps manual CD inputs typed and gated', () => {
     expect(release).toContain('if: ${{ !inputs.dry_run }}')
-    expect(release).toContain('if: ${{ !inputs.dry_run && inputs.publish_npm }}')
     expect(release).not.toContain('github.event.inputs')
+    expect(release).not.toContain('publish_npm')
     expect(release).toContain('name: release')
     expect(release).toContain('--draft')
   })
