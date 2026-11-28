@@ -4,7 +4,7 @@
  * The Gateway /plan route skips the lease gate for these ops (they may run
  * without a GUI session), so blender_op must make the same decision before it
  * asks for a session. runtime/catalog/data.ts is the source of truth; the
- * contract test op-read-only-parity.test.ts fails when the two lists drift.
+ * contract test tests/unit/js/contract/op-read-only-parity.test.ts fails when the two lists drift.
  */
 export const READ_ONLY_OPS: string[] = [
   'status',
@@ -105,6 +105,13 @@ export const READ_ONLY_OPS: string[] = [
   'fix_interference',
   'blockout_help',
   'blockout_selftest',
+  // 2026-11-27：与 runtime/catalog/data.ts 对齐——这 6 个只读 op 此前只在 catalog 声明。
+  'fingerprint',
+  'asset_search',
+  'asset_help',
+  'anim_rig_report',
+  'anim_deform_audit',
+  'toon_outline_audit',
 ]
 
 export const READ_ONLY = new Set<string>(READ_ONLY_OPS)

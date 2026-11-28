@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
+import { shouldGateWrite } from '../write-skip.js'
 // HTTP 路由 /preset：配方库
 export function createPresetRoutes(E: HttpRouteDeps) {
-  const { engine, isReadOnly, json, leaseGate, readBody, stats, streamJson } = E
+  const { engine, json, leaseGate, readBody, stats, streamJson } = E
   return {
     async preset(req: IncomingMessage, res: ServerResponse, _url: URL, _p: string): Promise<void> {
       // 配方库：save / list / get / delete / apply / export / import / help
@@ -16,7 +17,7 @@ export function createPresetRoutes(E: HttpRouteDeps) {
         payload = {}
       }
       const op = String(payload.op || 'list')
-      const gate = isReadOnly('/preset', op) ? null : leaseGate(payload)
+      const gate = shouldGateWrite('/preset', payload) ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

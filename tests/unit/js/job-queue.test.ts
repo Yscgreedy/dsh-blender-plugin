@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { JobQueue, QueueError } from '../../../runtime/core/queue/manager.js'
 import { MemoryJobStore, JsonJobStore } from '../../../runtime/core/queue/store.js'
@@ -8,7 +9,10 @@ import type { JobExecutor, JobHandle, JobRecord } from '../../../runtime/core/qu
 import { JobSurface, callerFromHeaders } from '../../../runtime/core/queue/handler.js'
 import { SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
 import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
-import type { CallerIdentity } from '../../../runtime/core/sessions/types.js'
+import { CFG } from '../../../runtime/config.js'
+import { resolveQueueSetting } from '../../../runtime/config-queue.js'
+import { listRows } from '../../../src/tools/run/presenter.js'
+import type { CallerIdentity, SessionRecord } from '../../../runtime/core/sessions/types.js'
 
 const main = (over: Partial<CallerIdentity> = {}): CallerIdentity => ({
   hostId: 'host-a',
@@ -232,6 +236,493 @@ describe('3.1 job queue', () => {
   })
 })
 
+describe('3.1 queue capacity is configuration, not a compile-time constant (Q-1/Q-2/Q-3)', () => {
+  it('rejects the second job when pending is configured to 1', () => {
+    const { queue } = setup({ capacity: { pending: 1 } })
+    queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    try {
+      queue.submit(main(), { kind: 'render', file: 'b.blend' })
+      throw new Error('expected queue full')
+    } catch (e) {
+      expect(e).toBeInstanceOf(QueueError)
+      const failure = (e as QueueError).failure
+      expect(failure.code).toBe('queue_full')
+      expect(failure.evidence.limit).toBe(1)
+      expect(failure.evidence.pending).toBe(1)
+    }
+  })
+
+  it('runs two renders at once when gpu is configured to 2', () => {
+    const { queue, executor } = setup({ capacity: { gpu: 2 } })
+    const a = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const b = queue.submit(main(), { kind: 'render', file: 'b.blend' })
+    expect(executor.starts).toHaveLength(2)
+    expect(queue.status(a.id)?.state).toBe('running')
+    expect(queue.status(b.id)?.state).toBe('running')
+    expect(queue.perf().slots).toMatchObject({ gpu: { used: 2, total: 2 } })
+    const third = queue.submit(main(), { kind: 'render', file: 'c.blend' })
+    expect(queue.status(third.id)?.state).toBe('queued')
+    expect(queue.status(third.id)?.decision?.reason).toBe('capacity')
+  })
+
+  it('bounds one owner with ownerQuota while other slots stay free', () => {
+    const { queue, executor } = setup({ capacity: { ownerQuota: 2, cpu: 8 } })
+    queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    queue.submit(main(), { kind: 'headless', script: 'print(2)' })
+    const third = queue.submit(main(), { kind: 'headless', script: 'print(3)' })
+    expect(executor.starts).toHaveLength(2)
+    expect(queue.status(third.id)?.state).toBe('queued')
+    expect(queue.status(third.id)?.decision?.reason).toBe('quota')
+    expect(queue.perf().capacity).toMatchObject({ ownerQuota: 2, cpu: 8 })
+  })
+
+  it('reserves a GPU slot per live virtual-gui and says virtual_gui', () => {
+    const { queue, executor } = setup({ capacity: { gpu: 2 }, reserved: 1 })
+    const first = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const second = queue.submit(main(), { kind: 'render', file: 'b.blend' })
+    expect(executor.starts).toHaveLength(1)
+    expect(queue.status(first.id)?.state).toBe('running')
+    expect(queue.status(second.id)?.state).toBe('queued')
+    expect(queue.status(second.id)?.decision?.reason).toBe('virtual_gui')
+    expect(queue.perf().slots).toMatchObject({ gpu: { used: 1, total: 2, reserved: 1 } })
+  })
+
+  it('points the queue_full fix at DSH_BLENDER_QUEUE_PENDING instead of a missing key', () => {
+    const { queue } = setup({ capacity: { pending: 1 } })
+    queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    let failure: QueueError | null = null
+    try {
+      queue.submit(main(), { kind: 'headless', script: 'print(2)' })
+    } catch (e) {
+      failure = e as QueueError
+    }
+    expect(failure).not.toBeNull()
+    expect(failure!.failure.fix).toContain('DSH_BLENDER_QUEUE_PENDING')
+    expect(failure!.failure.fix).not.toContain('documented pending limit')
+    expect(failure!.failure.evidence).toMatchObject({ pending: 1, limit: 1 })
+  })
+
+  it('explains every queued row through explainWaiting, not only the head', () => {
+    const { queue } = setup({ capacity: { gpu: 1 } })
+    queue.submit(main(), { kind: 'render', file: 'running.blend' })
+    const second = queue.submit(main(), { kind: 'render', file: 'second.blend' })
+    const third = queue.submit(main(), { kind: 'render', file: 'third.blend' })
+    // recordWaiting 只记队首；第三行以前在 status/list 里是 decision=null —— 看不出在等什么。
+    const status = queue.status(third.id)
+    expect(status?.state).toBe('queued')
+    expect(status?.decision).toMatchObject({
+      outcome: 'waiting',
+      reason: 'capacity',
+      detail: 'target slot is busy',
+    })
+    expect(queue.status(second.id)?.decision?.reason).toBe('capacity')
+    const queued = queue.list().filter((job) => job.state === 'queued')
+    expect(queued).toHaveLength(2)
+    expect(queued.every((job) => job.decision?.detail === 'target slot is busy')).toBe(true)
+    // 派生视图只读：不落盘、不改事件链。
+    expect(queue.status(third.id)?.events.map((e) => e.to)).toEqual(['queued'])
+  })
+
+  it('keeps the documented defaults and lets env win over the config file', () => {
+    expect(CFG.features.queue).toEqual({ gpu: 1, cpu: 2, pending: 64, ownerQuota: 8 })
+    const envName = 'DSH_BLENDER_QUEUE_GPU'
+    expect(resolveQueueSetting({ envName, envValue: '3', fileValue: 9, fallback: 1 })).toEqual({
+      value: 3,
+      source: 'env:DSH_BLENDER_QUEUE_GPU',
+    })
+    expect(
+      resolveQueueSetting({
+        envName,
+        envValue: undefined,
+        fileValue: 9,
+        fallback: 1,
+        fileFrom: 'x.json',
+      }),
+    ).toEqual({ value: 9, source: 'file:x.json' })
+    expect(resolveQueueSetting({ envName, envValue: '', fileValue: 9, fallback: 1 })).toEqual({
+      value: 9,
+      source: 'file:config',
+    })
+    expect(resolveQueueSetting({ envName, envValue: undefined, fallback: 1 })).toEqual({
+      value: 1,
+      source: 'default',
+    })
+  })
+
+  it('falls back to the default for invalid values and says invalid in the source', () => {
+    const envName = 'DSH_BLENDER_QUEUE_PENDING'
+    expect(resolveQueueSetting({ envName, envValue: 'nope', fallback: 64 })).toEqual({
+      value: 64,
+      source: 'invalid:env:DSH_BLENDER_QUEUE_PENDING',
+    })
+    expect(resolveQueueSetting({ envName, envValue: '0', fallback: 64 })).toEqual({
+      value: 64,
+      source: 'invalid:env:DSH_BLENDER_QUEUE_PENDING',
+    })
+    expect(
+      resolveQueueSetting({
+        envName,
+        envValue: undefined,
+        fileValue: -2,
+        fallback: 64,
+        fileFrom: 'x.json',
+      }),
+    ).toEqual({ value: 64, source: 'invalid:file:x.json' })
+    // 画面上的整数语义：小数向下取整，避免 2.7 变成 3 个 slot。
+    expect(resolveQueueSetting({ envName, envValue: '2.7', fallback: 64 }).value).toBe(2)
+  })
+})
+
+describe('3.1 gateway wiring reads capacity from configuration (Q-1/Q-2)', () => {
+  it('passes features.queue to JobQueue and reserves a GPU slot per virtual-gui', async () => {
+    process.env.DSH_BLENDER_QUEUE_GPU = '3'
+    vi.resetModules()
+    try {
+      const { createGatewayApp } = await import('../../../runtime/gateway/app.js')
+      const app = createGatewayApp({ port: 0 })
+      try {
+        // 构造点真的把配置传下去了（不是 DEFAULT_CAPACITY 的巧合：gpu 来自 env=3）。
+        // perf() 是 Record<string, unknown>，用 toMatchObject 一次断言四个键，不拿 any 吞边界。
+        expect(app.jobQueue.perf()).toMatchObject({
+          capacity: { gpu: 3, cpu: 2, pending: 64, ownerQuota: 8 },
+        })
+        // reservedGpu 接的是 registry 的 virtual-gui 计数：默认实现会恒为 0。
+        const virtual: SessionRecord = {
+          id: 'virtual-gui:v1',
+          kind: 'virtual-gui',
+          instanceId: 'v1',
+          status: 'ready',
+          owner: null,
+          agents: new Map(),
+          grants: new Map(),
+          paused: false,
+          pausedAt: null,
+          activePy: null,
+          humanEdits: new Map(),
+          humanModifiedAt: null,
+          display: null,
+          provider: null,
+          createdAt: 1,
+          lastActivityAt: 1,
+        }
+        app.sessionRegistry.addSession(virtual)
+        expect(app.jobQueue.perf().slots).toMatchObject({ gpu: { reserved: 1, total: 3 } })
+      } finally {
+        app.close()
+      }
+    } finally {
+      delete process.env.DSH_BLENDER_QUEUE_GPU
+      vi.resetModules()
+    }
+  })
+})
+
+describe('3.1 wait timeout says still_running and list rows carry decision detail (Q-4)', () => {
+  it('marks a timed-out wait on a live job with still_running', async () => {
+    vi.useFakeTimers()
+    const { queue } = setup()
+    const job = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const pending = queue.wait(main(), job.id, 1000)
+    await vi.advanceTimersByTimeAsync(1200)
+    const result = await pending
+    expect(result.waitTimedOut).toBe(true)
+    expect(result.still_running).toBe(true)
+    expect(typeof result.waitedMs).toBe('number')
+    expect((result.job as JobRecord).state).toBe('running')
+  })
+
+  it('omits still_running when the job already reached a terminal state', async () => {
+    const { queue, executor } = setup()
+    const job = queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    executor.finish(0)
+    await Promise.resolve()
+    const result = await queue.wait(main(), job.id, 1000)
+    expect(result.waitTimedOut).toBe(false)
+    expect(result).not.toHaveProperty('still_running')
+    expect((result.job as JobRecord).state).toBe('completed')
+  })
+
+  it('keeps still_running true for a job that never started', async () => {
+    vi.useFakeTimers()
+    const { queue } = setup({ reserved: 1 })
+    const job = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const pending = queue.wait(main(), job.id, 1000)
+    await vi.advanceTimersByTimeAsync(1200)
+    const result = await pending
+    expect(result.waitTimedOut).toBe(true)
+    // "还没开始" 也是 still_running：超时不是失败，作业仍在队列里等槽位。
+    expect(result.still_running).toBe(true)
+    const snapshot = result.job as JobRecord
+    expect(snapshot.state).toBe('queued')
+    expect(snapshot.decision?.reason).toBe('virtual_gui')
+  })
+
+  it('exposes decision.detail in the blender_run list rows', () => {
+    const rows = listRows([
+      {
+        id: 'job-1',
+        kind: 'render',
+        state: 'queued',
+        decision: { outcome: 'waiting', reason: 'capacity', detail: 'target slot is busy' },
+      },
+      { id: 'job-2', kind: 'render', state: 'running', decision: null },
+    ])
+    expect(rows[0].decision).toEqual({
+      outcome: 'waiting',
+      reason: 'capacity',
+      detail: 'target slot is busy',
+    })
+    expect(rows[1].decision).toBeNull()
+  })
+})
+
+describe('3.1 collect tail never cuts a line in half (T-1)', () => {
+  // 固定宽度：任何"半行"都会让长度对不上，测试就能抓住按字符切的行为。
+  const WIDTH = 96
+  const lines: string[] = []
+  for (let i = 0; i < 100_000; i++)
+    lines.push('STK_JSON ' + String(i).padStart(8, '0') + ' ' + 'x'.repeat(WIDTH - 18))
+  const bigLog = lines.join('\n') + '\n'
+
+  function collectText(logText: string, tail: number): string {
+    const store = new MemoryJobStore()
+    store.save([
+      {
+        id: 'job-big',
+        kind: 'headless',
+        params: { kind: 'headless' },
+        state: 'completed',
+        priority: 0,
+        slot: 'cpu',
+        owner: { hostId: 'host-a', dshSessionId: 'dsh-1', agentId: 'agent-main' },
+        createdAt: 1,
+        updatedAt: 2,
+        assignedAt: 1,
+        startedAt: 1,
+        finishedAt: 2,
+        pid: null,
+        decision: null,
+        result: { exitCode: 0, signal: null, ms: 1 },
+        artifacts: [],
+        logs: { stdout: logText, stderr: '' },
+        error: null,
+        events: [],
+      } satisfies JobRecord,
+    ])
+    const { queue } = setup({ store })
+    const out = queue.collect(main(), 'job-big', tail)
+    return String((out.job as JobRecord).logs.stdout)
+  }
+
+  it('keeps every returned line intact and ends on the real last line', () => {
+    const out = collectText(bigLog, 2000)
+    expect(out.length).toBeLessThanOrEqual(2000)
+    expect(out.endsWith('\n')).toBe(true)
+    const returned = out.split('\n').filter(Boolean)
+    expect(returned.length).toBeGreaterThan(5)
+    for (const line of returned) expect(line).toHaveLength(WIDTH)
+    expect(returned[returned.length - 1]).toBe(lines[lines.length - 1])
+  })
+
+  it('drops the half line at the window start and keeps a clean boundary', () => {
+    // 窗口起点正落在换行后 → 首行本来就完整，不该被丢掉。
+    expect(collectText('aaa\nbbb\nccc\n', 8)).toBe('bbb\nccc\n')
+    // 起点落在行中间 → 丢掉那半行，从下一个换行之后开始。
+    expect(collectText('aaa\nbbb\nccc\n', 7)).toBe('ccc\n')
+  })
+
+  it('keeps the old character slice when the text has no newline at all', () => {
+    const single = 'x'.repeat(9000)
+    expect(collectText(single, 100)).toBe(single.slice(-100))
+  })
+})
+
+interface FakeProcess {
+  pid: number
+  stdout: EventEmitter
+  stderr: EventEmitter
+  kill: () => void
+  once: EventEmitter['once']
+  on: EventEmitter['on']
+  emit: EventEmitter['emit']
+  removeListener: EventEmitter['removeListener']
+}
+
+function fakeChild(): FakeProcess {
+  const child = new EventEmitter() as unknown as FakeProcess
+  child.pid = 4242
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.kill = () => {}
+  return child
+}
+
+function jobRecord(kind: 'render' | 'headless', params: Record<string, unknown>): JobRecord {
+  return {
+    id: 'job-t2',
+    kind,
+    params,
+    state: 'running',
+    priority: 0,
+    slot: kind === 'render' ? 'gpu' : 'cpu',
+    owner: { hostId: 'h', dshSessionId: 'd', agentId: 'a' },
+    createdAt: 1,
+    updatedAt: 1,
+    assignedAt: 1,
+    startedAt: 1,
+    finishedAt: null,
+    pid: null,
+    decision: null,
+    result: null,
+    artifacts: [],
+    logs: { stdout: '', stderr: '' },
+    error: null,
+    events: [],
+  }
+}
+
+function executorWith(child: FakeProcess, tempRoot: string): SpawnJobExecutor {
+  return new SpawnJobExecutor({
+    blenderExe: 'blender-test',
+    tempRoot,
+    spawnImpl: (() => child) as unknown as (typeof import('node:child_process'))['spawn'],
+  })
+}
+
+function scriptMapOf(provenance: Record<string, unknown> | undefined): Record<string, unknown> {
+  return (provenance?.script_map || {}) as Record<string, unknown>
+}
+
+describe('3.1 headless script_map points tracebacks at the source file (T-2)', () => {
+  it('maps the temp job.py back to the caller script_file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-t2-src-'))
+    const source = path.join(dir, 'user_script.py')
+    fs.writeFileSync(source, 'print("hi")\n', 'utf8')
+    const child = fakeChild()
+    const executor = executorWith(child, path.join(dir, 'tmp'))
+    const handle = executor.start(jobRecord('headless', { script_file: source }))
+    child.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    child.emit('close', 0, null)
+    const result = await handle.done
+    const map = scriptMapOf(result.provenance)
+    expect(map.source_path).toBe(source)
+    expect(String(map.temp_path)).toMatch(/dsh-job-.+job\.py$/)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('stays absent for an inline script, a render, and carries through collect', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-t2-inline-'))
+    const inlineChild = fakeChild()
+    const inline = executorWith(inlineChild, path.join(dir, 'tmp'))
+    const inlineHandle = inline.start(jobRecord('headless', { script: 'print(1)' }))
+    inlineChild.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    inlineChild.emit('close', 0, null)
+    expect((await inlineHandle.done).provenance?.script_map).toBeUndefined()
+
+    const blend = path.join(dir, 'a.blend')
+    fs.writeFileSync(blend, 'x')
+    const renderChild = fakeChild()
+    const render = executorWith(renderChild, path.join(dir, 'tmp'))
+    const renderHandle = render.start(
+      jobRecord('render', { file: blend, resolution: [8, 8], frames: [1, 1] }),
+    )
+    renderChild.stdout.emit('data', Buffer.from('DSH_RENDER {"device":"cpu"}\n'))
+    renderChild.emit('close', 0, null)
+    expect((await renderHandle.done).provenance?.script_map).toBeUndefined()
+
+    // 队列层把 provenance 原样留在 collect 回执的 job.result 里。
+    const source = path.join(dir, 'queued.py')
+    fs.writeFileSync(source, 'print("queued")\n', 'utf8')
+    const queueChild = fakeChild()
+    const queue = new JobQueue({
+      executor: executorWith(queueChild, path.join(dir, 'tmp-queue')),
+      store: new MemoryJobStore(),
+    })
+    const submitted = queue.submit(main(), { kind: 'headless', script_file: source })
+    queueChild.stdout.emit('data', Buffer.from('HEADLESS {"ok":true}\n'))
+    queueChild.emit('close', 0, null)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const collected = queue.collect(main(), submitted.id, 4000)
+    const job = collected.job as JobRecord
+    expect(scriptMapOf(job.result?.provenance).source_path).toBe(source)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('3.1 render pre_script runs before the prelude (Q-5)', () => {
+  const PRE = 'PRE_SECRET = 1\nprint("PRE_SECRET", PRE)'
+
+  it('accepts pre_script on render and keeps rejecting script / script_file', () => {
+    const { queue } = setup()
+    const job = queue.submit(main(), { kind: 'render', pre_script: PRE })
+    expect(job.params.pre_script).toBe(PRE)
+    expect(() => queue.submit(main(), { kind: 'render', script: 'print(1)' })).toThrow(QueueError)
+    try {
+      queue.submit(main(), { kind: 'render', script_file: 'x.py' })
+      throw new Error('expected queue_render_script')
+    } catch (e) {
+      expect(e).toBeInstanceOf(QueueError)
+      const failure = (e as QueueError).failure
+      expect(failure.code).toBe('queue_render_script')
+      // 文案要把唯一放行的钩子说清，否则调用方只知道"被拒"。
+      expect(failure.fix).toContain('pre_script')
+    }
+  })
+
+  it('puts -P <tmp>/pre.py before --python-expr and keeps args untouched without it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pre-'))
+    const blend = path.join(dir, 'scene.blend')
+    fs.writeFileSync(blend, 'x')
+    const base = { file: blend, resolution: [16, 16], frames: [1, 1] }
+
+    const built = buildJobArgs(jobRecord('render', { ...base, pre_script: PRE }), dir)
+    // 顺序：-b --factory-startup -P pre.py --python-expr <prelude>：pre_script 在 prelude **之前**。
+    expect(built.args[1]).toBe('-b')
+    expect(built.args[2]).toBe('--factory-startup')
+    expect(built.args[3]).toBe('-P')
+    expect(String(built.args[4]).endsWith('pre.py')).toBe(true)
+    expect(built.args[5]).toBe('--python-expr')
+    // 内容只落临时文件，不进 argv / argsTail（回执里也就没有脚本正文）。
+    expect(fs.readdirSync(dir)).toContain('pre.py')
+    expect(fs.readFileSync(path.join(dir, 'pre.py'), 'utf8')).toContain('PRE_SECRET')
+    expect(built.args.join(' ')).not.toContain('PRE_SECRET')
+    expect(JSON.stringify(built.argsTail)).not.toContain('PRE_SECRET')
+
+    const plain = buildJobArgs(jobRecord('render', base), dir)
+    expect(plain.args).not.toContain('-P')
+    expect(plain.args[1]).toBe('-b')
+    expect(plain.args[2]).toBe('--factory-startup')
+    expect(plain.args[3]).toBe('--python-expr')
+    expect(plain.args.filter((a) => a === '--python-expr')).toHaveLength(1)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('never echoes the pre_script body into the job stdout', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pre-run-'))
+    const blend = path.join(dir, 'scene.blend')
+    fs.writeFileSync(blend, 'x')
+    const child = fakeChild()
+    const executor = executorWith(child, path.join(dir, 'tmp'))
+    const handle = executor.start(
+      jobRecord('render', {
+        file: blend,
+        resolution: [8, 8],
+        frames: [1, 1],
+        pre_script: PRE,
+      }),
+    )
+    child.stdout.emit('data', Buffer.from('DSH_RENDER {"device":"cpu"}\n'))
+    child.emit('close', 0, null)
+    const result = await handle.done
+    expect(result.stdout).not.toContain('PRE_SECRET')
+    expect(JSON.stringify(result.provenance)).not.toContain('PRE_SECRET')
+    // 作业结束临时目录被删：pre.py 不留在盘上。
+    const tempRoot = path.join(dir, 'tmp')
+    expect(fs.readdirSync(tempRoot)).toEqual([])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
 describe('3.1 internal queue surface', () => {
   it('covers render and headless submission through one handler', async () => {
     vi.useFakeTimers()
@@ -452,6 +943,60 @@ describe('3.1 queue executor command shape', () => {
     // sys.argv.index("--") 取参数尾，与 GUI 的 headless 前导同一口径）。
     expect(args).toEqual(['-b', '--factory-startup', '--python', path.join(dir, 'job.py'), '--'])
     expect(fs.readFileSync(path.join(dir, 'job.py'), 'utf8')).toContain('HEADLESS')
+  })
+
+  it('C-10: 用户 args 排在 -- 之后、outdir 之前（不再被目录名占第 0 位）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-argv-'))
+    const built = buildJobArgs(
+      record('headless', {
+        script: 'print(1)',
+        args: ['--flag', 'a b'],
+        outdir: path.join(dir, 'out'),
+      }),
+      dir,
+    )
+    const sep = built.args.indexOf('--')
+    expect(sep).toBeGreaterThan(0)
+    const tail = built.args.slice(sep + 1)
+    expect(tail[0]).toBe('--flag')
+    expect(tail[1]).toBe('a b')
+    expect(tail[tail.length - 1]).toBe(built.outdir)
+  })
+
+  it('C-13: list 支持 limit/offset/sinceMs，且默认不再一次吐全量', () => {
+    const { queue } = setup()
+    for (let i = 0; i < 5; i++)
+      queue.submit(main(), { kind: 'headless', script: 'print(' + i + ')' })
+    expect(queue.list({}).length).toBe(5)
+    expect(queue.list({ limit: 2 }).length).toBe(2)
+    const page2 = queue.list({ limit: 2, offset: 2 })
+    expect(page2.length).toBe(2)
+    expect(page2[0].id).not.toBe(queue.list({ limit: 1 })[0].id)
+    expect(queue.list({ sinceMs: Date.now() + 60_000 })).toEqual([])
+    expect(queue.list({ owner: 'dsh-other' })).toEqual([])
+  })
+
+  it('C-9: headless 默认带设备前导（device=auto），并接受 device/compute_device_type', () => {
+    const autoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(record('headless', { script: 'print(1)' }), autoDir)
+    const autoCode = fs.readFileSync(path.join(autoDir, 'job.py'), 'utf8')
+    expect(autoCode).toContain('_dsh_headless_device()')
+    expect(autoCode).toContain('"device": "auto"')
+    expect(autoCode).toContain('DSH_RENDER')
+    expect(autoCode).toContain('prefs.get_devices()')
+
+    const gpuDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(
+      record('headless', { script: 'print(1)', device: 'gpu', compute_device_type: 'optix' }),
+      gpuDir,
+    )
+    const gpuCode = fs.readFileSync(path.join(gpuDir, 'job.py'), 'utf8')
+    expect(gpuCode).toContain('"device": "gpu"')
+    expect(gpuCode).toContain('"compute_device_type": "OPTIX"')
+
+    const cpuDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-queue-dev-'))
+    buildJobArgs(record('headless', { script: 'print(1)', gpu: false }), cpuDir)
+    expect(fs.readFileSync(path.join(cpuDir, 'job.py'), 'utf8')).toContain('"device": "cpu"')
   })
 
   it('attributes a missing Blender executable to stage spawn', async () => {

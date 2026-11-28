@@ -10,10 +10,13 @@ import { BACKEND_HINT } from '../../constants.js'
 import type { AvailabilityStage } from '../../contracts/availability.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
+import { execCaller } from '../../host/exec-context.js'
 import { backendPost, jsonPayload } from '../../host/http.js'
 import type { WorkspaceView } from '../../host/workspace.js'
 import { workspaceNote, workspacePayload, workspaceRoots } from '../../host/workspace.js'
 import { toolError } from '../errors.js'
+import { postJobSubmit, postQueueJob } from '../shared/queue-job.js'
+import { resolveSession } from '../shared/session.js'
 import { executeWorker } from './worker.js'
 import {
   formatCancel,
@@ -33,6 +36,32 @@ import {
 } from './presenter.js'
 
 const LF = String.fromCharCode(10)
+
+/**
+ * T-2：headless 的临时脚本映射（executor 写在 result.provenance.script_map 里）。
+ * 两个路径都在才算数；render / 内联脚本 / 老记录一律没有这个键。
+ */
+function scriptMapOf(job: Record<string, unknown>): Record<string, string> | null {
+  const map = asRecord(asRecord(asRecord(job.result).provenance).script_map)
+  const tempPath = text(map.temp_path)
+  const sourcePath = text(map.source_path)
+  if (!tempPath || !sourcePath) return null
+  return { temp_path: tempPath, source_path: sourcePath }
+}
+
+/** 一行提示：traceback 的行号指的是那份临时副本，不是源脚本。 */
+function withScriptMapHint(body: string, map: Record<string, string> | null): string {
+  if (!map) return body
+  return (
+    body +
+    LF +
+    'script_map  traceback 行号对应临时副本 ' +
+    map.temp_path +
+    '（源脚本 ' +
+    map.source_path +
+    '）'
+  )
+}
 
 /**
  * 渲染通道（render / alpha / mask / ink）：允许列表与默认值只在这一处。
@@ -96,6 +125,8 @@ const RENDER_KEYS = [
   'camera',
   'device',
   'compute_device_type',
+  // Q-5：render 唯一放行的脚本钩子（渲染前跑一次的场景准备）。漏在这里 = 静默丢弃。
+  'pre_script',
 ]
 const HEADLESS_KEYS = [
   'script',
@@ -104,6 +135,9 @@ const HEADLESS_KEYS = [
   'outdir',
   'timeout_ms',
   'engine',
+  // C-9：headless 也接受设备参数（以前被白名单静默丢弃）
+  'device',
+  'compute_device_type',
   'preload',
   'factory_startup',
   'bootstrap',
@@ -246,29 +280,21 @@ function failureOf(body: Record<string, unknown>, action: string): unknown {
   )
 }
 
-async function postQueue(
+/** 队列动作走唯一传输面（surface=queue 与不可达回执都在 shared/queue-job.ts）。 */
+function postQueue(
   port: number,
   payload: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<Record<string, unknown>> {
-  try {
-    return await backendPost(port, '/job', { surface: 'queue', ...payload }, timeoutMs)
-  } catch (e: unknown) {
-    return {
-      ok: false,
-      code: 'gateway_unreachable',
-      stage: 'transport',
-      root_cause: 'Gateway 不可达 · ' + text(e instanceof Error ? e.message : e),
-      fix: BACKEND_HINT,
-    }
-  }
+  return postQueueJob(port, payload, timeoutMs, BACKEND_HINT)
 }
 
 function submitPayload(args: Record<string, unknown>): Record<string, unknown> | string {
   const kind = text(args.kind).trim()
   if (kind !== 'render' && kind !== 'headless')
     return 'submit 需要 kind=render|headless（render=声明式最终渲染；headless=跑脚本）'
-  const payload: Record<string, unknown> = { op: 'submit', kind }
+  // op="submit" 由 jobSubmitBody 写（本地无头车道共用同一个构造器）。
+  const payload: Record<string, unknown> = { kind }
   if (present(args.priority)) payload.priority = Number(args.priority)
   if (kind === 'render') {
     if (present(args.script) || present(args.script_file))
@@ -335,15 +361,54 @@ async function submitRun(
       '给绝对路径，或传 workdir=<工作区根>',
       workspaceNote(ws),
     )
-  const body = await postQueue(port, built, 60000)
+  const body = await postJobSubmit(port, built, 60000, BACKEND_HINT)
   if (body.ok !== true) return failureOf(body, 'submit')
-  // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与 receipt.v2 信封同源。
+  // 结构化句柄：并发时调用方不必再正则 "RUN (job-…)" —— jobId/state/slot 与回执信封同源。
   const job = asRecord(body.job)
   return {
     text: formatSubmit(job) + LF + workspaceNote(ws, resolved.base),
     ...jobFields(job),
     queued_ahead: typeof job.queued_ahead === 'number' ? job.queued_ahead : null,
     envelope: submitEnvelope(job, job.queued_ahead, resolved.base),
+  }
+}
+
+/**
+ * list 的 owner 解析：先看已解析的会话 ref（mine 会话的 ref.owner 就是调用方的
+ * DSH 会话 id）；没有 ready 会话、或只有别人的只读会话时，回退到 exec 调用方。
+ * viewer 会话的 owner 属于另一个 DSH 会话，不能当作 "me"。
+ */
+async function listOwner(port: number, ownerArg: string): Promise<string> {
+  if (ownerArg === 'all') return ''
+  if (ownerArg && ownerArg !== 'me') return ownerArg
+  const ref = await resolveSession(port)
+  if (ref.ok && ref.source === 'mine' && ref.owner) return ref.owner
+  return String(execCaller()?.dshSessionId || '')
+}
+
+/**
+ * wait 回执（T-1/T-2/Q-4 的字段都在这里组装）：队列层单独成一块，executeRun 只留一行分支。
+ * 字段与语义与拆分前逐字一致（waited_ms / timed_out / still_running / script_map / envelope）。
+ */
+async function waitRun(port: number, id: string, args: Record<string, unknown>): Promise<unknown> {
+  const action = 'wait'
+  const timeoutMs = Number(args.timeout_ms) || 120000
+  const budget = Math.min(600000, Math.max(1000, timeoutMs)) + 30000
+  const body = await postQueue(port, { op: 'wait', id, timeout_ms: timeoutMs }, budget)
+  if (body.ok !== true) return failureOf(body, action)
+  const job = asRecord(body.job)
+  const scriptMap = scriptMapOf(job)
+  return {
+    text: withScriptMapHint(formatWait(job, body.waitedMs, body.waitTimedOut), scriptMap),
+    ...jobFields(job),
+    applied: jobApplied(job),
+    waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
+    timed_out: body.waitTimedOut === true,
+    // Q-4：超时不是失败。终态时队列层不带这个字段，这里如实落 false（不编造"还在跑"）。
+    still_running: body.still_running === true,
+    // T-2：additive；只有 headless 临时脚本才有值。
+    ...(scriptMap ? { script_map: scriptMap } : {}),
+    envelope: jobEnvelope(action, job),
   }
 }
 
@@ -374,14 +439,28 @@ export async function executeRun(
   if (action === 'submit') return submitRun(ctx, port, args, exec)
   if (action === 'list') {
     const payload: Record<string, unknown> = { op: 'list' }
-    for (const k of ['state', 'kind', 'owner']) if (present(args[k])) payload[k] = args[k]
+    for (const k of ['state', 'kind']) if (present(args[k])) payload[k] = args[k]
+    // C-13：默认只看**本会话**，`owner=all` 才放开；默认 20 条，`limit=0` = 不分页。
+    const owner = await listOwner(port, text(args.owner).trim())
+    if (owner) payload.owner = owner
+    const limitRaw = args.limit === undefined ? 20 : Number(args.limit)
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(0, Math.trunc(limitRaw))) : 20
+    if (limit > 0) payload.limit = limit
+    const offset = Math.max(0, Math.trunc(Number(args.offset) || 0))
+    if (offset > 0) payload.offset = offset
+    if (Number(args.since_ms) > 0) payload.since_ms = Number(args.since_ms)
     const body = await postQueue(port, payload, 60000)
     if (body.ok !== true) return failureOf(body, action)
     const jobs = Array.isArray(body.jobs) ? (body.jobs as Array<Record<string, unknown>>) : []
+    const total = Number(body.total) || jobs.length
+    const pageOffset = Number(body.offset) || 0
     return {
-      text: formatList(jobs),
+      text: formatList(jobs, { total, offset: pageOffset }),
       jobs: listRows(jobs),
       count: jobs.length,
+      total,
+      offset: pageOffset,
+      owner: owner || 'all',
       envelope: listEnvelope(jobs),
     }
   }
@@ -408,21 +487,7 @@ export async function executeRun(
       envelope: jobEnvelope(action, job),
     }
   }
-  if (action === 'wait') {
-    const timeoutMs = Number(args.timeout_ms) || 120000
-    const budget = Math.min(600000, Math.max(1000, timeoutMs)) + 30000
-    const body = await postQueue(port, { op: 'wait', id, timeout_ms: timeoutMs }, budget)
-    if (body.ok !== true) return failureOf(body, action)
-    const job = asRecord(body.job)
-    return {
-      text: formatWait(job, body.waitedMs, body.waitTimedOut),
-      ...jobFields(job),
-      applied: jobApplied(job),
-      waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
-      timed_out: body.waitTimedOut === true,
-      envelope: jobEnvelope(action, job),
-    }
-  }
+  if (action === 'wait') return waitRun(port, id, args)
   if (action === 'collect') {
     const body = await postQueue(
       port,
@@ -431,10 +496,13 @@ export async function executeRun(
     )
     if (body.ok !== true) return failureOf(body, action)
     const job = asRecord(body.job)
+    const scriptMap = scriptMapOf(job)
     return {
-      text: formatCollect(job),
+      text: withScriptMapHint(formatCollect(job), scriptMap),
       ...jobFields(job),
       applied: jobApplied(job),
+      // T-2：additive；只有 headless 临时脚本才有值。
+      ...(scriptMap ? { script_map: scriptMap } : {}),
       envelope: jobEnvelope(action, job),
     }
   }

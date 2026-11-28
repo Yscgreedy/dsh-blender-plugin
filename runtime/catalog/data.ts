@@ -530,6 +530,9 @@ export const PLAN_CATALOG: PlanFamily[] = [
     ops: [
       'status',
       'help',
+      // C-14：几何指纹（改前/改后各取一次即知源动没动）早已实现，但没进 catalog，
+      // blender_op(op="catalog") 里看不见 —— 只能靠猜 op 名。
+      'fingerprint',
       'reset',
       'register_component',
       'register_connection',
@@ -631,6 +634,7 @@ export const PLAN_READ_ONLY_OPS: string[] = [
   'status',
   'help',
   'ledger',
+  'fingerprint',
   'check_envelope',
   'check_interference',
   'check_interface',

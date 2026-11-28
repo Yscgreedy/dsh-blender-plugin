@@ -38,6 +38,10 @@ const targets = [
     file,
     pairs: [
       [/\d+ (?:个 )?family \/ \d+ (?:个 )?op/g, fams + ' 个 family / ' + ops + ' 个 op'],
+      // English form used by the repo AGENTS.md: "38 families / 269 ops"
+      [/\d+ famil(?:y|ies) \/ \d+ ops/g, fams + ' families / ' + ops + ' ops'],
+      // "269 ops / 25 addon commands / 29 routes / protocol 12"
+      [/\d+ ops \/ \d+ addon commands/g, ops + ' ops / 25 addon commands'],
       [/catalog（\d+\/\d+）/g, 'catalog（' + fams + '/' + ops + '）'],
       [/catalog 不是 \d+-\d+/g, 'catalog 不是 ' + fams + '-' + ops],
     ],
@@ -59,6 +63,10 @@ for (const rel of ['docs/操作教程.md', 'skills/blender-modeling/SKILL.md']) 
 // 记录，保留当时的 36/264 原文，不在此列）。新增 op 时这里会自动跟着 catalog 走。
 for (const rel of [
   'llms.txt',
+  'README.md',
+  'docs/zh/README.md',
+  'docs/architecture.md',
+  'tests/BEHAVIOR_MATRIX.md',
   'package.json',
   'docs/AI-安装提示词.md',
   'docs/DSH-更新适配.md',
@@ -77,6 +85,9 @@ for (const rel of [
       [/\d+ family \/ \d+ op/g, fams + ' family / ' + ops + ' op'],
       [/\d+ families \/ \d+ ops/g, fams + ' families / ' + ops + ' ops'],
       [/\d+ 个 family \/ \d+ 个 op/g, fams + ' 个 family / ' + ops + ' 个 op'],
+      [/\d+ plan families \/ \d+ op entries/g, fams + ' plan families / ' + ops + ' op entries'],
+      [/\d+ operations\b/g, ops + ' operations'],
+      [/复核 \d+\/\d+/g, '复核 ' + fams + '/' + ops],
       [/catalog 的 \d+\/\d+/g, 'catalog 的 ' + fams + '/' + ops],
       [/catalog 不是 \d+\/\d+/g, 'catalog 不是 ' + fams + '/' + ops],
       [/\d+\/\d+ catalog/g, fams + '/' + ops + ' catalog'],

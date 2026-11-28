@@ -20,16 +20,29 @@ export function formatConsent(body: Record<string, unknown>): string {
   const ev = asRecord(body.evidence)
   const req = asRecord(body.human_action)
   const requestId = text(body.request_id || ev.request_id || '')
+  const pending = text(ev.state) === 'pending'
+  const mode = text(ev.mode || '')
   const lines = [
     '⚠ 需要你（人类）确认：启动一个可见的 virtual-gui Blender 窗口',
     'request_id ' + (requestId || '(缺失：先 action=start 一次生成请求)'),
   ]
-  if (req.approve) {
-    lines.push('在 Gateway 所在机器的任意终端执行：', '  ' + text(req.approve))
-    lines.push('拒绝：', '  ' + text(req.deny || ''))
+  if (pending) {
+    // 3.3.1：卡片就在这条对话下面，「批准」直接让刚才那次 start 落地 —— 人不用离开对话。
     lines.push(
-      '然后让 agent 再调一次 blender_session action=start kind=virtual-gui（批准只消费一次）',
+      '→ 在这个会话的「Blender 会话」面板里点「批准」即可：刚才那次 start 会立刻继续' +
+        '（等满 ' +
+        String(ev.wait_ms ?? '-') +
+        ' ms 仍未决定时已回 state=pending；再调一次 start 即可消费这次批准）',
     )
+  }
+  if (mode) lines.push('policy=' + text(ev.policy || 'ask') + '（mode=' + mode + '）')
+  if (req.approve) {
+    lines.push('也可以在这台机器的任意终端执行：', '  ' + text(req.approve))
+    lines.push('拒绝：', '  ' + text(req.deny || ''))
+    if (!pending)
+      lines.push(
+        '然后让 agent 再调一次 blender_session action=start kind=virtual-gui（批准只消费一次）',
+      )
   } else {
     lines.push(
       'policy=' +
@@ -150,6 +163,37 @@ function emptySessionListText(
   return head.concat(blocks).join(LF)
 }
 
+/**
+ * 台账 B：一行紧凑的 crew 摘要 —— “谁在改什么”。
+ *
+ * 只读 Gateway 新增的 `crew[]`（additive），不碰既有字段与顺序；没有 crew 的行
+ * （老 Gateway / 无发布者）返回空串，list 文本与旧版逐字一致。
+ */
+function crewSummary(s: SessionRow): string {
+  const crew = Array.isArray(s.crew) ? s.crew.filter(isRecord).map(asRecord) : []
+  if (!crew.length) return ''
+  const parts = crew.map((m) => {
+    const scopes = Array.isArray(m.scopes) ? m.scopes.map(text).filter(Boolean) : []
+    const running = Number(m.jobs_running ?? 0)
+    const queued = Number(m.jobs_queued ?? 0)
+    return (
+      text(m.agentId || '?') +
+      '/' +
+      text(m.role || '-') +
+      ' ' +
+      text(m.state || 'idle') +
+      (scopes.length ? ' scopes=' + scopes.join(',') : '') +
+      (running || queued ? ' jobs=' + String(running) + 'r/' + String(queued) + 'q' : '') +
+      (m.blocked_reason ? ' blocked=' + text(m.blocked_reason) : '') +
+      (m.last_write_at ? ' write=' + text(m.last_write_at) : '') +
+      (typeof m.grant_expires_in_ms === 'number'
+        ? ' grant=' + String(m.grant_expires_in_ms) + 'ms'
+        : '')
+    )
+  })
+  return '  crew(' + String(crew.length) + ') · ' + parts.join(' · ')
+}
+
 export function formatSessionList(
   sessions: SessionRow[],
   evidence?: Record<string, unknown> | null,
@@ -199,6 +243,9 @@ export function formatSessionList(
               : '')
           : ''),
     )
+    // 台账 B：紧跟在会话行下面的一行摘要，让人和主控一眼看到全队的 scopes 与在跑作业。
+    const crew = crewSummary(s)
+    if (crew) lines.push(crew)
   }
   return lines.concat(blocks).join(LF)
 }
@@ -476,8 +523,9 @@ export function sessionHelp(): string {
     '  grant / revoke / grants（写权限 scope：exclusive | collection:名 | prefix:名 | object:名）',
     '  pause / resume（只有人类能暂停；agent 调用返回 human_action_required）',
     '  mark_read（清掉 human_modified 冲突）| presence | heartbeat',
-    '  start / stop（只作用 virtual-gui；首次 start 返回 consent_required，回执里带 request_id + 人类要跑的一行命令）',
-    '  consent_request / consent_status（查看本 agent 的待批准请求）| consent_approve / consent_deny（request_id）',
+    '  start / stop（只作用 virtual-gui；manual 下 start 落待批准请求并在会话「Blender 会话」面板弹卡片，人点批准即让这次 start 成功；wait_ms 调等待窗口）',
+    '  consent_request / consent_status（查看本 agent 的待批准请求 + 当前 mode/auto/policy_source）',
+    '  批准/拒绝是人类动作：会话面板点按钮，或终端执行回执里的命令（agent 调 consent_approve/deny 会被拒 consent_human_only）',
     '  txn（子动作 op=snapshot|restore|list|prune|mark|revert|marks|drop|help；写快照/回滚需 exclusive grant）',
     '  reload（热更不重启：宿主层→写 profile patch 触发 HMR；运行时层→重拉 Gateway；dry_run=true 只诊断；force=true 强制重组合一次）',
     '旧工具迁移：blender_viewport → blender_session（status/doctor）+ blender_see；blender_rt_txn → blender_session action=txn。',

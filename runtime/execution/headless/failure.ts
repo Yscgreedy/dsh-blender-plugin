@@ -1,4 +1,4 @@
-import { enrichError } from '../../core/errors.js'
+import { enrichError } from '../../foundation/errors.js'
 import type { SpawnResult } from './types.js'
 
 export interface FailureContext {

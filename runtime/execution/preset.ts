@@ -1,7 +1,7 @@
 // 配方库 API 调用
 // @imports
-import { extractLoop } from '../core/output/index.js'
-import { KERNEL_BOOTSTRAP } from '../core/kernel/index.js'
+import { extractLoop } from '../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../foundation/kernel/index.js'
 
 export interface PresetDeps {
   addon: import('../transport/probes.js').AddonClient

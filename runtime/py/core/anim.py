@@ -426,11 +426,34 @@ def rig_record(arm, meshes=()):
             "ik_bones": ik_bones, "weights": _merged_coverage(arm, deform_names, meshes)}
 
 
+def _fcurve_count(action):
+    """action 的 fcurve 总数（C-14）：layered action 走 layers→strips→channelbag。"""
+    try:
+        layers = getattr(action, "layers", None)
+        if layers is None:
+            return len(list(getattr(action, "fcurves", None) or []))
+        total = 0
+        slots = list(getattr(action, "slots", None) or [])
+        for layer in layers:
+            for strip in getattr(layer, "strips", None) or []:
+                for slot in slots:
+                    try:
+                        bag = strip.channelbag(slot)
+                    except Exception:
+                        bag = None
+                    if bag is not None:
+                        total += len(list(getattr(bag, "fcurves", None) or []))
+        return total
+    except Exception:
+        return None
+
+
 def _action_rows(bpy, limit=20):
     rows = []
     for action in list(getattr(getattr(bpy, "data", None), "actions", []) or [])[: int(limit)]:
         frame = getattr(action, "frame_range", None)
         rows.append({"name": str(getattr(action, "name", "?")),
+                     "fcurve_count": _fcurve_count(action),
                      "frame_range": [round(float(frame[0]), 3), round(float(frame[1]), 3)]
                      if frame else None})
     return rows

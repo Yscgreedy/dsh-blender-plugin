@@ -37,6 +37,8 @@ coverage/
 /local-workspace/
 # Local PR-review workspace (never committed or shipped)
 /.review-tmp/
+# Architecture-audit working notes (local evidence only)
+/.audit/
 .vscode/
 
 # Windows hidden-desktop helper build output (scripts/build-win-helper.mjs)
@@ -51,3 +53,7 @@ coverage/
 pytest-of-*/
 pytest-*/
 
+# Antigravity MCP adapter: dependencies and the vite single-file bundle (both rebuilt)
+antigravity/node_modules/
+antigravity/dist/
+/.git-commit-msg.txt

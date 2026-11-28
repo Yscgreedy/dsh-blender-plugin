@@ -142,7 +142,7 @@ export function hostChangedFiles(
  * 旧实现（HOST_SELF）的洞：改 lib/constants.js → 只重启 Gateway → Gateway 重新扫盘，
  * 读到的是改过的磁盘 → host.verdict 自证成 current，而宿主进程里仍是旧代码。
  *
- * 现在「已装载」= 宿主插件装载那一刻写下的清单（runtime/core/layers.ts 的
+ * 现在「已装载」= 宿主插件装载那一刻写下的清单（runtime/foundation/layers.ts 的
  * writeHostManifest + DSH_BLENDER_HOST_MANIFEST）。宿主 fiber 不换，清单就不换 → 一直 stale，
  * 直到真的重组合。清单缺失（直接跑 gateway.js / 测试 / 隔离副本）才降级回扫盘，并写明降级。
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -152,8 +152,16 @@ let _hostProvCache: { at: number; value: HostLayerProvenance } | null = null
 /**
  * H1：宿主层判定。目录不存在/清单缺失 → unknown（判不了，不冒充 current）。
  * fresh=true 绕过 250ms 缓存（reload 刚构建完就问，必须现读）。
+ *
+ * 4a：调用方（HTTP 边界）可以**显式**给一份已装载快照；给了就只对拍它 ——
+ * 不再读 env、不再扫盘（R3 的唯一判据必须由调用方持有时才不会被隐式环境改写）。
  */
-export function hostProvenance(fresh = false): HostLayerProvenance {
+export function hostProvenance(fresh = false, snapshot?: LayerSnapshot): HostLayerProvenance {
+  if (snapshot) {
+    return snapshot.available
+      ? hostProvenanceFromLayer(snapshot)
+      : hostProvenanceFromMissing(snapshot)
+  }
   if (!fresh && _hostProvCache && Date.now() - _hostProvCache.at < HOST_PROV_TTL_MS)
     return _hostProvCache.value
   const value = hostProvenanceNow()
@@ -169,6 +177,33 @@ function hostProvenanceNow(): HostLayerProvenance {
   const self = hostProvenanceFromSelf()
   self.note = self.note + '（降级：' + String(layer.note || '宿主层清单不可用') + '）'
   return self
+}
+
+/**
+ * 显式快照里「已装载」一侧不可用：直接报判不了。
+ *
+ * 不退回「本进程启动扫的盘」（hostProvenanceFromSelf）—— 这正是 R3 的假绿来源，
+ * 而且会破坏「给了快照就不扫盘」的约定。unknown 是诚实的答案：缺证据 ≠ 已是最新。
+ */
+function hostProvenanceFromMissing(layer: LayerSnapshot): HostLayerProvenance {
+  return {
+    root: layer.root || HOST_DIR,
+    scope: HOST_SCOPE,
+    source: 'none',
+    loadedAt: layer.loadedAt,
+    loadedHash: layer.loadedHash,
+    currentHash: layer.currentHash,
+    loadedFileCount: layer.fileCount ?? 0,
+    fileCount: layer.currentFileCount ?? 0,
+    changedFiles: layer.changedFiles,
+    changedCount: layer.changedCount,
+    truncated: layer.truncated,
+    verdict: 'unknown',
+    note:
+      '宿主层判不了（' +
+      String(layer.note || '没有可信的已装载清单') +
+      '）→ 不冒充 current；要宿主重组合后写清单才能自证',
+  }
 }
 
 /** 清单来源的判定：已装载 = 宿主写的那一代，current = 磁盘。 */

@@ -6,7 +6,7 @@
 
 This repository is the **DSH × Blender plugin** (v3.3.0): a DeepSeek Harness plugin that drives a live
 Blender session over a loopback TCP bridge. Model surface: **6 tools** (`blender_session` / `blender_op` / `blender_py` / `blender_see` / `blender_run` / `blender_inspect`); planning surface:
-**38 families / 269 ops**; Blender addon **v2.0.0 / protocol 12** (Blender extension install); Gateway `127.0.0.1:39877`, addon dials the Gateway (no inbound port).
+**38 families / 270 ops**; Blender addon **v2.0.0 / protocol 12** (Blender extension install); Gateway `127.0.0.1:39877`, addon dials the Gateway (no inbound port).
 Ports, config keys, and paths are facts of [docs/配置参考.md](docs/配置参考.md) — never invent them.
 
 ## 1. Commands (single source)
@@ -26,9 +26,9 @@ Every other document links here instead of repeating commands.
 | Python tests only | `npm run test:python` with `PYTHON=/path/to/venv/python` |
 | Lint / format gate | `npm run lint` / `npm run format:check` |
 | Python static gate | `npm run check:python-static` (plain ruff + pure-logic pyright; no allowlist) |
-| Package contents check | `npm pack --dry-run` |
-| Optional external paths | `npm run setup:ext` / `npm run check:ext` (install / probe glTF-Validator + Open3D under `runtime/ext/`) |
+| Package contents / optional external paths | `npm pack --dry-run` · `npm run setup:ext` / `npm run check:ext` (glTF-Validator + Open3D under `runtime/ext/`) |
 | Refresh counts after catalog edits | `node scripts/sync_counts.mjs` then update `tests/fixtures/capability.lock.json` ([tests/MIGRATION.md](tests/MIGRATION.md)) |
+| Install / update this checkout into a DSH profile | `npm run dsh:install` (pack) · `npm run dsh:link` (dev link) · `npm run dsh:reload` · `npm run dsh:verify` ([docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md)) |
 
 Addon typing: install `requirements-typecheck.txt` (fake-bpy stubs + NumPy for legacy imports; type-only; behavior is real-Blender E2E).
 Addon IDE: root `pyrightconfig.json` = whole-addon editor config; it ignores legacy `tests/e2e/blender/native` and `runtime/py` diagnostics. `pyrightconfig.extension.json` = typed-core gate; `pyrightconfig.python.json` = pure-logic runtime scope; `pyproject.toml` = pytest/Ruff configuration.
@@ -45,7 +45,7 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 | Host entry | `src/index.ts` — entry-only; re-exports the plugin API and frame cache |
 | Host modules | `src/plugin.ts`, `src/tools/*` (one file per tool), `src/plan/*`, `src/host/*`, `src/ui/*`, `src/contracts/*`, `src/tui/*`, `src/plugin-lifecycle.ts`, `src/plugin-surfaces.ts` |
 | Backend HTTP | `runtime/http/*` — routes, lease, host views |
-| Backend engine | `runtime/core/*` (dispatch, kernel, scripts), `runtime/execution/*` (headless, jobs, workers), `runtime/transport/*` |
+| Backend engine | `runtime/foundation/*` (json/errors/progress/scripts, output, kernel, evidence, layers — no edge back into core), `runtime/core/*` (dispatch, engine, engine-api, sessions, queue, plan), `runtime/execution/*` (headless, jobs, workers), `runtime/contracts/*` (generated routing table, route matcher, local-lane names), `runtime/transport/*` |
 | Backend language | `runtime/**/*.ts` compiled to `lib/runtime/**/*.js`; `lib/` is never committed |
 | Python domains | `runtime/py/{core,geometry,assembly,render,export}` (registry `runtime/py/modules.json`; no flat `runtime/*.py` after the v3 domain split) |
 | Blender addon | `extension/dsh_blender_bridge/` package and the committed `extension/dsh_blender_bridge.zip` |
@@ -55,22 +55,20 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 
 - **Installed means verified.** GUI route: `doctor` returns `kind=ok`. Headless-only route:
   `blender_run(kind="headless")` submit + `wait`/`collect` returns outputs. Never report success otherwise.
-- **Install, config, and troubleshooting facts** live in [docs/操作教程.md](docs/操作教程.md) and
-  [docs/配置参考.md](docs/配置参考.md). Read them before advising.
-- **Only the bundled addon is supported** (`extension/dsh_blender_bridge.zip`, v2.0.0 / protocol 12).
-  MCP for Blender is unsupported since v2.3; migration is in [MIGRATIONS.md](MIGRATIONS.md).
+- **Install, config, and troubleshooting facts** live in [docs/操作教程.md](docs/操作教程.md) and [docs/配置参考.md](docs/配置参考.md). Read them before advising.
+- **Only the bundled addon is supported** (`extension/dsh_blender_bridge.zip`, v2.0.0 / protocol 12); MCP for Blender is unsupported since v2.3 ([MIGRATIONS.md](MIGRATIONS.md)).
 - **Tool and op names come from the catalog**: `blender_op(op="catalog")`; fix from `did_you_mean`.
-- **Not covered**: landmark and face (no cv2 or MediaPipe), OCR, DXF, manifold3d.
-  **Opt-in external paths**: glTF-Validator and Open3D install with `npm run setup:ext` under
-  `runtime/ext/`; `npm run check:ext` and the `readiness` block in a failed `ext.*` receipt report
-  each path. Never document them as installed by default.
+- **Not covered**: landmark and face (no cv2 or MediaPipe), OCR, DXF, manifold3d. **Opt-in external paths**:
+  glTF-Validator and Open3D via `npm run setup:ext` under `runtime/ext/`; `check:ext` reports each path, never default.
 - **GUI first, headless jobs.** Work over one minute goes to `blender_run(action="submit", kind=render|headless)`;
   poll by job id — a client timeout is not a failed job.
 - **Verdicts are three-state** (`pass` / `fail` / `degraded`); `degraded` is not a pass; delivery gates
   use `gate_preflight` / `gate_checkpoint` / `gate_deliver` and `deliver_export(require_gate=true)`.
-- **Migrate in slices** ([architecture](docs/architecture.md)): one module or boundary per change,
-  no behavior change while moving code, and the old file is deleted in the same change.
+- **Cross-domain Python calls use kernel ports.** A capability owned by another domain is registered with `K.dsh_ports.register_port` by its provider and called with `call_port`; do not take another domain's `K.dsh_*_api`. Cross-domain imports stay at zero (layout test).
+- **One write authority.** `sessionWriteGate(payload, registry)` is the only authorization entry; a host-attributed write with no registry fails closed. Which requests skip the gate is data in `runtime/http/write-skip.ts` (`shouldGateWrite`); routes ask it instead of spelling `isReadOnly`.
+- **Migrate in slices** ([architecture](docs/architecture.md)): one module or boundary per change, no behavior change while moving code, old file deleted in the same change.
 - **No new rule files.** A lesson learned goes into this file or the architecture guide.
+
 ## 4. Task routing
 
 | Task | Start here |
@@ -87,7 +85,7 @@ Flow: DSH host → `src/` tools → backend HTTP → engine dispatch → Blender
 ## 5. Definition of done
 
 - Typecheck and the tests for the touched layer pass; contract counts stay 6 tools / 38 families /
-  269 ops / 25 addon commands / 29 routes / protocol 12 unless the change declares a new count.
+  270 ops / 25 addon commands / 29 routes / protocol 12 unless the change declares a new count.
   The addon count is 25 **registered** commands; the transport-only `ping` makes 26 wire commands.
   The single truth is `extension/dsh_blender_bridge/command_registry.py` (see architecture §5).
 - New behavior has a failing test first. No `skip`, no retry, and no relaxed assertion to hide a failure.
@@ -116,5 +114,6 @@ review failure.
 | Addon and host integration contract | [docs/宿主集成-接口契约-v2.3增补.md](docs/宿主集成-接口契约-v2.3增补.md) |
 | Architecture and constraints | [docs/architecture.md](docs/architecture.md) |
 | Test layers and fixtures | [tests/README.md](tests/README.md) |
+| Known issues, boundaries, and re-check actions | [docs/已知问题台账.md](docs/已知问题台账.md) |
 | Version history and migrations | [CHANGELOG.md](CHANGELOG.md) · [MIGRATIONS.md](MIGRATIONS.md) |
 | External-project comparison and gap decisions (Mixar) | [docs/Mixar-差距分析.md](docs/Mixar-差距分析.md) |

@@ -13,8 +13,8 @@ import {
   WIN_TMP,
   WORKER_PATH,
 } from '../../paths.js'
-import { KERNEL_BOOTSTRAP } from '../../core/kernel/index.js'
-import { errorMessage } from '../../core/json.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { WorkerRecord, WorkersCtx } from './api.js'
 import {
   sameWorkerFile,

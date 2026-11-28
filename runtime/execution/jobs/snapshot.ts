@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { winToWsl, wslToWin } from '../../config.js'
 import { WIN_TMP } from '../../paths.js'
-import { pidAlive } from '../../core/evidence.js'
+import { pidAlive } from '../../foundation/evidence.js'
 import type { JobRecord } from './types.js'
 
 export function jobDir(id: string, outdir: string | null | undefined): string {

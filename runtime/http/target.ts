@@ -4,14 +4,22 @@
 // unqualified call in that state, so every host request resolves its target once
 // here: the instance of the caller's own GUI session. Payload-level overrides
 // (`instance_id`) are applied by the route that accepts them.
-import { sessionRegistry } from './session-gate.js'
 import { currentInstanceId } from '../transport/instance-target.js'
 import type { CallerIdentity } from '../core/sessions/types.js'
+import type { SessionRegistry } from '../core/sessions/registry.js'
 
-/** The Blender instance this caller already owns; null when nothing is attached. */
-export function callerInstanceId(caller: CallerIdentity | null): string | null {
+/**
+ * The Blender instance this caller already owns; null when nothing is attached.
+ *
+ * `registry` is an argument (no module-level lookup): the router holds the same
+ * registry the Gateway assembled, so a request resolves its target with the
+ * session that will also authorize it.
+ */
+export function callerInstanceId(
+  caller: CallerIdentity | null,
+  registry: SessionRegistry | null,
+): string | null {
   if (!caller) return null
-  const registry = sessionRegistry()
   const found = registry ? registry.findForCaller(caller) : null
   const own = found && found.instanceId ? String(found.instanceId) : ''
   if (own) return own

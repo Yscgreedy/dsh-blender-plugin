@@ -1,5 +1,5 @@
 // headless 选项入口（拆分）：路径 / 前导 / 环境 / 时限
-import { PLUGIN_VERSION } from '../../../core/evidence.js'
+import { PLUGIN_VERSION } from '../../../foundation/evidence.js'
 import type { HeadlessDeps, HeadlessOpts, PreparedHeadless } from '../types.js'
 import { resolveHeadlessPaths } from './paths.js'
 import { buildEnginePrelude, buildHeadlessPreload } from './gpu.js'

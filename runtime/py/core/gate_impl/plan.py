@@ -353,7 +353,7 @@ def gate_plan(spec=None, spec_path=None, preset=None):
                      "reads": _expr_names(g["pass_if"]), "note": g["note"],
                      "skip_if_missing": g["skip_if_missing"] or None,
                      "degrade_if": g["degrade_if"] or None, "echo": g["echo"] or None,
-                     "module": OP_MAP[g["op"]][0].replace("dsh_", "").replace("_api", "")})
+                     "module": gate_provider_label(g["op"])})
     return _j({"ok": True, "name": sp["name"], "units": sp["units"], "tolerance_mm": sp["tolerance_mm"],
                "spec_source": src, "spec_md5": md5, "gate_count": len(rows), "gates": rows,
                "presets": sorted(PRESETS),

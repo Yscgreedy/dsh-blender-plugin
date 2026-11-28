@@ -1,5 +1,6 @@
 /** blender_run 的呈现层：作业记录、等待/收集、队列指标、tune 回执。 */
 import { asRecord, text } from '../../contracts/dynamic.js'
+import { receiptV2 } from '../receipt.js'
 
 const LF = String.fromCharCode(10)
 
@@ -215,7 +216,7 @@ export function jobFields(job: Record<string, unknown>): Record<string, unknown>
 }
 
 /**
- * receipt.v2 信封：与 blender_op 共用同一份契约（contract/op/verdict/summary/next/provenance）。
+ * 回执信封：与 blender_op 共用同一份契约（构造器见 tools/receipt.ts）。
  * submit 是"作业已建立"不是判定，verdict 固定 null；job_id 与 queued_ahead 是结构化句柄。
  */
 export function submitEnvelope(
@@ -224,8 +225,7 @@ export function submitEnvelope(
   workspaceBase: string | undefined,
 ): Record<string, unknown> {
   const id = text(job.id)
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: 'submit',
     verdict: null,
@@ -249,14 +249,13 @@ export function submitEnvelope(
       surface: 'queue',
       workspace_base: workspaceBase || null,
     },
-  }
+  })
 }
 
 /** status/wait/collect/cancel 的信封：同一套 job_id/state，action 区分来源。 */
 export function jobEnvelope(action: string, job: Record<string, unknown>): Record<string, unknown> {
   const id = text(job.id)
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: action,
     verdict: null,
@@ -266,7 +265,7 @@ export function jobEnvelope(action: string, job: Record<string, unknown>): Recor
     state: text(job.state) || null,
     slot: text(job.slot) || null,
     provenance: { route: '/job', surface: 'queue' },
-  }
+  })
 }
 
 /** list 的结构化行（只留可枚举字段；文本仍给人读）。 */
@@ -283,8 +282,13 @@ export function listRows(jobs: Array<Record<string, unknown>>): Array<Record<str
         dshSessionId: text(owner.dshSessionId) || null,
         agentId: text(owner.agentId) || null,
       },
+      // Q-4：detail 一起透出（status 文本本来就有 detail，这里只是让结构化行对齐）。
       decision: j.decision
-        ? { outcome: text(decision.outcome) || null, reason: text(decision.reason) || null }
+        ? {
+            outcome: text(decision.outcome) || null,
+            reason: text(decision.reason) || null,
+            detail: text(decision.detail) || null,
+          }
         : null,
     }
   })
@@ -293,8 +297,7 @@ export function listRows(jobs: Array<Record<string, unknown>>): Array<Record<str
 export function listEnvelope(jobs: Array<Record<string, unknown>>): Record<string, unknown> {
   const rows = listRows(jobs)
   const CAP = 64
-  return {
-    contract: 'receipt.v2',
+  return receiptV2({
     op: 'blender_run',
     action: 'list',
     verdict: null,
@@ -302,7 +305,7 @@ export function listEnvelope(jobs: Array<Record<string, unknown>>): Record<strin
     truncated: rows.length > CAP,
     jobs: rows.slice(0, CAP),
     provenance: { route: '/job', surface: 'queue' },
-  }
+  })
 }
 
 export function formatWait(
@@ -342,11 +345,35 @@ export function formatCancel(body: Record<string, unknown>): string {
   return 'RUN cancel ok · ' + text(job.id) + ' → ' + text(job.state) + '（进程树已清理）'
 }
 
-export function formatList(jobs: Array<Record<string, unknown>>): string {
+/** 文本里最多列多少行（rows 本身由 limit/offset 控制，这里只防一次刷屏）。 */
+const LIST_ROWS_SHOWN = 20
+
+export function formatList(
+  jobs: Array<Record<string, unknown>>,
+  paging: { total?: number; offset?: number } = {},
+): string {
+  const total = typeof paging.total === 'number' ? paging.total : jobs.length
+  const offset = Number(paging.offset) || 0
   if (!jobs.length)
-    return 'RUN list · 0 个作业（Blender 作业队列为空；DSH 宿主的 job_list 不含本队列）'
-  const lines = ['RUN list · ' + String(jobs.length) + ' 个作业']
-  for (const j of jobs)
+    return (
+      'RUN list · 0 个作业' +
+      (total
+        ? '（total=' + String(total) + '，用 offset 翻页）'
+        : '（Blender 作业队列为空；DSH 宿主的 job_list 不含本队列）')
+    )
+  const shown = jobs.slice(0, LIST_ROWS_SHOWN)
+  const paged = offset > 0 || total > shown.length
+  const lines = [
+    paged
+      ? 'RUN list · 显示 ' +
+        String(shown.length) +
+        ' / ' +
+        String(total) +
+        ' 个作业' +
+        (offset ? '（offset=' + String(offset) + '）' : '')
+      : 'RUN list · ' + String(shown.length) + ' 个作业',
+  ]
+  for (const j of shown)
     lines.push(
       '· ' +
         text(j.id) +
@@ -360,6 +387,12 @@ export function formatList(jobs: Array<Record<string, unknown>>): string {
         text(j.priority) +
         ' · created=' +
         iso(j.createdAt),
+    )
+  if (total > offset + shown.length)
+    lines.push(
+      '… 另有 ' +
+        String(total - offset - shown.length) +
+        ' 条：limit/offset 翻页；owner=all 看全部会话，owner=<session id> 看指定会话',
     )
   return lines.join(LF)
 }
@@ -394,7 +427,9 @@ export function runHelp(): string {
   return [
     'blender_run 动作（唯一作业入口：submit → jobId → status/wait/collect/cancel；无同步模式）：',
     '  action=submit kind=render|headless + 参数',
-    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/device/compute_device_type/channels/priority',
+    '    render（声明式，不接受 script）：file/output/outdir/frames/resolution/samples/engine/format/camera/device/compute_device_type/channels/priority/pre_script',
+    '      · pre_script=Python 源码：渲染前跑一次，只做场景准备（隐藏对象/切可见性/材质）；' +
+      'engine/resolution/samples/format/output/camera 由 render prelude 在它之后设置，脚本改不动这些输出参数',
     '      · channels=["render","alpha","mask","ink"]（默认 ["render"]）：每通道给路径 + foreground_px/coverage/n_components/bbox；' +
       '缺 ink 对象时该通道 skipped、整体 verdict=degraded（degraded ≠ 通过，但不是失败）',
     '      · device=auto（默认，能绑 GPU 就绑）/gpu/cpu + compute_device_type=OPTIX|CUDA|HIP|ONEAPI|METAL|NONE；' +

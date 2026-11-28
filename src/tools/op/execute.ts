@@ -13,7 +13,7 @@ import type { HostContext } from '../../host/context.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import { jsonPayload } from '../../host/http.js'
 import { toolError } from '../errors.js'
-import { requireReadySession } from '../shared/session.js'
+import { resolveSession } from '../shared/session.js'
 import { tryLocalLane } from './local.js'
 import { executeLoop } from './loop.js'
 import { executeOpt } from './opt.js'
@@ -24,7 +24,7 @@ import { READ_ONLY } from './read-only.js'
 export function opHelp(): string {
   return [
     'blender_op 动作（catalog 算子与参数搜索；执行型需要 GUI 会话）：',
-    '  action=plan   op=<catalog op> args={...}：38 family / 269 op 的主入口（op=catalog 看目录）',
+    '  action=plan   op=<catalog op> args={...}：38 family / 270 op 的主入口（op=catalog 看目录）',
     '    · op=catalog args={format:"json"} 取机器可读目录（families[].ops[].needs_gui/headless）',
     '    · headless=true + args.file：白名单 op 强制走本地无头车道（有 GUI 会话也不抢；audit_mesh / img_* / visualreport_report / qc_render_views / montage）',
     '  action=loop   op=start|status|stop|board|export|help|bench：参数搜索内环（target=gui|session）',
@@ -56,14 +56,15 @@ function targetInstance(args: Record<string, unknown>): string {
   return text(args.instance_id).trim()
 }
 
+/** Session gate for executing ops: null = proceed, otherwise the structured failure. */
 async function gate(
   port: number,
   needsSession: boolean,
   instanceId?: string,
 ): Promise<unknown | null> {
   if (!needsSession) return null
-  const ready = await requireReadySession(port, undefined, instanceId)
-  return ready.ok ? null : ready.failure
+  const ref = await resolveSession(port, undefined, instanceId)
+  return ref.ok ? null : ref.failure
 }
 
 export async function executeOp(

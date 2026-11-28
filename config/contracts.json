@@ -193,11 +193,7 @@
       "kind": "api-dict",
       "file": "runtime/py/render/montage.py",
       "api": "dsh_montage_api",
-      "ignore": [
-        "version",
-        "dispatch",
-        "selftest"
-      ]
+      "ignore": ["version", "dispatch", "selftest"]
     }
   },
   "families": {
@@ -316,16 +312,12 @@
     "anim": {
       "api": "dsh_anim_api",
       "table": "anim",
-      "pythonExtras": [
-        "help"
-      ]
+      "pythonExtras": ["help"]
     },
     "toon": {
       "api": "dsh_toon_api",
       "table": "toon",
-      "pythonExtras": [
-        "help"
-      ]
+      "pythonExtras": ["help"]
     },
     "eval": {
       "api": "dsh_evalharness_api",
@@ -395,10 +387,7 @@
     },
     "contract": {
       "api": "dsh_contract_api",
-      "table": "contract",
-      "pythonExtras": [
-        "fingerprint"
-      ]
+      "table": "contract"
     },
     "gui": {
       "api": "dsh_view_api",

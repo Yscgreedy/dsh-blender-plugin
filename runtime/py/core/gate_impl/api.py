@@ -21,9 +21,13 @@ def gate_preflight():
         K = _kernel()
         available = []
         if K is not None:
-            for name in ("dsh_audit_api", "dsh_assembly_api", "dsh_qc_api", "dsh_gate_api",
-                         "dsh_txn_api", "dsh_deliver_api", "dsh_blockout_api", "dsh_img_api"):
-                available.append(name.replace("dsh_", "").replace("_api", ""))
+            # 只列**真的加载了**的模块：旧实现把 8 个名字无条件列出来（没 preload 也读成 available）。
+            # 这里走内核 API 的通用命名约定（dsh_<name>_api），不点名任何领域的私有 API。
+            _ports = _KIT.port_names()
+            for name in ("audit", "assembly", "qc", "gate", "txn", "deliver", "blockout", "img"):
+                # 两条来源：内核 API 的通用命名约定（dsh_<name>_api）+ 已注册端口（端口优先的模块没有 API 也算可用）
+                if getattr(K, "dsh_%s_api" % name, None) is not None or any(p.startswith(name) for p in _ports):
+                    available.append(name)
         return _j({
             "ok": True, "op": "preflight", "version": GATE_VERSION,
             "scene": str(getattr(sc, "name", "")), "file": str(bpy.data.filepath or ""),
@@ -31,6 +35,7 @@ def gate_preflight():
                       "scale_length": float(getattr(sc.unit_settings, "scale_length", 1.0) or 1.0)},
             "objects": len(objs), "meshes": len(meshes), "triangles": tris,
             "available_modules": available,
+            "ports": _KIT.port_names(),   # 已注册的提供服务端口（缺哪个就少了哪条能力）
             "recommended": [
                 {"op": "audit_scene", "args": {"summary_only": True, "self_intersect": True}, "why": "网格基线（是否干净）"},
                 {"op": "gate_run", "args": {"preset": "assembly"}, "why": "装配/出厂门（三态）"},
@@ -91,14 +96,14 @@ def gate_deliver(dir=None, objects=None, scope=None, name="model", fmt="obj",
                    "gate": gr,
                    "error": "门未通过（verdict=%s）：不导出" % verdict,
                    "hint": "看 gate.failed/degraded/skipped；要降级交付显式 allow_degraded=true；真要强导必须 force=true+reason"})
-    K = _kernel()
-    api = getattr(K, "dsh_deliver_api", None) if K is not None else None
-    if api is None:
-        return _j({"ok": False, "op": "deliver", "verdict": verdict,
-                   "error": "K.dsh_deliver_api 不存在：preload 里加 deliver"})
+    # 端口倒置：core 不认识 export 域的私有 API 名/子 op，只认 deliver_export / deliver_verify 两个端口
+    # （由 export/deliver_impl/api.py 尾部注册）—— core → export 的 2-环断在调用侧。
+    if not _KIT.port_available("deliver_export"):
+        return _j({"ok": False, "op": "deliver", "verdict": verdict, "blocked": True,
+                   "error": "deliver_export 端口不存在：preload 里加 deliver（export 域模块尾部会注册端口）"})
     try:
-        dr = api("export", {"dir": dir, "objects": objects, "scope": scope, "name": name, "fmt": fmt,
-                            "require_gate": False})
+        dr = _KIT.call_port("deliver_export", {"dir": dir, "objects": objects, "scope": scope,
+                                               "name": name, "fmt": fmt, "require_gate": False})
         if isinstance(dr, str):
             dr = json.loads(dr)
     except Exception as e:
@@ -109,7 +114,7 @@ def gate_deliver(dir=None, objects=None, scope=None, name="model", fmt="obj",
            "export_allowed": pass_ok, "forced": bool(force), "allow_degraded": bool(allow_degraded)}
     if verify and dr.get("ok") is not False:
         try:
-            vr = api("verify", {"path_or_dir": dir})
+            vr = _KIT.call_port("deliver_verify", {"path_or_dir": dir})
             if isinstance(vr, str):
                 vr = json.loads(vr)
             out["verification"] = vr
@@ -164,3 +169,18 @@ if _K is not None:
     _K.dsh_gate_api = _DshApi({"version": GATE_VERSION, "dispatch": gate_dispatch, "plan": gate_plan,
                                "run": gate_run, "selftest": gate_selftest, "help": gate_help,
                                "preflight": gate_preflight, "checkpoint": gate_checkpoint, "deliver": gate_deliver})
+
+
+# ---- 端口：gate_run（export 只认这个端口，不再直取 core 的 gate API）----
+# 端口是 core 自己的稳定契约：payload = gate_run 的 kwargs（spec / preset / overrides / detail / out_json …）。
+# 注册在模块尾部，与 dsh_gate_api 同一时机：谁加载了 gate，谁就提供这个端口。
+def _port_gate_run(payload):
+    """端口 gate_run：与旧 API 形态走同一条 dispatch。
+
+    这样端口调用仍经过参数白名单与 @工件 解析；返回值是 JSON 文本，由 call_port 解析成对象。
+    """
+    args = payload if isinstance(payload, str) else json.dumps(payload or {})
+    return gate_dispatch("run", args)
+
+
+_KIT.register_port("gate_run", _port_gate_run, GATE_VERSION)

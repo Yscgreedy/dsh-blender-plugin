@@ -1,5 +1,5 @@
 // shape-search Python 脚本生成与内环驱动
-import { errorMessage } from '../../json.js'
+import { errorMessage } from '../../../foundation/json.js'
 import { pyIndent, pyLit } from './axes.js'
 import type { AxisSpec } from './axes.js'
 import type { ShapeSearchDeps } from './index.js'

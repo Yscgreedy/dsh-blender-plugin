@@ -2,7 +2,7 @@
 // 用法：node lib/runtime/_probe_tools.js
 import { CFG } from './config.js'
 import { GATE_FLAGS } from './core/flags.js'
-import { errorMessage } from './core/json.js'
+import { errorMessage } from './foundation/json.js'
 
 const base = 'http://127.0.0.1:' + String(CFG.gatewayPort)
 const out: Record<string, { ok: boolean; ms: number; r?: string; err?: string }> = {}

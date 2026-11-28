@@ -15,11 +15,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { isRecord, readString } from './core/json.js'
-import { errorMessage } from './core/json.js'
+import { isRecord, readString } from './foundation/json.js'
+import { errorMessage } from './foundation/json.js'
 import { detectBlenderExe } from './blender-detect.js'
 import { GATEWAY_DEFAULT_PORT } from './transport/gateway-schema.generated.js'
 import { VIRTUAL_GUI_DEFAULT_MAX } from './display/limits.js'
+import { readQueueSettings } from './config-queue.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 /**
@@ -394,6 +395,9 @@ const FEATURE_VIRTUAL_GUI_MAX = (() => {
   return { value: '', source: 'default' }
 })()
 
+/** 队列容量（Q-1）：解析与四个键都在 runtime/config-queue.ts，这里只做组装。 */
+const QUEUE = readQueueSettings(FILE.cfg, process.env, FILE.from)
+
 /** blender.exe 探测在 runtime/blender-detect.ts（可注入依赖；Windows 含 Steam 库）。
  *  config.ts 不再转出 detectBlenderExe：需要探测结果的调用方直接 import blender-detect.js；
  *  这里只用一次（模块级 CFG），探测来源见 CFG.source.blenderExe。
@@ -475,6 +479,14 @@ export const CFG = {
     /** virtual-gui 并发上限（1–16）；低资源时由 runtime/display/limits.ts 降到 2。 */
     virtualGuiMax: Number(FEATURE_VIRTUAL_GUI_MAX.value || VIRTUAL_GUI_DEFAULT_MAX),
     virtualGuiMaxSource: FEATURE_VIRTUAL_GUI_MAX.source,
+    /**
+     * 作业队列容量（Q-1）：gpu / cpu / pending / ownerQuota，默认 1/2/64/8；解析规则见
+     * runtime/config-queue.ts（不做自适应）。默认值与 runtime/core/queue/types.ts 的
+     * DEFAULT_CAPACITY 同口径，改默认值两处一起改。
+     */
+    queue: QUEUE.queue,
+    /** 每个容量键的来源：env:… / file:… / default / invalid:…（排错用，不参与调度）。 */
+    queueSource: QUEUE.source,
   },
   // 溯源（doctor/日志/教程排查用）
   source: { configFile: FILE.from, workDir: WORK.from, blenderExe: BLENDER.from },

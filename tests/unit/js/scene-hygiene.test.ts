@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { KERNEL_BOOTSTRAP } from '../../../runtime/core/kernel/index.js'
-import { sceneHygieneAudit } from '../../../runtime/core/evidence.js'
+import { KERNEL_BOOTSTRAP } from '../../../runtime/foundation/kernel/index.js'
+import { sceneHygieneAudit } from '../../../runtime/foundation/evidence.js'
 
 // Feedback #3: 36 lights overflow the EEVEE shadow pool and the old behaviour
 // only spammed stderr. The receipt now carries a structured warning with a

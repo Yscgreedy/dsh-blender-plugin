@@ -11,7 +11,7 @@
  *
  * 兼容性：Python 3.11+/Blender 4.2/5.3；不依赖 GPU_PRELUDE 的 EEVEE 默认（render 尊重 caller 的 engine）。
  */
-import { isRecord } from '../core/json.js'
+import { isRecord } from '../foundation/json.js'
 
 export const RENDER_DEVICES = ['auto', 'gpu', 'cpu'] as const
 export const COMPUTE_DEVICE_TYPES = [
@@ -145,6 +145,142 @@ const RENDER_DEVICE_PY = [
   '    print("DSH_RENDER " + _dsh_rjson.dumps(applied, ensure_ascii=False), flush=True)',
   '_dsh_render_apply()',
 ]
+
+/**
+ * headless 的设备/引擎前导（C-9）：队列执行器的 headless 分支以前完全不初始化
+ * Cycles 设备，`--factory-startup` 下 compute_device_type=NONE —— 脚本自己切 Cycles
+ * 也只能绑到 CPU（实测 1080×1920/64spp：42.7–45.5 s/帧 vs 12.2–14.8 s/帧）。
+ *
+ * 与 render 的 renderDevicePrelude 不同：这里**不看当前 engine**，先把设备枚举好
+ * （脚本之后再切 Cycles 也能用），并按 render 同一套字段打印 DSH_RENDER 供回执解析。
+ */
+const HEADLESS_DEVICE_PY: string[] = [
+  'def _dsh_headless_device():',
+  '    import bpy as _b',
+  '    import json as _j',
+  '    req = _dsh_headless_request',
+  '    info = {',
+  '        "engine_requested": req["engine_requested"],',
+  '        "engine": None,',
+  '        "engine_source": "inherit",',
+  '        "samples_requested": None,',
+  '        "samples": None,',
+  '        "device_requested": req["device"],',
+  '        "compute_device_type_requested": req["compute_device_type"] or "auto",',
+  '        "compute_device_type": None,',
+  '        "devices_used": [],',
+  '        "scene_device": None,',
+  '        "fell_back_to_cpu": False,',
+  '        "warnings": [],',
+  '    }',
+  '',
+  '    def _w(code, msg):',
+  '        info["warnings"].append(code + ": " + str(msg)[:160])',
+  '',
+  '    try:',
+  '        sc = _b.context.scene',
+  '        want_engine = req["engine"]',
+  '        if want_engine == "cycles":',
+  '            try:',
+  '                sc.render.engine = "CYCLES"',
+  '                info["engine_source"] = "requested"',
+  '            except Exception as e:',
+  '                _w("engine_set_failed", e)',
+  '        elif want_engine == "eevee":',
+  '            _w("engine_eevee_headless", "eevee keeps its own defaults; device prelude only configures Cycles")',
+  '        info["engine"] = str(sc.render.engine)',
+  '        prefs = None',
+  '        try:',
+  '            prefs = _b.context.preferences.addons["cycles"].preferences',
+  '        except Exception as e:',
+  '            _w("cycles_prefs_unavailable", e)',
+  '        want_cpu = req["device"] == "cpu" or req["compute_device_type"] in ("NONE", "CPU")',
+  '        want_gpu = (not want_cpu) and (',
+  '            req["device"] == "gpu" or req["device"] == "auto" or bool(req["compute_device_type"])',
+  '        )',
+  '        chosen = None',
+  '        if prefs is not None:',
+  '            types = [req["compute_device_type"]] if req["compute_device_type"] else ["OPTIX", "CUDA", "HIP", "ONEAPI", "METAL"]',
+  '            if not want_cpu:',
+  '                for t in types:',
+  '                    try:',
+  '                        prefs.compute_device_type = t',
+  '                        prefs.get_devices()',
+  '                        if [d for d in prefs.devices if d.type == t]:',
+  '                            for d in prefs.devices:',
+  '                                d.use = d.type == t',
+  '                            chosen = t',
+  '                            break',
+  '                    except Exception as e:',
+  '                        _w("device_try_" + str(t).lower(), e)',
+  '            if chosen is None:',
+  '                try:',
+  '                    prefs.compute_device_type = "NONE"',
+  '                except Exception:',
+  '                    pass',
+  '                if want_gpu:',
+  '                    _w("gpu_unavailable", "no GPU backend available (tried " + "/".join(types) + ")")',
+  '            try:',
+  '                info["compute_device_type"] = str(prefs.compute_device_type)',
+  '                info["devices_used"] = sorted({str(d.name) for d in prefs.devices if d.use and d.type != "CPU"})',
+  '            except Exception as e:',
+  '                _w("device_report_failed", e)',
+  '        if chosen is None and want_gpu:',
+  '            info["fell_back_to_cpu"] = True',
+  '        try:',
+  '            scene_device = getattr(getattr(sc, "cycles", None), "device", None)',
+  '            info["scene_device"] = None if scene_device is None else str(scene_device)',
+  '            if chosen is not None and info["scene_device"] != "GPU":',
+  '                sc.cycles.device = "GPU"',
+  '                info["scene_device"] = "GPU"',
+  '            if chosen is None and want_gpu and info["scene_device"] == "GPU":',
+  '                info["fell_back_to_cpu"] = True',
+  '                info["scene_device"] = "CPU"',
+  '            if str(sc.render.engine) == "CYCLES":',
+  '                info["samples"] = int(getattr(sc.cycles, "samples", 0) or 0)',
+  '        except Exception as e:',
+  '            _w("scene_device_probe_failed", e)',
+  '    except Exception as e:',
+  '        _w("device_probe_failed", e)',
+  '    print("DSH_RENDER " + _j.dumps(info, ensure_ascii=False), flush=True)',
+  '',
+  '',
+  '_dsh_headless_device()',
+]
+
+/** headless 的设备前导（默认 device=auto；gpu=false / device=cpu 表示只用 CPU 并如实回执）。 */
+export function headlessDevicePrelude(params: Record<string, unknown>): string {
+  const engineRaw = String(params.engine ?? '')
+    .trim()
+    .toLowerCase()
+  const engine = engineRaw === 'cycle' ? 'cycles' : engineRaw
+  const gpuRaw = String(params.gpu ?? '')
+    .trim()
+    .toLowerCase()
+  const gpuOff = ['false', 'off', '0'].includes(gpuRaw)
+  const device = gpuOff
+    ? 'cpu'
+    : params.device === undefined && (gpuRaw === 'true' || gpuRaw === 'required')
+      ? 'gpu'
+      : normalizeRenderDevice(params.device)
+  const wantedEngine = engine === 'cycles' || engine === 'eevee' ? engine : ''
+  const reqLit =
+    '{' +
+    '"engine": ' +
+    JSON.stringify(wantedEngine) +
+    ', "engine_requested": ' +
+    (wantedEngine ? 'True' : 'False') +
+    ', "device": ' +
+    JSON.stringify(device) +
+    ', "compute_device_type": ' +
+    JSON.stringify(normalizeComputeDeviceType(params.compute_device_type)) +
+    '}'
+  return [
+    'import json as _dsh_hjson',
+    '_dsh_headless_request = ' + reqLit,
+    ...HEADLESS_DEVICE_PY,
+  ].join(String.fromCharCode(10))
+}
 
 /** render 的设备/采样前导。调用方先设 engine，再拼这段；samples 在这里按**实际 engine** 落地。 */
 export function renderDevicePrelude(params: Record<string, unknown>): string {

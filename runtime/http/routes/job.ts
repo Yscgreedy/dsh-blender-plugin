@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HttpRouteDeps } from './deps.js'
-import { errorCode, errorMessage, errorField } from '../../core/json.js'
+import { errorCode, errorMessage, errorField } from '../../foundation/json.js'
 import { JobSurface, callerFromHeaders } from '../../core/queue/handler.js'
+import { shouldGateWrite } from '../write-skip.js'
 
 /** The internal queue surface lives behind the same /job route until section 7 exposes blender_run. */
 async function handleQueueSurface(
@@ -36,7 +37,7 @@ function jobFailure(e: unknown, op: string, lastError: string): Record<string, u
 
 // HTTP 路由 /job：作业层
 export function createJobRoutes(E: HttpRouteDeps) {
-  const { engine, isReadOnly, json, leaseGate, pushRtt, readBody, stats, streamJson } = E
+  const { engine, json, leaseGate, pushRtt, readBody, stats, streamJson } = E
   return {
     async job(req: IncomingMessage, res: ServerResponse, _url: URL, _p: string): Promise<void> {
       // 作业层：start / status / collect / kill / list（长任务后台化，渲染一整晚）
@@ -49,7 +50,7 @@ export function createJobRoutes(E: HttpRouteDeps) {
       }
       const op = String(payload.op || 'list')
       if (await handleQueueSurface(E, req, res, payload, op)) return
-      const gate = isReadOnly('/job', op) ? null : leaseGate(payload)
+      const gate = shouldGateWrite('/job', payload) ? leaseGate(payload) : null
       if (gate) {
         json(res, 409, gate)
         return

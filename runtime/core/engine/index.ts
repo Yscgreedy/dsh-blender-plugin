@@ -81,7 +81,7 @@ export interface EngineSurface {
   metrics: () => unknown
   protocol: () => Promise<unknown>
   doctor: (opts?: Record<string, unknown>) => Promise<unknown>
-  status: () => Promise<unknown>
+  status: (opts?: Record<string, unknown>) => Promise<unknown>
   act: (code: unknown, timeoutMs?: number, file?: unknown, scope?: unknown) => Promise<unknown>
   cmd: (name: unknown, params?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>
   commands: () => Promise<unknown>

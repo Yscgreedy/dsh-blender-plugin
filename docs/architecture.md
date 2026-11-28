@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 38 planning families, 269 operations, 25 addon commands
+blender_run, blender_inspect), 38 planning families, 270 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -56,8 +56,14 @@ lib/runtime/**/*.js. Published packages contain built JavaScript, not backend Ty
 
 Layout:
 
-- runtime/core/: dispatch, kernel, scripts, catalog, engine; queue argument construction lives
-  in `queue/job-args.ts` and the process lifecycle in `queue/spawn-executor.ts`;
+- runtime/foundation/: the leaf helpers both other runtime layers share — `json.ts`,
+  `errors.ts`, `progress.ts`, `scripts.ts`, `layers.ts`, `evidence*.ts`, and the `output/`
+  (parse/render) and `kernel/` (bootstrap/api) subtrees. A foundation module imports only the runtime
+  roots (`config.ts`, `paths.ts`, `catalog/`, `contracts/`, `classes.ts`, `transport/`) — never
+  `runtime/core/**` or `runtime/execution/**`, so the execution layer reaches these helpers without a
+  reverse edge into core;
+- runtime/core/: dispatch, engine, engine-api, sessions, queue and plan; queue argument construction
+  lives in `queue/job-args.ts` and the process lifecycle in `queue/spawn-executor.ts`;
 - runtime/embedded/: the Python preludes and templates embedded into Blender command lines (GPU
   setup, kernel path helpers, the `blender_py` act wrapper), kept as data modules so `paths.ts`
   stays inside its line budget;
@@ -66,7 +72,13 @@ Layout:
 - runtime/http/: routes, lease, host views;
 - runtime/gateway/: the Gateway process, addon WebSocket channel, ownership, and lifecycle;
 - runtime/transport/: frames, sockets, protocol helpers;
-- contract tables: `config/contracts.json` is the catalog <-> Python link layer (described in section 8); there is no separate runtime contract-table directory;
+- runtime/contracts/: the code-shared contract tables — the generated GUI routing table
+  (`runtime/contracts/routes.generated.ts`, described in section 8), the route matching predicate
+  (`runtime/contracts/route-match.ts`), and the headless local-lane name whitelist
+  (`runtime/contracts/local-lane.ts`). `runtime/foundation/**`, `runtime/core/**` and
+  `runtime/execution/**` all import from here, so no layer has to reach sideways into another for a
+  shared table;
+- contract data: `config/contracts.json` is the catalog <-> Python link layer (described in section 8);
 - runtime/py/: the Blender-side Python library described below.
 
 The runtime build precedes the host build because host modules import boundary helpers from the built
@@ -150,10 +162,35 @@ a session record and a live addon. `attach` checks the live instance list and, o
 the addon (`attachChecked`), so a record whose Blender went away answers `addon_disconnected` /
 `addon_unresponsive` instead of `ok`/`ready`; `status` reports `live:{instanceReady, readyInstances}` and
 the registry remembers the last instance per caller (30 min) so a released record can still explain
-itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-time caller-bound tokens)
-and `consent-requests.ts` (persisted, human-approvable requests); `start` files a request, the human
-approves it over `/lease?action=consent_approve&requestId=…` (any terminal, no DSH identity headers) or
-pre-approves the host with `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow`, and the next `start` consumes it.
+itself. virtual-gui consent lives in `runtime/core/sessions/consent.ts` (one-time caller-bound tokens),
+`consent-requests.ts` (persisted, human-approvable requests with a panel handle and in-process waiters)
+and `consent-policy.ts` (auto / manual / deny, read per call from env, the profile key
+`virtualGuiConsent`, then the config file, so an edit lands in ≤250 ms without a restart). Since
+3.3.1 `start` files a request and **waits** (`wait_ms`, default 20 s) for the human: the Blender session
+panel — a right-Sidebar tab type (`sidebar.right.pane.tab` + its own `…pane.tab.title`) opened from the
+session header entry, with a one-line `Blender · N 待批准` chip left in `conversation.input.dock`
+(`src/client/index.js`) — shows the card and `GET /lease?action=consent_approve&handle=…` releases that
+same call (`consent_source=approved_request`). The panel also switches the policy through
+`POST /lease {"action":"consent_policy_set"}`, which writes only `virtualGuiConsent` (with a `.bak`),
+refuses DSH-attributed calls with 403 `consent_human_only`, and answers 409 `policy_locked` while the
+env var pins the mode.
+The terminal command (`requestId=`) stays as an equivalent channel; `/lease` accepts GET only for the
+`consent_*` actions. Requests persist under `<workDir>/consent/`, so a Gateway restart (HMR) restores
+the panel's cards instead of losing them. The panel is read-only plus approve/deny: it never spawns
+anything, and the decision only releases a request the agent itself filed.
+Since 3.5 the same tab also carries a read-only ops surface: one shared poll of `GET /host/state` +
+`GET /health` + `GET /host/jobs` (idle 2.5 s, 1 s while a job or render is live), an on-demand
+`GET /status` + `GET /doctor` (verdict, readiness, `next_actions`, `config` summary) and a per-job
+`GET /host/jobs/log` tail. Those routes are memory-only on the Gateway; the panel adds no session
+write path. Its two settings — backend override and poll interval — live in browser localStorage and
+never touch ownership, grants or `virtualGuiConsent`.
+
+Write authorization has one entry since the P0 decoupling. `runtime/http/session-gate.ts` exposes
+`sessionWriteGate(payload, registry)`, and `gateway/app.ts` binds the session registry into
+`leaseGate`. A host-attributed write with no registry fails closed (`session_unavailable`) instead of
+falling through to the legacy lease; requests without caller headers keep the legacy path. Each write
+route still declares its own skip predicate (read-only ops, `isolated`, `py` + caller), so changing a
+skip rule still touches every write route — tracked as the remaining P1 item.
 
 ### Subagents, read-only borrowing, and stale owners
 
@@ -173,8 +210,10 @@ model now separates three rights:
   `owner` / `is_mine=false` / `borrowed=true`; `blender_see` and read-only ops work and every op
   receipt carries `source.owner` + `source.is_mine`. Writes still fail (`session_in_use`) unless the
   owner issues a grant.
-- **owner reclaim**: owner records carry `role` and heartbeat age. A subagent owner is stale after 30 s;
-  a main owner after **30 min** (it may wait a whole subagent round), and any authenticated call
+- **owner reclaim**: owner records carry `role`, heartbeat age and an optional per-record `staleMs`
+  override. A subagent owner is stale after 30 s — except the subagent that **started** its own
+  virtual-gui, whose record carries 5 min (`Owner.staleMs`) so a 120 s job wait cannot be stolen; a
+  main owner after **30 min** (it may wait a whole subagent round), and any authenticated call
   refreshes the heartbeat. `prune` clears a stale owner unless a live `blender_py` holds the session,
   and `release` accepts `force=true` from a same-host main agent. Status/list show
   `heartbeat_age_ms` + `stale_after_ms` and the exact reclaim command instead of an opaque wait.
@@ -195,7 +234,7 @@ The build has exactly two public facades, one per entry:
   only the consumed surface: `createEngine` plus the catalog tables and helpers, the class-guide
   helpers, flags, `PATH_GUARD`, `PLUGIN_VERSION`, and `engineProvenance`. Internal runtime, src, and
   test code imports implementation modules directly (`runtime/paths.ts`,
-  `runtime/core/evidence.ts`, `runtime/transport/probes.ts`, ...); a facade copy that insulates nobody
+  `runtime/foundation/evidence.ts`, `runtime/transport/probes.ts`, ...); a facade copy that insulates nobody
   is dead code and is removed in the same change.
 
 `config/facades.json` is the checked-in machine-readable inventory: each facade file, its exports, and
@@ -253,6 +292,13 @@ the shared runtime/py/_facade.py helper and re-export the implementation package
 lives in the sibling <name>_impl/ package. The public path, preload name, and K.dsh_<name>_api entry are
 the contract; the facade is the stable entry, not a temporary shim.
 
+Cross-domain capabilities go through kernel ports, not another domain's API object. `core/kit.py`
+owns `K.dsh_ports` with `register_port` / `port_available` / `call_port` / `port_names`.
+`render` registers `view_capture`, `export` registers `deliver_export` and `deliver_verify`, and
+`core` registers `gate_run`; the consumers call the port, so the source-level domain graph stays
+acyclic. Imports remain zero-cross-domain (enforced by the layout test), and `modules.json` is still
+the only module registry.
+
 ## 5. Blender addon (extension/dsh_blender_bridge/)
 
 The addon is a package, not a single file. Its modules cover protocol, command registration, selection,
@@ -309,11 +355,12 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 38 families / 269 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 38 families / 270 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by
-  check:structure.
+  check:structure, and the single-file browser bundle source has its own ratchet in
+  check:client-budget (it only ratchets down; raising the ceiling is a reviewed change).
 - The public surface is two registered facades (`src/index.ts`, `runtime/engine.ts`) whose exports and
   consumers are inventoried in `config/facades.json`. `npm run check:no-shims` fails on an
   unregistered facade export, a stale registration, a wildcard export, or a retired file that
@@ -353,7 +400,7 @@ The op surface has two derived data sources; neither is hand-maintained inside t
 
 - `config/routing.json` is the single GUI routing table (op prefix or exact alias, strip length,
   python api, preload, timeout, ensure hook). `scripts/gen-routes.mjs` renders
-  `runtime/core/dispatcher/routes.generated.ts`, which starts with an AUTO-GENERATED header plus the
+  `runtime/contracts/routes.generated.ts`, which starts with an AUTO-GENERATED header plus the
   source sha256. The host-side worker table was removed with the 3.1 worker plan channel: headless
   work belongs to `blender_run(kind="headless")`. `npm run build` regenerates the table and
   `npm run check:routes` fails when a generated file is missing, stale, or hand-edited. Generated
@@ -367,6 +414,13 @@ The op surface has two derived data sources; neither is hand-maintained inside t
   (`pythonExtras`) are declared explicitly; the retired `catalogExtras` field fails the parity test,
   so an advertised-but-undispatchable op cannot pass as known drift.
 
+`config/local-ops.json` is the single source for the headless local lane. `scripts/gen-local-ops.mjs`
+renders `runtime/contracts/local-lane.ts` and `src/contracts/local-lane.ts`, and
+`node scripts/check-local-ops.mjs` (part of `npm run lint`) fails when either copy is stale or
+hand-edited. Two contract tests keep the consumers honest: `op-read-only-parity.test.ts` compares the
+host read-only list with the catalog, and `route-consumers.test.ts` keeps every tool/host/headless/
+client route literal inside `CONTRACT_ROUTES`.
+
 ### Exceptions
 
 Exceptions are owned at two levels; an unowned, expired, or stale entry fails a gate.
@@ -376,14 +430,13 @@ Each entry has `id`, `kind`, `path`, `reason`, `owner`, and `reviewBy`; `npm run
 check:exceptions` (part of `npm run lint`) rejects an unknown kind, a missing path, a duplicate id,
 a reason shorter than 16 characters, and an expired `reviewBy`. Kinds: `file-budget`,
 `function-budget`, `python-static`, `single-line-reexport`, `facade-export`, `doc-path`,
-`matrix-row`, `python-private-import`. Seventeen entries exist today: five `file-budget` entries
-(`runtime/catalog/data.ts`, `runtime/core/sessions/registry.ts`, `runtime/core/local-evidence.ts`,
-and the two single-file Blender scripts `runtime/py/core/worker.py` and `runtime/py/render/view.py`);
-`single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`,
-`src/headless/receipts/index.ts`, and `runtime/execution/local-op/index.ts` (the documented
-src-to-lib bridge and three barrels); and eight `python-private-import` entries for the addon
-command modules that reuse private `_polyhaven_*` / `_polypizza_*` helpers from
-`integrations/*_client.py`.
+`matrix-row`, `python-private-import`. Fifteen entries exist today: four `file-budget` entries
+(`runtime/catalog/data.ts`, `runtime/core/local-evidence.ts`, and the two single-file Blender scripts
+`runtime/py/core/worker.py` and `runtime/py/render/view.py`);
+`single-line-reexport` for `runtime/catalog/index.ts`, `src/host/runtime-bridge.ts`, and
+`runtime/execution/local-op/index.ts` (the documented src-to-lib bridge and two barrels); and eight
+`python-private-import` entries for the addon command modules that reuse private
+`_polyhaven_*` / `_polypizza_*` helpers from `integrations/*_client.py`.
 `tests/unit/python/test_private_import_contract.py` scans the addon with `ast` for every
 `_`-prefixed name imported from `integrations/*_client.py`, derives the expected count from
 `config/exceptions.json`, and fails on an unregistered pair or a stale entry, so the registry and
@@ -460,14 +513,22 @@ policy; a floor must not be lowered without a documented policy change in this g
 | Python domains plus one modules.json registry | One place to add a module; no flat shims or duplicate path maps |
 | Two registered public facades plus implementation packages | Stable host and runtime entry imports; every export needs a registered consumer, and an unregistered export fails check:no-shims |
 | File, function, and coverage budgets | Reviewable size and measured debt; exceptions need owner, reason, and expiry |
+| Single-file client bundle with a line ratchet | The tab UI stays one reviewable artifact with no bundler; check:client-budget freezes src/client/index.js at its current line count and only ratchets down, so growth has to raise the ceiling on purpose |
 | One routing table plus codegen; one catalog <-> Python link table | GUI and worker routes cannot drift from config/routing.json; check:routes rejects stale generated tables, and the parity test rejects undeclared dispatch drift |
+| Kernel ports for cross-domain Python calls | The core can call view/deliver/gate capabilities without naming another domain's private API; the port name is the contract, and the layout test still enforces zero cross-domain imports |
+| One write authority with a fail-closed registry | A host-attributed write does not slip through when the Gateway has no session registry; legacy no-caller clients keep the lease path. Which requests skip the gate is one table plus one interpreter in `runtime/http/write-skip.ts` (`shouldGateWrite`); routes ask, they do not spell the predicate, and the default is to gate |
+| One queue transport constructor | `src/tools/shared/queue-job.ts` owns the `/job` body (`surface=queue`, `op=submit`) and the gateway-unreachable receipt; the run lane and the local headless lane cannot drift apart, and a source-scan test keeps `/job` out of every other module |
+| Caller-scoped frame dedupe keys | `src/tools/shared/frame-key.ts` builds `channel:caller:parts`; a frame one agent already saw never makes another agent's receipt say "identical to the last one" while dropping the image |
 
 ## 10. How to change safely
 
 1. Read AGENTS.md for commands and hard rules.
 2. For a boundary or contract change, update the code, the catalog/lock, the contract tests, and the
    migration notes together. Routing changes start in config/routing.json and regenerate through
-   node scripts/gen-routes.mjs; catalog op changes must also update config/contracts.json.
+   node scripts/gen-routes.mjs; catalog op changes must also update config/contracts.json. A
+   cross-domain Python capability is registered as a port in `core/kit.py` (provider side) and called
+   through `call_port` (consumer side); it must not take another domain's `K.dsh_*_api`. Queue job
+   bodies start in `src/tools/shared/queue-job.ts`, not in the lane that happens to send them.
 3. Add or update a failing test before the behavior change. Keep unit tests free of Blender, display,
    network, and user profile dependencies.
 4. Run the layer gates for what changed, then the full test and static gates. Run real-Blender E2E for
@@ -482,6 +543,14 @@ The refactor plan, the working spec, and the debt ledger are historical evidence
 this repository documents behavior and the terminal state only. Plan-shaped IDs (D1, F2.3, S3, ...) are
 no longer a maintained narrative: config/plan-ids.json carries the remaining exemptions, and
 scripts/check-plan-ids.mjs is the ratchet that keeps new ones out.
+
+The 2026-11 P0/P1-1a refactor moved the shared runtime helpers into `runtime/foundation/`, the shared
+tables into `runtime/contracts/`, removed the last module-global write registry, and replaced the
+view/deliver/gate cross-domain API calls with kernel ports. The P2 batch that followed collapsed the
+queue transport, the frame dedupe key and the receipt seam into single constructors, deleted the
+unused headless-receipt module (three files, 648 lines), and retired the two `DSH_HEADLESS_*` variables
+that no longer had a reader. Current metrics, the coupling inventory and the remaining roadmap live in
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
 Two historical analyses are kept for traceability, not as current guidance:
 [Procedura fusion analysis](Procedura-融合分析.md) (2026-09-17) and

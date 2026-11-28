@@ -150,15 +150,26 @@ describe('archive and lease security boundaries', () => {
   })
 
   it('keeps write routes behind the lease gate while read-only ops bypass it', () => {
-    expect(serverSource).toContain('function leaseGate(payload')
+    // The gate takes the session registry explicitly (the module-level REGISTRY
+    // is gone), so the signature spans two lines and both parameters are part of
+    // the contract.
+    expect(serverSource).toMatch(
+      /function leaseGate\(\s*payload\?: Record<string, unknown> \| null,\s*registry\?: WriteAuthoritySource \| null,?\s*\)/,
+    )
     expect(serverSource).toContain("error: 'leased'")
     expect(serverSource).toContain('const gate = leaseGate(payload)')
+    // 跳过判据只有一处解释器；路由问 shouldGateWrite，不再自己拼 isReadOnly
+    expect(serverSource).toContain('export function shouldGateWrite(')
     expect(serverSource).toContain(
-      "const gate = isReadOnly('/loop', op) ? null : leaseGate(payload)",
+      "'/act': (payload) => payload.py === true && currentCaller() !== null",
     )
+    expect(serverSource).toContain("'/worker': (payload) => payload.isolated === true")
     expect(serverSource).toContain(
-      "const gate = isReadOnly('/plan', op) ? null : leaseGate(payload)",
+      "const gate = shouldGateWrite('/loop', payload) ? leaseGate(payload) : null",
     )
+    expect(serverSource).toContain('const gate = writeRequest ? leaseGate(payload) : null')
+    // 默认过门：未知路径 / 未知 op 落到写门
+    expect(serverSource).toContain('return !isReadOnly(path, body.op)')
     expect(serverSource).toContain("'/plan': PLAN_READ_ONLY_OPS")
   })
 

@@ -244,6 +244,31 @@ describe('3.2 subagent sessions with their own dshSessionId (field report 1/2/3)
     expect((re.session.grants as unknown[]).length).toBe(1)
   })
 
+  it('C-2: owner TTL 过期后主控仍能 grant（无主时先认领，而不是永远 scope_forbidden）', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-20T00:00:00Z'))
+    const { registry, state } = setup()
+    const attached = registry.attach(main())
+    expect(attached.ok).toBe(true)
+    if (!attached.ok) return
+    const sessionId = String(attached.session.id)
+    vi.advanceTimersByTime(1_800_001)
+    const status = registry.status(main(), sessionId)
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.session.owner).toBeNull()
+
+    const granted = registry.grant(main(), sessionId, ['collection:COL_Z'], child(), 600_000)
+    expect(granted.ok).toBe(true)
+    // 认领发生在这条 grant 里：之后 status 应当重新显示 is_mine=true
+    const after = registry.status(main(), sessionId)
+    expect(after.ok).toBe(true)
+    if (!after.ok) return
+    expect(after.session.owner).not.toBeNull()
+    expect(after.session.is_mine).toBe(true)
+    expect(state.instances.length).toBe(1)
+  })
+
   it('never lets a subagent claim an unowned session as its own', () => {
     const { registry } = setup()
     expect(registry.attach(main()).ok).toBe(true)

@@ -6,13 +6,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { CFG, IS_WIN, wslToWin } from '../../config.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/bootstrap.js'
-import { preloadChunk } from '../kernel/api.js'
-import { envPrelude, scriptFileBlock, workdirBlock } from '../scripts.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/bootstrap.js'
+import { preloadChunk } from '../../foundation/kernel/api.js'
+import { envPrelude, scriptFileBlock, workdirBlock } from '../../foundation/scripts.js'
 import { inputPathBaseList, resolveExistingInput } from '../../execution/input-paths.js'
 import { buildLocalOpJob } from '../../execution/local-op/index.js'
 import { channelsPostlude } from '../../execution/render-channels.js'
-import { renderDevicePrelude } from '../../execution/render-device.js'
+import { headlessDevicePrelude, renderDevicePrelude } from '../../execution/render-device.js'
 import type { JobRecord } from './types.js'
 
 /** The Gateway workDir is probed writable at startup; never rely on %TEMP% for job files. */
@@ -125,6 +125,9 @@ function headlessPrelude(
   envPairs: Record<string, string>,
 ): { code: string; preloads: string[]; bootstrap: boolean } {
   const parts: string[] = [envPrelude(envPairs)]
+  // C-9：headless 以前不初始化 Cycles 设备，--factory-startup 下只会绑 CPU。
+  // 每次 headless 都跑一遍设备前导（device=auto），回执里能看到 devices_used。
+  parts.push(headlessDevicePrelude(params))
   const bootstrap = params.bootstrap !== false
   if (bootstrap) parts.push(KERNEL_BOOTSTRAP)
   const raw = params.preload
@@ -289,6 +292,30 @@ export interface BuiltJobArgs {
   bootstrap: boolean
 }
 
+/**
+ * render 的固定入口 argv：`-b --factory-startup [-P <tmp>/pre.py] --python-expr <prelude>`。
+ *
+ * Q-5 方案 a：`pre_script` 写成临时 pre.py，`-P` **必须排在 prelude 之前** —— prelude 之后才
+ * 设置 engine/resolution/samples/format/output/camera，所以 pre_script 只做场景准备、
+ * 改不动输出参数。内容只落临时文件，不上命令行/回执。无 pre_script 时 argv 与加这个功能之前逐字一致。
+ */
+function renderEntryArgs(
+  params: Record<string, unknown>,
+  tempDir: string,
+  renderParams: Record<string, unknown>,
+): string[] {
+  const args = ['-b', '--factory-startup']
+  const preScript = asString(params.pre_script)
+  if (preScript.trim()) {
+    const prePath = path.join(tempDir, 'pre.py')
+    fs.writeFileSync(prePath, preScript.endsWith('\n') ? preScript : preScript + '\n', 'utf8')
+    // 与 file 参数同口径：交给 Blender 的是它那一侧的路径（WSL 里 /mnt/... 它打不开）。
+    args.push('-P', wslToWin(prePath))
+  }
+  args.push('--python-expr', renderPrelude(renderParams))
+  return args
+}
+
 export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
   const params = job.params
   let outdir = asString(params.outdir) || null
@@ -325,7 +352,7 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
       ensureRenderDir(outdir, output)
     }
     const renderParams = { ...params, output }
-    args.push('-b', '--factory-startup', '--python-expr', renderPrelude(renderParams))
+    args.push(...renderEntryArgs(params, tempDir, renderParams))
     const frames = frameRange(params)
     if (frames) args.push('-s', String(frames.start), '-e', String(frames.end), '-a')
     // render channels：-a 之后追加一次 numpy 收尾（没传 channels 时一个参数都不加）
@@ -391,9 +418,11 @@ export function buildJobArgs(job: JobRecord, tempDir: string): BuiltJobArgs {
     fs.writeFileSync(scriptPath, lines.join('\n') + '\n', 'utf8')
     args.push('--python', scriptPath)
   }
+  // C-10：调用方的 args 先占位（文档说的就是"进 -- 之后"），outdir 放最后 ——
+  // 以前 outdir 是第 0 位，脚本按 isdigit 取参数会先吃到目录名。
   args.push('--')
-  if (outdir) args.push(outdir)
   args.push(...argsTail)
+  if (outdir) args.push(outdir)
   return {
     args,
     outdir,

@@ -4,7 +4,7 @@ import type { HostContext } from '../../host/context.js'
 import { ANY_SCHEMA } from '../schema-diagnostic.js'
 import { T } from '../../constants.js'
 import { renderOne } from '../../ui/cards.js'
-import { requireReadySession, sessionRequiredFailure } from '../shared/session.js'
+import { resolveSession } from '../shared/session.js'
 import { executeSee } from './execute.js'
 
 function seeParameters(): Record<string, unknown> {
@@ -86,9 +86,10 @@ function buildSeeTool(ctx: HostContext, port: number) {
     isConcurrencySafe: () => true,
     timeoutMs: T.see,
     async execute(args: Record<string, unknown>) {
-      const ready = await requireReadySession(port)
-      if (!ready.ok) return sessionRequiredFailure()
-      return executeSee(ctx, port, args, ready.session)
+      const ref = await resolveSession(port)
+      // 保留结构化的 session_required（含 instance 线索），不再重建一个丢失上下文的失败。
+      if (!ref.ok) return ref.failure
+      return executeSee(ctx, port, args, ref.row)
     },
   })
 }

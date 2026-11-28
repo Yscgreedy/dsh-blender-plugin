@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { wslPathShared, wslToWin } from './config.js'
 import { WIN_TMP, WSL_TMP, PY_ROOT, blenderJoin } from './paths.js'
-import { errorMessage } from './core/json.js'
+import { errorMessage } from './foundation/json.js'
 
 /**
  * 把无头脚本落到一个**两端都能读**的位置（v0.9.6 起带共享性自证）。

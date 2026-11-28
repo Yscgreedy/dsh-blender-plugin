@@ -1,5 +1,5 @@
-import { catalogPayload, extractLoop } from './output/index.js'
-import { KERNEL_BOOTSTRAP } from './kernel/index.js'
+import { catalogPayload, extractLoop } from '../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../foundation/kernel/index.js'
 import { planOpSuggestion } from '../catalog/index.js'
 import { extCheckOp } from './plan/ext-check.js'
 import { createRenderGuardOp } from './plan/render-guard.js'

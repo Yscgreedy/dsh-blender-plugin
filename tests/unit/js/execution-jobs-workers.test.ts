@@ -86,18 +86,18 @@ vi.mock('../../../runtime/paths.js', () => ({
   USER_SCRIPTS_WIN: 'C:/fake/user-scripts',
 }))
 
-vi.mock('../../../runtime/core/evidence.js', () => ({
+vi.mock('../../../runtime/foundation/evidence.js', () => ({
   PLUGIN_VERSION: '3.0.0-test',
   pathAudit: vi.fn(() => h.pathWarnings.slice()),
   pidAlive: vi.fn(() => h.pidAlive),
   sceneHygieneAudit: vi.fn(() => []),
 }))
 
-vi.mock('../../../runtime/core/output/index.js', () => ({
+vi.mock('../../../runtime/foundation/output/index.js', () => ({
   slipFixPath: (p: unknown) => String(p),
 }))
 
-vi.mock('../../../runtime/core/scripts.js', () => ({
+vi.mock('../../../runtime/foundation/scripts.js', () => ({
   PATH_GUARD: '# path guard',
   envPrelude: (pairs: Record<string, unknown>) => '# env ' + JSON.stringify(pairs),
   fileFingerprint: (win: string) => ({ given: win, md5: 'f'.repeat(32), bytes: 1 }),
@@ -106,7 +106,7 @@ vi.mock('../../../runtime/core/scripts.js', () => ({
   workdirBlock: (p: string) => '# workdir ' + p,
 }))
 
-vi.mock('../../../runtime/core/kernel/index.js', () => ({
+vi.mock('../../../runtime/foundation/kernel/index.js', () => ({
   KERNEL_BOOTSTRAP: '# kernel bootstrap',
 }))
 

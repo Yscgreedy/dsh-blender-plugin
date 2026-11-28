@@ -1,18 +1,37 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { objArg } from './deps.js'
 import type { HttpRouteDeps } from './deps.js'
-import { errorMessage, errorField } from '../../core/json.js'
-import { PLUGIN_VERSION } from '../../core/evidence.js'
+import { errorMessage, errorField } from '../../foundation/json.js'
+import { HOST_DIR, PLUGIN_VERSION } from '../../foundation/evidence.js'
+import { HOST_MANIFEST_ENV, hostLayerSnapshot } from '../../foundation/layers.js'
+import type { LayerSnapshot } from '../../foundation/layers.js'
 import { hotReloadView } from '../../core/hot-reload.js'
 import { readReloadState } from '../../core/reload-state.js'
 import { blenderExeInfo } from '../../blender-exe.js'
 import { collectLocalEvidence } from '../../core/local-evidence.js'
 import { gatewayInstances } from '../../transport/addon-ws.js'
+import { currentCaller } from '../caller.js'
+import { userGuiClaim } from '../../core/sessions/display-gate.js'
+import type { UserGuiClaim } from '../../core/sessions/display-gate.js'
+import type { CallerIdentity } from '../../core/sessions/types.js'
+
+/**
+ * 4a：宿主层快照的 HTTP 边界取法。
+ *
+ * 清单路径在这里从 env 读一次并**显式**传给 foundation —— 不再让 foundation 自己在深处发现
+ * （R3 的隐式环境契约就断在这一行）。root 仍给本进程的宿主层根：共享目录里可能是别人的清单。
+ */
+export function hostLayerAtEdge(): LayerSnapshot {
+  return hostLayerSnapshot({ root: HOST_DIR, manifestPath: process.env[HOST_MANIFEST_ENV] || '' })
+}
 
 /** provenance 单点取值：/health 与 /status 都要，坏了只降级不炸响应。 */
-function provenanceOf(fn: (opts?: unknown) => unknown): Record<string, unknown> {
+function provenanceOf(
+  fn: (opts?: unknown) => unknown,
+  opts: Record<string, unknown> = {},
+): Record<string, unknown> {
   try {
-    return objArg(fn({}))
+    return objArg(fn(opts))
   } catch (e) {
     return { verdict: 'unknown', error: errorMessage(e) }
   }
@@ -220,9 +239,11 @@ async function statusRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
     return
   }
   try {
-    const s = objArg(await engine.status())
+    // 4a：宿主层快照在边界取一次，status 的两个 provenance 入口吃同一份（不再各自发现 env）。
+    const layers = { host: hostLayerAtEdge() }
+    const s = objArg(await engine.status({ layers }))
     const m = objArg(engine.metrics())
-    const payload = statusPayload(E, provenanceOf(engineProvenance), s, m)
+    const payload = statusPayload(E, provenanceOf(engineProvenance, { layers }), s, m)
     // 工单 6：list 要能看见 local_processes / ports / ports_evidence —— 显式 evidence=1 才扫。
     const attach = attachView(E.addon ?? engine.addon)
     const evidence = evidenceFor(url, PORT, {
@@ -240,6 +261,22 @@ async function statusRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
       metrics: m2,
       diagnosis: errorField(e, 'diagnosis') || m2.lastDiagnosis || null,
     })
+  }
+}
+
+/**
+ * S-1：doctor 的 virtualGui 判定必须和 start 用**同一个**判据 ——
+ * `registry.findForCaller(caller)`（不是 listFor，它会把别人的会话也列进来）
+ * 命中一扇就绪的 user-gui 时，归属直接问 display-gate 导出的 userGuiClaim。
+ * 只读：注册表坏了就按「没有窗口」算，/doctor 不许因此 500。
+ */
+function callerUserGuiClaim(E: HttpRouteDeps, caller: CallerIdentity): UserGuiClaim | null {
+  try {
+    const session = E.sessionRegistry.findForCaller(caller)
+    if (!session || session.kind !== 'user-gui' || session.status !== 'ready') return null
+    return userGuiClaim(session, caller)
+  } catch {
+    return null
   }
 }
 
@@ -264,7 +301,26 @@ async function doctorRoute(E: HttpRouteDeps, res: ServerResponse, url: URL): Pro
         )
       })
     })
-    const d = objArg(await engine.doctor(opts))
+    // S-1：把 caller（以及它与 start 同源的归属结论）递进 engine —— doctor 的
+    // virtualGui.available_for_caller 就是在这一次调用里算出来的；没有身份就如实 null。
+    const caller = currentCaller()
+    const claim = caller ? callerUserGuiClaim(E, caller) : null
+    // 4a：doctor 内部的 statusView → engineProvenance 也吃这份显式快照。
+    const d = objArg(
+      await engine.doctor({
+        ...opts,
+        caller: caller
+          ? {
+              hostId: caller.hostId,
+              dshSessionId: caller.dshSessionId,
+              agentId: caller.agentId,
+              role: caller.role,
+            }
+          : null,
+        claim,
+        layers: { host: hostLayerAtEdge() },
+      }),
+    )
     // 工单 6：no-addon 态也必须给端口证据 —— 证据在路由层合并，engine 不必知道扫描。
     d.local_evidence = await evidencePromise
     const evidence = objArg(d.local_evidence)
@@ -303,7 +359,7 @@ export function createHealthRoutes(E: HttpRouteDeps) {
         rtt: rttView(),
         // v0.9.6：加载版本自证（内容哈希，不是 mtime）——"要不要重启后端"在这里一眼可见。
         // 只做本地读+哈希（~0.5 ms），不 spawn 干净进程；强对拍走 /plan op=catalog args={verify:true}。
-        provenance: provenanceOf(engineProvenance),
+        provenance: provenanceOf(engineProvenance, { layers: { host: hostLayerAtEdge() } }),
         gateway: typeof E.gatewayOwner === 'function' ? (E.gatewayOwner as () => unknown)() : null,
         backend: {
           pid: process.pid,

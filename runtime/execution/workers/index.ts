@@ -1,6 +1,6 @@
 // 热无头 worker 会话池入口（拆分）
 import { CFG } from '../../config.js'
-import { errorMessage } from '../../core/json.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { WorkerRecord } from './api.js'
 import {
   sameWorkerFile,

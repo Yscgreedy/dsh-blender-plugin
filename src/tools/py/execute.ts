@@ -5,7 +5,7 @@ import { isRecord, text } from '../../contracts/dynamic.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import type { HostContext } from '../../host/context.js'
 import { backendPost, leasedText } from '../../host/http.js'
-import { errorLine, toolError, withFailureEvidence } from '../errors.js'
+import { errorLine, redactDiagnostic, toolError, withFailureEvidence } from '../errors.js'
 import type { ToolFailure } from '../errors.js'
 import { hostCancelled } from './cancel.js'
 import { checkpointMode, takePreExecCheckpoint } from './checkpoint.js'
@@ -13,6 +13,8 @@ import type { PreExecCheckpoint } from './checkpoint.js'
 import { actDeltaEvidence, formatActText } from './envelope.js'
 import type { PyOutcomeMeta } from './envelope.js'
 import { withFrame } from './frame.js'
+import { checkSceneDrift, rememberScene } from '../../utils/scene-baseline.js'
+import type { SceneDrift } from '../../utils/scene-baseline.js'
 
 const LF = String.fromCharCode(10)
 
@@ -137,7 +139,11 @@ function gateFailureReceipt(r: Record<string, unknown>): Record<string, unknown>
  * 反馈 4: CANCELLED / no-effect / out-of-scope are failures with the numbers that
  * prove it, not a success with a warning buried in stdout.
  */
-function pyFailureResult(r: Record<string, unknown>, kind: string): unknown {
+function pyFailureResult(
+  r: Record<string, unknown>,
+  kind: string,
+  drift: SceneDrift | null = null,
+): unknown {
   const delta = actDeltaEvidence(r)
   const code =
     kind === 'cancelled'
@@ -149,6 +155,7 @@ function pyFailureResult(r: Record<string, unknown>, kind: string): unknown {
           : kind === 'scope_violation'
             ? 'scope_violation'
             : 'py_error'
+  const scriptError = kind === '' || kind === 'execution'
   const why =
     kind === 'cancelled'
       ? '算子返回 CANCELLED（没有执行，几何未改变）'
@@ -158,8 +165,22 @@ function pyFailureResult(r: Record<string, unknown>, kind: string): unknown {
           ? 'uv.unwrap 报 Unwrap failed to solve（UV 没铺开）'
           : kind === 'scope_violation'
             ? '改动超出本次 grant 的写作用域'
-            : 'PY 执行失败'
+            : '脚本内部抛异常（通道正常；异常之前的写可能已经留在场景里）'
   const stdout = text(r.stdout || '').trim()
+  const stderr = text(r.stderr || '').trim()
+  const traceback = text(r.traceback || '').trim()
+  // C-11：失败通道也要给证据。stdout 提到 8 KB（原 1200 字符会把结果拦腰砍断），
+  // stderr/traceback 单独成字段 —— 拼在 text 里会被 redactSecrets 的 600 字符上限吃掉。
+  const evidence = {
+    ...delta,
+    ...(stdout ? { stdout: redactDiagnostic(stdout, 8000) } : {}),
+    ...(stderr ? { stderr: redactDiagnostic(stderr, 4000) } : {}),
+    ...(traceback ? { traceback: redactDiagnostic(traceback, 4000) } : {}),
+    script_error: scriptError,
+    executed_before_error:
+      scriptError && (stdout.length > 0 || (delta.changed as boolean) === true),
+    ...(drift ? { scene_drift: drift } : {}),
+  }
   const failure = toolError(
     code,
     why + ' · ' + text(r.error || r.raw || 'unknown'),
@@ -167,13 +188,30 @@ function pyFailureResult(r: Record<string, unknown>, kind: string): unknown {
       ? '缩小脚本的写入范围到 grant 的 collection/prefix，或让 main agent 扩大 grant'
       : kind === 'cancelled' || kind === 'no_effect'
         ? '先选中目标（bpy.context.view_layer.objects.active + select_set）并在 OBJECT 模式重试；读回执里的 faces_delta 确认几何真的变了'
-        : '看 traceback/stderr 修脚本；脚本可以重跑。需要后台执行时用 blender_run(kind=headless)。',
-    JSON.stringify({ ...delta, stdout: stdout.slice(-1200) }),
+        : '按 traceback/stderr 修脚本；先确认这次已经改了什么（changed / changed_objects），再决定重跑还是 txn restore。需要后台执行时用 blender_run(kind=headless)。',
+    JSON.stringify(evidence),
   )
-  const payload = { ...delta, ...(stdout ? { stdout: stdout.slice(-1200) } : {}) }
-  withFailureEvidence(failure, payload)
+  withFailureEvidence(failure, evidence)
   // 反馈 4：失败回执也把 changed/faces/scope/rollback 提到顶层，别让 agent 二次解析 detail。
-  return { ...failure, ...payload }
+  return { ...failure, ...evidence }
+}
+
+/** 读本次 before 并与基线比较，同时把 after 记成新基线；返回跨调用漂移。 */
+function driftOf(sessionId: string, r: Record<string, unknown>): SceneDrift | null {
+  const drift = checkSceneDrift(sessionId, r.state_before, r.faces_before)
+  rememberScene(sessionId, r.state_after, r.faces_after)
+  return drift
+}
+
+/** 跨调用漂移的告警行。 */
+function driftNote(drift: SceneDrift): string {
+  return (
+    '⚠ 场景自上次调用后已变（sig ' +
+    drift.from +
+    '→' +
+    drift.to +
+    '）：本次 before/after 只在本调用窗口成立；多人共机时先确认是谁改的，再据本回执下结论'
+  )
 }
 
 /** 成功回执的锚点：谁跑的、执行前退到哪。 */
@@ -221,16 +259,11 @@ export async function executePy(
   if (blocked)
     return toolError('factory_reset_blocked', blocked, '改用逐对象删除，或改走 headless/worker')
   // 执行前回退点（默认 auto）：快照失败不挡这次编辑，只在回执里告警。
-  // 反馈 1：子 agent 的 collection grant 覆盖不了 exclusive，文件级快照必然
-  // scope_required —— 直接跳过并说明，别用一个必然失败的调用污染回执。
-  let checkpoint = await takePreExecCheckpoint(port, mode)
-  const scopeText = declaredScopeText(args)
-  if (mode === 'auto' && scopeText && !scopeText.includes('exclusive'))
-    checkpoint = {
-      ...checkpoint,
-      label: null,
-      note: 'scoped grant：文件级快照需要 exclusive，已跳过；要回退用对象级 mark/revert 或让 main agent 走 txn',
-    }
+  // C-3：scope 判断必须在**发请求之前** —— 窄 grant 的快照必然 scope_required，
+  // 先发再改口既浪费一次往返，还会把已经成功的 label 抹成 null。
+  const checkpoint = await takePreExecCheckpoint(port, mode, {
+    scopeText: declaredScopeText(args),
+  })
   let r: Record<string, unknown>
   try {
     r = await backendPost(
@@ -259,10 +292,15 @@ export async function executePy(
   const gate = gateFailureReceipt(r)
   if (gate) return gate
   const kind = text(r.errorKind)
-  if (!r || r.ok !== true) return pyFailureResult(r, kind)
+  // C-6：before 与"上一次收工时的 after"比 —— 只有这样才能看出两次调用之间被谁改过。
+  const drift = driftOf(String(session.id || ''), r)
+  if (!r || r.ok !== true) return pyFailureResult(r, kind, drift)
+  const lines = formatActText(r, outcomeMeta(checkpoint))
+  if (drift) lines.push(driftNote(drift))
   const out: Record<string, unknown> = {
-    text: formatActText(r, outcomeMeta(checkpoint)).join(LF),
+    text: lines.join(LF),
     ...actDeltaEvidence(r),
+    ...(drift ? { scene_drift: drift } : {}),
   }
   if (args.see === false) return out
   return await withFrame(ctx, port, args, out)

@@ -10,14 +10,6 @@
       "reviewBy": "2027-06-30"
     },
     {
-      "id": "EXC-FILE-BUDGET-SESSION-REGISTRY",
-      "kind": "file-budget",
-      "path": "runtime/core/sessions/registry.ts",
-      "reason": "SessionRegistry 是 attach/claim/lease/virtual-gui/human-pause 的唯一编排器：约 40 个方法共享私有 sessions/instances/humanPaused 映射与 VirtualGuiLifecycle 句柄。把私有状态簇拆成 helper 属于行为敏感重构（3.1 GA 仍在动），本文件保留单类并在 2027-06-30 前复核；其余文件的行预算仍照常执行。",
-      "owner": "core-sessions",
-      "reviewBy": "2027-06-30"
-    },
-    {
       "id": "EXC-SINGLE-LINE-REEXPORT-CATALOG-BARREL",
       "kind": "single-line-reexport",
       "path": "runtime/catalog/index.ts",
@@ -30,14 +22,6 @@
       "kind": "single-line-reexport",
       "path": "src/host/runtime-bridge.ts",
       "reason": "The single documented src/ -> lib/runtime boundary: host-side code imports the built runtime entry points through this one file instead of scattering lib/ paths. Keeping the bridge as one re-export file is the boundary convention recorded in docs/architecture.md.",
-      "owner": "s2-facade",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "id": "EXC-SINGLE-LINE-REEXPORT-HEADLESS-RECEIPTS",
-      "kind": "single-line-reexport",
-      "path": "src/headless/receipts/index.ts",
-      "reason": "Split barrel for the headless receipt helpers (split / normalize / format). Callers and tests import the receipt surface from this single path; the module files keep the implementation and unit tests target them directly.",
       "owner": "s2-facade",
       "reviewBy": "2027-06-30"
     },

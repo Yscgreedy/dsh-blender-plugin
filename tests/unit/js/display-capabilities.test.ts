@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { isolateConsentDir } from '../../helpers/consent-dir'
 import {
   buildDisplayCapabilities,
   prerequisiteTable,
@@ -15,6 +16,16 @@ import type { EngineApiDeps } from '../../../runtime/core/engine-api/index.js'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
 
 const WIN_CHECKS = { 'win-hidden-desktop-helper': true, blender: true }
+
+/** 隔离 consent 目录：这里的 start 会落请求，不能写进操作者的真实 workDir。 */
+let consentSandbox: ReturnType<typeof isolateConsentDir> | null = null
+beforeAll(() => {
+  consentSandbox = isolateConsentDir('dsh-consent-caps-')
+})
+afterAll(() => {
+  consentSandbox?.dispose()
+  consentSandbox = null
+})
 
 describe('provider selection order', () => {
   it('tries the Windows hidden desktop before the IDD fallback', () => {
@@ -300,7 +311,8 @@ describe('blender_session start pre-spawn gate', () => {
 
   it('requires one-time human consent before a ready capability may start', async () => {
     const reg = registry()
-    const denied = await reg.start(caller)
+    // wait_ms=0：这条用例验的是"没有 token 就不许 start"，不验等待窗口
+    const denied = await reg.start(caller, { waitMs: 0 })
     expect(denied.ok).toBe(false)
     if (denied.ok) return
     expect(denied.code).toBe('consent_required')
@@ -338,7 +350,46 @@ describe('blender_session start pre-spawn gate', () => {
     if (result.ok) return
     expect(result.code).toBe('session_already_available')
     expect(result.evidence.sessionId).toBe(attached.session.id)
+    // C-1: 自己的会话说 is_mine=true，且 fix 不再把人指向别人的窗口
+    expect(result.evidence.is_mine).toBe(true)
+    expect(result.evidence.viewer).toBe(false)
+    expect(String(result.fix)).toContain('you already own it')
     expect(reg.listFor(caller)).toHaveLength(1)
+  })
+
+  it('S-4: 别人占着 user-gui 时不再阻塞同机 caller 的 start（借读语义保留）', async () => {
+    const reg = new SessionRegistry(() => [{ instanceId: 'gui-1', ready: true }], {
+      display: readyCap,
+      selectProvider: () => null,
+      waitForInstance: async () => false,
+    })
+    expect(reg.attach(caller).ok).toBe(true)
+    const other = {
+      hostId: 'h',
+      dshSessionId: 'dsh-other',
+      agentId: 'other',
+      role: 'main' as const,
+    }
+    const started = await reg.start(other, { waitMs: 0 })
+    expect(started.ok).toBe(false)
+    if (started.ok) return
+    // ① 这不再是「同机有人在用」的拒绝：user-gui 检查放行，落到 consent 闸门。
+    expect(started.code).not.toBe('session_already_available')
+    expect(started.code).toBe('consent_required')
+    expect(started.evidence.state).toBe('pending')
+    expect(started.evidence.mode).toBe('manual')
+    // ② 归属没被动过：gui-1 仍是主控的。
+    expect(reg.getSession('user-gui:gui-1')?.owner?.agentId).toBe('a')
+    // ③ 借读语义仍在：同机 caller 看得到它，但 is_mine=false / read_only=true。
+    const borrowed = reg.listFor(other).find((row) => row.id === 'user-gui:gui-1')
+    expect(borrowed).toBeTruthy()
+    expect(borrowed?.is_mine).toBe(false)
+    expect(borrowed?.read_only).toBe(true)
+    // ④ 旧口径的「别人持有 → 只读 viewer」拒绝文案已消失，换成不阻塞的三分说明。
+    const note = started.evidence.existing_user_gui as Record<string, unknown>
+    expect(note.claim).toBe('others')
+    expect(note.blocking).toBe(false)
+    expect(String(started.fix)).not.toContain('read-only viewer')
   })
 
   it('binds consent tokens to the caller', async () => {

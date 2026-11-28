@@ -100,6 +100,96 @@ describe('blender_run structured receipts', () => {
     expect(out.text).toContain('RUN list · 1 个作业')
   })
 
+  it('forwards still_running when a wait times out on a live job', async () => {
+    backend.setHandler('POST /job', () =>
+      json({
+        ok: true,
+        op: 'wait',
+        job: { ...JOB, state: 'running' },
+        waitedMs: 120000,
+        waitTimedOut: true,
+        still_running: true,
+      }),
+    )
+    const out = await run('blender_run', { action: 'wait', id: 'job-9' })
+    // Q-4：超时不是失败 —— 结构化回执要说清作业还在跑。
+    expect(out.timed_out).toBe(true)
+    expect(out.still_running).toBe(true)
+    expect(out.waited_ms).toBe(120000)
+    expect(out.state).toBe('running')
+    expect(out.envelope).toMatchObject({ action: 'wait', job_id: 'job-9' })
+    expect(out.text).toContain('仍在 running')
+    backend.setHandler('POST /job')
+  })
+
+  it('reports still_running=false once the job reached a terminal state', async () => {
+    backend.setHandler('POST /job', () =>
+      json({
+        ok: true,
+        op: 'wait',
+        job: { ...JOB, state: 'completed' },
+        waitedMs: 1200,
+        waitTimedOut: false,
+      }),
+    )
+    const out = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(out.timed_out).toBe(false)
+    expect(out.still_running).toBe(false)
+    expect(out.state).toBe('completed')
+    backend.setHandler('POST /job')
+  })
+
+  it('surfaces script_map on wait/collect with a one-line hint', async () => {
+    const mapped = {
+      ...JOB,
+      state: 'completed',
+      result: {
+        exitCode: 0,
+        signal: null,
+        ms: 12,
+        provenance: {
+          script_map: { temp_path: 'C:/rt/tmp/dsh-job-x/job.py', source_path: 'C:/proj/user.py' },
+        },
+      },
+      logs: { stdout: '', stderr: '' },
+    }
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'wait', job: mapped, waitedMs: 5, waitTimedOut: false }),
+    )
+    const wait = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(wait.script_map).toEqual({
+      temp_path: 'C:/rt/tmp/dsh-job-x/job.py',
+      source_path: 'C:/proj/user.py',
+    })
+    expect(wait.text).toContain('script_map')
+    expect(wait.text).toContain('traceback')
+
+    backend.setHandler('POST /job', () => json({ ok: true, op: 'collect', job: mapped }))
+    const collect = await run('blender_run', { action: 'collect', id: 'job-9' })
+    expect(collect.script_map).toEqual({
+      temp_path: 'C:/rt/tmp/dsh-job-x/job.py',
+      source_path: 'C:/proj/user.py',
+    })
+    expect(collect.text).toContain('script_map')
+    backend.setHandler('POST /job')
+  })
+
+  it('omits script_map for a job that never used a temp script', async () => {
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'wait', job: JOB, waitedMs: 5, waitTimedOut: false }),
+    )
+    const wait = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(wait).not.toHaveProperty('script_map')
+    expect(wait.text).not.toContain('script_map')
+
+    backend.setHandler('POST /job', () =>
+      json({ ok: true, op: 'collect', job: { ...JOB, logs: { stdout: '', stderr: '' } } }),
+    )
+    const collect = await run('blender_run', { action: 'collect', id: 'job-9' })
+    expect(collect).not.toHaveProperty('script_map')
+    backend.setHandler('POST /job')
+  })
+
   it('puts audit source/file_load/cleanup into the receipt envelope', () => {
     const env = planEnvelope('audit_mesh', {
       ok: true,

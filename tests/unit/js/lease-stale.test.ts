@@ -57,7 +57,7 @@ describe('stale write lease reclaim', () => {
     const dead = 'plugin-pid-' + String(await deadPid())
     leaseAcquire(dead, 60000, true)
     const before = leaseView().staleReclaimed
-    expect(leaseGate({ holder: ME })).toBeNull()
+    expect(leaseGate({ holder: ME }, null)).toBeNull()
     expect(leaseView()).toMatchObject({ active: true, holder: ME, holderAlive: true })
     expect(leaseView().staleReclaimed).toBe(before + 1)
   })
@@ -65,7 +65,7 @@ describe('stale write lease reclaim', () => {
   it('keeps blocking a live holder without force', () => {
     const other = 'plugin-pid-' + String(process.ppid || 1)
     expect(leaseAcquire(other, 60000).granted).toBe(true)
-    const denied = leaseGate({ holder: ME })
+    const denied = leaseGate({ holder: ME }, null)
     expect(denied).toMatchObject({ ok: false, error: 'leased' })
     expect(denied && denied.hint).toContain('force')
   })
@@ -73,7 +73,7 @@ describe('stale write lease reclaim', () => {
   it('stays conservative for non-conventional holder names', () => {
     leaseAcquire('orca-model-session', 60000, true)
     expect(leaseView().holderAlive).toBeNull()
-    expect(leaseGate({ holder: ME })).toMatchObject({ ok: false, error: 'leased' })
+    expect(leaseGate({ holder: ME }, null)).toMatchObject({ ok: false, error: 'leased' })
   })
 
   it('releases stale leases only when the holder is provably dead', () => {

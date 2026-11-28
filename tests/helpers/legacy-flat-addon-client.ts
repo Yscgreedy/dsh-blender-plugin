@@ -6,7 +6,7 @@
 import net from 'node:net'
 import { resolveProtocol } from '../../runtime/addon-protocol.js'
 import type { AddonProtocol, ProtocolDecode, ProtocolInfo } from '../../runtime/addon-protocol.js'
-import { errorMessage } from '../../runtime/core/json.js'
+import { errorMessage } from '../../runtime/foundation/json.js'
 
 interface PendingRequest {
   resolve: (v: unknown) => void

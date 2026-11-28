@@ -88,7 +88,9 @@ export function createRoutes(E: HttpRouteDeps): RouteDef[] {
     { method: 'POST', paths: ['/perf'], fn: perf.perf },
     { method: 'POST', paths: ['/opt'], fn: opt.opt },
     { method: 'GET', paths: ['/who'], fn: session.who },
-    { method: 'POST', paths: ['/lease'], fn: session.lease },
+    // /lease 同时承载模型动作（POST）与人类同意命令（GET query-string，见 §5.7）；
+    // 只有 consent_* 动作允许 GET，其余在处理器里 405（不让 GET 偷偷改租约状态）。
+    { method: null, paths: ['/lease'], fn: session.lease },
     { method: 'POST', paths: ['/release'], fn: session.release },
     { method: 'POST', paths: ['/view'], fn: view.view },
     { method: 'POST', paths: ['/headless'], fn: headless.headless },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import { pkgPath } from '../../../helpers/pkg'
-import { RUNTIME_DIR, runtimeFingerprint, sha12 } from '../../../../runtime/core/evidence.js'
+import { RUNTIME_DIR, runtimeFingerprint, sha12 } from '../../../../runtime/foundation/evidence.js'
 import { pyModuleFile, pyModuleNames } from '../../../../runtime/paths.js'
 
 // follow-up: runtimeFingerprint() must enumerate the Python module registry
@@ -58,7 +58,7 @@ describe('runtime fingerprint (registry-only Python sources)', () => {
     for (const name of Object.keys(manifest.modules)) {
       expect(fp[name + '.py'], name).toBeTruthy()
     }
-    const source = fs.readFileSync(pkgPath('runtime', 'core', 'evidence.ts'), 'utf8')
+    const source = fs.readFileSync(pkgPath('runtime', 'foundation', 'evidence.ts'), 'utf8')
     expect(source).not.toContain('readdirSync(PY_ROOT)')
     expect(source).not.toContain('PY_ROOT')
   })

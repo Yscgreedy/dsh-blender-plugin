@@ -1,11 +1,11 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-21T02:54:06.665Z",
+  "generatedAt": "2026-11-28T03:01:30.676Z",
   "mode": "warn",
   "totals": {
-    "all": 1516,
-    "exempt": 1516,
+    "all": 1576,
+    "exempt": 1576,
     "residual": 0
   },
   "byPrefix": {},
@@ -37,8 +37,8 @@
       "residual": 0
     },
     "docs/architecture.md": {
-      "count": 4,
-      "exempt": 4,
+      "count": 8,
+      "exempt": 8,
       "residual": 0
     },
     "docs/archive/2026-11-20-角色动画与卡通渲染需求.md": {
@@ -76,6 +76,11 @@
       "exempt": 52,
       "residual": 0
     },
+    "docs/已知问题台账.md": {
+      "count": 52,
+      "exempt": 52,
+      "residual": 0
+    },
     "docs/操作教程.md": {
       "count": 1,
       "exempt": 1,
@@ -84,6 +89,11 @@
     "docs/证据分级与读图纪律.md": {
       "count": 5,
       "exempt": 5,
+      "residual": 0
+    },
+    "docs/通道已知问题与待修.md": {
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/blender-detect.ts": {
@@ -116,16 +126,6 @@
       "exempt": 1,
       "residual": 0
     },
-    "runtime/core/kernel/api.ts": {
-      "count": 1,
-      "exempt": 1,
-      "residual": 0
-    },
-    "runtime/core/kernel/bootstrap.ts": {
-      "count": 2,
-      "exempt": 2,
-      "residual": 0
-    },
     "runtime/core/queue/job-args.ts": {
       "count": 4,
       "exempt": 4,
@@ -144,6 +144,16 @@
     "runtime/execution/workers/worker-start.ts": {
       "count": 1,
       "exempt": 1,
+      "residual": 0
+    },
+    "runtime/foundation/kernel/api.ts": {
+      "count": 1,
+      "exempt": 1,
+      "residual": 0
+    },
+    "runtime/foundation/kernel/bootstrap.ts": {
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/http/routes/health.ts": {
@@ -202,8 +212,8 @@
       "residual": 0
     },
     "runtime/py/geometry/shapegen.py": {
-      "count": 45,
-      "exempt": 45,
+      "count": 46,
+      "exempt": 46,
       "residual": 0
     },
     "runtime/py/geometry/surface_impl/advmath.py": {
@@ -302,8 +312,8 @@
       "residual": 0
     },
     "tests/BEHAVIOR_MATRIX.md": {
-      "count": 314,
-      "exempt": 314,
+      "count": 315,
+      "exempt": 315,
       "residual": 0
     },
     "tests/MIGRATION.md": {

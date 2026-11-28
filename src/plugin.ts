@@ -2,13 +2,13 @@
  * dsh-blender-plugin —— host 侧生命周期与工具面装配。
  *
  * 这里只做装配：配置 schema / 看护 / 15 个工具注册 / 测试接缝。
- * 具体实现按层拆在 contracts/ host/ tools/ plan/ headless/ utils/ ui/。
+ * 具体实现按层拆在 contracts/ host/ tools/ plan/ utils/ ui/。
  */
 import { PLUGIN_VERSION } from './constants.js'
 import { z, schemaResolve } from './contracts/tool.js'
 import { losslessSanitize } from './contracts/lossless.js'
 import { asRecord } from './contracts/dynamic.js'
-import { resolveHttpPort } from './host/backend/index.js'
+import { resolveHttpPort, setGatewayConsentMode } from './host/backend/index.js'
 import { registerSchemaDiagnostic } from './tools/schema-diagnostic.js'
 import { registerLifecycle } from './plugin-lifecycle.js'
 import { registerToolSurface, registerTuiSurface } from './plugin-surfaces.js'
@@ -23,12 +23,6 @@ import {
   registerBundledSkill,
 } from './host/skill.js'
 import { frameDedupe, resetFrameCache } from './utils/frame-cache.js'
-import {
-  HEADLESS_WAIT_MS,
-  headlessReceipt,
-  promotedReceipt,
-  receiptEnvelope,
-} from './headless/receipts/index.js'
 import { CARD_SPECS, cardPresenters } from './ui/cards.js'
 import type { HostContext } from './host/context.js'
 
@@ -40,6 +34,12 @@ export interface Config {
   autoStart: boolean
   /** v2.6.1：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
   tui: boolean
+  /**
+   * v3.3.1：virtual-gui 的人工确认策略 auto | manual | deny | env(默认)。
+   * 落 profile、由宿主在拉起 Gateway 时注入；面板会常显 auto 状态。
+   * 可选：旧配置 / 旧宿主不写这一项时按 'env' 处理。
+   */
+  virtualGuiConsent?: string
 }
 
 // v1.0.1：z 不可用时（降级模式）不给 schema —— 宿主不会因为这里再抛一次而整体失败。
@@ -48,6 +48,7 @@ export const Config = z
       port: z.natural().default(resolveHttpPort()),
       autoStart: z.boolean().default(true),
       tui: z.boolean().default(true),
+      virtualGuiConsent: z.string().default('env'),
     })
   : undefined
 
@@ -69,6 +70,9 @@ export function apply(ctx: HostContext, config: Config): void {
       ? Number(cfgIn.port)
       : resolveHttpPort()
   const autoStart = cfgIn.autoStart === undefined ? true : !!cfgIn.autoStart
+  // v3.3.1：profile 里的 virtualGuiConsent（auto|manual|deny）转成 Gateway 的同意策略；
+  // 'env'/缺省 = 不注入，交给环境变量与配置文件（它们读一次就生效，不必重启）。
+  setGatewayConsentMode(cfgIn.virtualGuiConsent)
 
   // 注册顺序必须保持 v2.6.2：TUI → 看护/后端 effects → 15 个工具。
   // Cordis 逆序释放 effects，先注册 TUI/生命周期、后注册工具，卸载时才会先释放工具再杀后端。
@@ -78,9 +82,10 @@ export function apply(ctx: HostContext, config: Config): void {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * v0.9.4：**测试接缝**。tests/lossless_guard.mjs 直接 import 本模块，就能拿到
- *   ① 真实回执构造器（receiptEnvelope / headlessReceipt / promotedReceipt）
- *   ② 出口消毒器（losslessSanitize）
+ * v0.9.4：**测试接缝**。tests/unit/js/contract/lossless.test.ts 直接 import 本模块，就能拿到
+ *   ① 失败回执构造点（toolError）与出口消毒器（losslessSanitize）
+ *   ② 随包 skill / 卡片等装配面
+ * 回执本身的构造在 src/tools/receipt.ts（唯一构造器），不从这里转出。
  * 然后用**宿主的真校验器**（dsh-util-values 的 snapshotJsonValue）断言：
  * "本插件任何一个回执都过得了 lossless-JSON 门"。
  * 这是把「返回通道」从"靠人记得别写 undefined"变成"机器每次回归都验"的唯一办法。
@@ -92,10 +97,6 @@ export const __internals = {
   toolError: toolError,
   redactSecrets: redactSecrets,
   errorLine: errorLine,
-  receiptEnvelope: receiptEnvelope,
-  headlessReceipt: headlessReceipt,
-  promotedReceipt: promotedReceipt,
-  HEADLESS_WAIT_MS: HEADLESS_WAIT_MS,
   PLUGIN_VERSION: PLUGIN_VERSION,
   schemaResolve: schemaResolve,
   bundledSkill: {

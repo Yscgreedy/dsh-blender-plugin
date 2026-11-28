@@ -35,7 +35,7 @@ describe('runtime domain package layout', () => {
   })
 
   it('maps every module name to a real file inside its domain package', () => {
-    expect(pyModuleNames().length).toBe(44)
+    expect(pyModuleNames().length).toBe(45)
     expect(pyModuleNames().sort()).toEqual(ALL.sort())
     for (const n of ALL) expect(fs.existsSync(pyModuleFile(n))).toBe(true)
     expect(pyModuleFile('generator')).toBe(pkgPath('runtime', 'py', 'geometry', 'generator.py'))
@@ -53,12 +53,12 @@ describe('runtime domain package layout', () => {
   })
 
   it('feeds the split engine from the real package files, not the shims', () => {
-    const kernel = fs.readFileSync(pkgPath('runtime', 'core', 'kernel', 'api.ts'), 'utf8')
+    const kernel = fs.readFileSync(pkgPath('runtime', 'foundation', 'kernel', 'api.ts'), 'utf8')
     expect(kernel).toContain("fs.readFileSync(pyModuleFile(name), 'utf8')")
     const extCheck = fs.readFileSync(pkgPath('runtime', 'core', 'plan', 'ext-check.ts'), 'utf8')
     expect(extCheck).toContain('resolveExtPaths()')
     expect(extCheck).toContain("path.join(PY_ROOT, 'py', 'export', 'open3d_check.py')")
-    const evidence = fs.readFileSync(pkgPath('runtime', 'core', 'evidence.ts'), 'utf8')
+    const evidence = fs.readFileSync(pkgPath('runtime', 'foundation', 'evidence.ts'), 'utf8')
     expect(evidence).toContain('pyModuleNames()')
     expect(evidence).toContain("pyModuleFile(name), name + '.py'")
     expect(evidence).not.toContain('readdirSync(PY_ROOT)')

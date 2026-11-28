@@ -51,8 +51,19 @@ export function callerFromExec(exec: unknown): CallerInfo {
     'unknown-session',
   )
   const hostId = firstText(process.env.DSH_HOST_ID, 'host-pid-' + String(process.pid))
-  const role =
-    agent.role === 'main' || parentAgentId === '' ? 'main' : ('subagent' as 'main' | 'subagent')
+  // C-2：旧写法把"缺 parentAgentId"当成 main 的证据，而显式 role=subagent 会被
+  // 这条覆盖成 main —— 子代理因此能在无主会话上 claim owner。现在显式 role 优先，
+  // 只有宿主既没给 role、也没有 parent 时才按 main 处理（保持老宿主可用）。
+  const declaredRole =
+    agent.role === 'main' || agent.role === 'subagent' ? (agent.role as 'main' | 'subagent') : null
+  const role: 'main' | 'subagent' =
+    declaredRole === 'subagent'
+      ? 'subagent'
+      : declaredRole === 'main'
+        ? 'main'
+        : parentAgentId
+          ? 'subagent'
+          : 'main'
   return {
     hostId,
     dshSessionId,

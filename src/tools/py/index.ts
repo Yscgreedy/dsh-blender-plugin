@@ -11,12 +11,11 @@ function buildPyTool(ctx: HostContext, port: number) {
   return vTool({
     name: 'blender_py',
     description:
-      '【执行 Python】在 ready 的 GUI 会话里跑 agent 写的 Python（/act 通道，固定 exclusive，不卡队列）。' +
-      '没有会话直接拒绝，不会启动 headless、不会自动降级。脚本可以重跑；超过 ~1s 的重活请改用 blender_run(kind=headless)。' +
-      '可选 see=true（默认）跑完顺手抓当前视口一帧；同画面默认不重复附图。' +
-      '执行前默认留一个 txn 回退点（checkpoint=auto）：客户端超时或 addon 掉线时脚本可能还在 Blender 里跑，' +
-      '回执给 outcome_unknown + request_id + checkpoint，先确认现场再重跑，别把重复材质/节点叠进场景。' +
-      '旧工具迁移：blender_rt_do → blender_py；旧 blender_rt_watch 的 code 执行 → blender_py。',
+      '【执行 Python】在 ready 的 GUI 会话里跑 agent 写的 Python（/act 通道）。' +
+      '没有会话直接拒绝，不启动 headless、不自动降级。超过 ~1s 的重活请用 blender_run(kind=headless)。' +
+      '可选 see=true（默认）跑完抓一帧（共享用户视口，同画面不重复附图）。' +
+      '默认留 txn 回退点（checkpoint=auto）：超时/掉线时脚本可能仍在跑，回执给 outcome_unknown + request_id，先确认现场再重跑。' +
+      '旧工具迁移：blender_rt_do / blender_rt_watch 的 code → blender_py。',
     parameters: {
       code: { type: 'string', description: '要执行的 Python 源码（与 file 二选一）' },
       file: { type: 'string', description: '要执行的 .py 文件路径（与 code 二选一）' },
@@ -26,16 +25,16 @@ function buildPyTool(ctx: HostContext, port: number) {
       write_scope: {
         type: 'json',
         description:
-          "写作用域（授权判据）：exclusive（默认）| 'collection:COL' | 'prefix:LGT-' | 'object:uid'。子 agent 必须与父 grant 覆盖范围一致；执行后回执用 changed_objects 核对，超出即 scope_violation",
+          '写作用域：exclusive（默认）| collection:COL | prefix:LGT- | object:uid；aspect:名 / frames:START-END 只对静态 op 生效，py 的写后对象校验认不出它们（会记 scope_violation），请声明 object/collection/prefix；须与父 grant 覆盖一致',
       },
       checkpoint: {
         type: 'string',
-        description:
-          '执行前是否留 txn 回退点：auto（默认，先 snapshot；快照失败也照常执行并在回执告警）| off',
+        description: '执行前是否留 txn 回退点：auto（默认，失败只告警）| off',
       },
       wait_ms: {
         type: 'integer',
-        description: '等待其它 py 释放的毫秒数（0–5000，默认 0；占用中返回 py_busy）',
+        description:
+          '等其它 agent 的 py 跑完的毫秒数（0–5000，默认 0）；真的排队等锁，等满才回 py_busy',
       },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },

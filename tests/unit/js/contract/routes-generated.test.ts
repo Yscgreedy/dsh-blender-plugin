@@ -9,7 +9,7 @@ import { pkgPath } from '../../../helpers/pkg'
 const PACKAGE = pkgPath()
 const CHECK = path.join(PACKAGE, 'scripts', 'check-routes.mjs')
 const ROUTING = 'config/routing.json'
-const GENERATED = ['runtime/core/dispatcher/routes.generated.ts']
+const GENERATED = ['runtime/contracts/routes.generated.ts']
 const tmpRoots: string[] = []
 
 function fixture(): string {

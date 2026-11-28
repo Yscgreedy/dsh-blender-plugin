@@ -15,7 +15,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('../../../src/host/http.js', () => ({ backendPost: h.post, backendJson: h.json }))
 
-import { hostReload } from '../../../src/host/reload/index.js'
+import { hostReload, reloadOnce } from '../../../src/host/reload/index.js'
 
 /** Gateway 的只诊断回执（POST /lease{action:"reload",apply:false} 的 body）。 */
 function diag(mode: string, over: Record<string, unknown> = {}) {
@@ -208,5 +208,52 @@ describe('reload 回执要带 drain 回执（H5）', () => {
     expect(out.note).toContain('本次取消 2 个在跑作业')
     expect(out.note).toContain('重跑请重新 submit')
     expect(readState().jobsDropped).toEqual(['job-render-1', 'job-render-2'])
+  })
+})
+// R5（reload state seams）：reload 状态**只该有一个写入口**。旧实现里旧 fiber 写完、新 fiber 再 settle，
+// 两个写函数各自被调；这里把「提交 → 等待 → 收尾」全封进 reloadOnce，并锁住幂等：
+// 同一代里收尾两次、或第二代 fiber 再收尾一次，都不许再改那份记录。
+describe('reloadOnce：两代收尾幂等（R5 去两代写）', () => {
+  function jsonByPath() {
+    return async (_port: number, p: string) => {
+      if (p === '/health') return { ok: true, backend: { pid: 7777 } }
+      return { ok: true, provenance: { verdict: 'current' } }
+    }
+  }
+
+  it('旧 fiber 触发（写 pending）→ 新 fiber reloadOnce(settle) 收尾一次；再收尾是 no-op', async () => {
+    h.post.mockResolvedValue(diag('hmr', { changedCount: { host: 1, runtime: 0, other: 0 } }))
+    const oldFiber = await reloadOnce({
+      port: 4599,
+      gatewayPid: async () => 4242,
+      drain: async () => drained({ jobsDropped: ['job-1a2b3c4d'] }),
+      trigger: () => TRIGGER_OK,
+    })
+    expect(oldFiber.settled).toBe(false)
+    expect(oldFiber.report?.pending).toBe(true)
+    expect(readState()).toMatchObject({ mode: 'hmr', pending: true, pidAfter: null })
+
+    h.json.mockImplementation(jsonByPath() as never)
+    const first = await reloadOnce({ port: 4599, settle: true })
+    expect(first).toEqual({ settled: true, report: null })
+    const settled = readState()
+    expect(settled).toMatchObject({ pending: false, pidAfter: 7777, verdict: 'current' })
+    // 收尾不能把上一代的作业证据洗掉（H5：我的作业去哪了要查得到）
+    expect(settled.jobsDropped).toEqual(['job-1a2b3c4d'])
+
+    // 第二代 fiber 再收尾一次：没有 pending 可收 → 不重写 finishedAt / pidAfter
+    const second = await reloadOnce({ port: 4599, settle: true })
+    expect(second).toEqual({ settled: false, report: null })
+    const again = readState()
+    expect(again.finishedAt).toBe(settled.finishedAt)
+    expect(again.pidAfter).toBe(settled.pidAfter)
+    expect(again.jobsDropped).toEqual(['job-1a2b3c4d'])
+  })
+
+  it('没有 pending 记录时 settle 不写盘（新装机器上不会凭空生出一份 lastReload）', async () => {
+    h.json.mockImplementation(jsonByPath() as never)
+    const out = await reloadOnce({ port: 4599, settle: true })
+    expect(out).toEqual({ settled: false, report: null })
+    expect(() => readState()).toThrow()
   })
 })

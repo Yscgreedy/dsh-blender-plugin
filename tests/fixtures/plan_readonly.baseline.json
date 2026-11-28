@@ -35,6 +35,7 @@
  "face_compare",
  "face_help",
  "face_ratios",
+ "fingerprint",
  "fix_help",
  "fix_interference",
  "gate_checkpoint",

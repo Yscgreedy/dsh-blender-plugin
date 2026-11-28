@@ -5,7 +5,7 @@
     "type": "git",
     "url": "git+https://github.com/sixtysevenlf/dsh-blender-plugin.git"
   },
-  "description": "DSH × Blender 直连插件（v3.3.0，GUI 优先，无头备用）：6 个模型工具让 AI 直接驱动 Blender——blender_session（会话/归属/权限/事务）、blender_op（catalog 与 loop/opt/preset）、blender_py（GUI 会话内 Python）、blender_see（视口截图与序列）、blender_run（唯一作业入口：render/headless/队列）、blender_inspect（commands/cmd）；Gateway 单一端点、addon 反向连接，Windows virtual-gui GA、Linux preview，38 family / 269 op 的契约层（catalog / 判定 / 验收 / 造型 / 装配 / 白模 / 导出）。v3.0.0 为工程重构版（runtime TypeScript、extension zip）；v2.6.2 新增曲面算法包 surface_*（loft/sweep/patch → tessellate → validate → export，M3 fit 与 M5 blend/offset 为纯 numpy 近似）。P0–P2 能力（现由上述 6 工具承载）：参考图量具（img_digest/probe/measure/calib）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout refsheet/turntable）、同机位 QC（visualreport_report）、无头轮廓拟合（shapesolve_solve）、缺陷注入评估（eval_run）、强制门（gate_/deliver_export require_gate）。默认先开 GUI；无头备用；装完必须重启 DSH；唯一验收判据 doctor kind=ok；blender-modeling skill 随包自动注册。详见 README 与 docs/操作教程.md。",
+  "description": "DSH × Blender 直连插件（v3.3.0，GUI 优先，无头备用）：6 个模型工具让 AI 直接驱动 Blender——blender_session（会话/归属/权限/事务）、blender_op（catalog 与 loop/opt/preset）、blender_py（GUI 会话内 Python）、blender_see（视口截图与序列）、blender_run（唯一作业入口：render/headless/队列）、blender_inspect（commands/cmd）；Gateway 单一端点、addon 反向连接，Windows virtual-gui GA、Linux preview，38 family / 270 op 的契约层（catalog / 判定 / 验收 / 造型 / 装配 / 白模 / 导出）。v3.0.0 为工程重构版（runtime TypeScript、extension zip）；v2.6.2 新增曲面算法包 surface_*（loft/sweep/patch → tessellate → validate → export，M3 fit 与 M5 blend/offset 为纯 numpy 近似）。P0–P2 能力（现由上述 6 工具承载）：参考图量具（img_digest/probe/measure/calib）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout refsheet/turntable）、同机位 QC（visualreport_report）、无头轮廓拟合（shapesolve_solve）、缺陷注入评估（eval_run）、强制门（gate_/deliver_export require_gate）。默认先开 GUI；无头备用；装完必须重启 DSH；唯一验收判据 doctor kind=ok；blender-modeling skill 随包自动注册。详见 README 与 docs/操作教程.md。",
   "private": false,
   "keywords": [
     "dsh",
@@ -65,18 +65,10 @@
     "@deepseek-ai/cordis": ">=4.0.0-rc <5",
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "@deepseek-ai/schemastery": "^3.18.0",
-    "cordis": ">=4.0.0-rc <5",
-    "schemastery": "^3.18.0"
+    "@deepseek-ai/schemastery": "^3.18.0"
   },
-  "//peerDependenciesMeta": "schemastery / cordis 在不同 DSH 版本间是有 scope / 无 scope 两种形态。两个名字都声明且都标 optional —— 任一满足即可，宿主给了哪个就用哪个（见 src/index.ts 的运行时解析）。",
+  "//peerDependenciesMeta": "只声明 @deepseek-ai/* 谱系（源码只 import type @deepseek-ai/*，不 import 裸名 cordis / schemastery）；裸名是 npm 上另一条谱系，声明它会在 registry 安装时拉进第二份实现（H-1 / DSH-更新适配 R7，2026-11-28）。scope 版 cordis / schemastery 标 optional，宿主没装也能走 link 装配。",
   "peerDependenciesMeta": {
-    "cordis": {
-      "optional": true
-    },
-    "schemastery": {
-      "optional": true
-    },
     "@deepseek-ai/cordis": {
       "optional": true
     },
@@ -112,7 +104,11 @@
     "setup:dev": "node scripts/setup-dev.mjs",
     "setup:ext": "node scripts/setup-ext.mjs --install",
     "check:ext": "node scripts/setup-ext.mjs --check",
-    "build": "node scripts/gen-routes.mjs && node scripts/gen-gateway-schema.mjs && node scripts/build.mjs all",
+    "build": "node scripts/gen-local-ops.mjs && node scripts/gen-routes.mjs && node scripts/gen-gateway-schema.mjs && node scripts/build.mjs all",
+    "dsh:install": "node scripts/install-dsh.mjs --mode pack",
+    "dsh:link": "node scripts/install-dsh.mjs --mode link",
+    "dsh:reload": "node scripts/install-dsh.mjs --mode link",
+    "dsh:verify": "node scripts/install-dsh.mjs --verify-only",
     "build:extension": "node scripts/build-extension.mjs",
     "build:win-helper": "node scripts/build-win-helper.mjs",
     "check:win-helper": "node scripts/check-win-helper.mjs",
@@ -122,13 +118,15 @@
     "typecheck:src": "node scripts/build.mjs runtime && node scripts/typecheck.mjs",
     "typecheck:test": "node scripts/typecheck.mjs -p tsconfig.test.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
-    "lint": "eslint . --max-warnings=0 && node scripts/check-any.mjs && node scripts/check-exceptions.mjs && node scripts/check-plan-ids.mjs --enforce && node scripts/check-doc-paths.mjs --enforce && node scripts/check-ports.mjs",
+    "lint": "eslint . --max-warnings=0 && node scripts/check-any.mjs && node scripts/check-exceptions.mjs && node scripts/check-plan-ids.mjs --enforce && node scripts/check-doc-paths.mjs --enforce && node scripts/check-local-ops.mjs && node scripts/check-ports.mjs && node scripts/check-client-budget.mjs",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"{src,tests,scripts,runtime}/**/*.{ts,mts,cts,js,mjs,cjs,json}\" \"*.{ts,json,yml,yaml}\" \"*.mjs\" \".prettierrc.json\" \".github/**/*.{yml,yaml}\"",
     "format:check": "prettier --check \"{src,tests,scripts,runtime}/**/*.{ts,mts,cts,js,mjs,cjs,json}\" \"*.{ts,json,yml,yaml}\" \"*.mjs\" \".prettierrc.json\" \".github/**/*.{yml,yaml}\"",
     "check:structure": "node scripts/check-structure.mjs",
+    "check:client-budget": "node scripts/check-client-budget.mjs",
     "check:exceptions": "node scripts/check-exceptions.mjs",
     "check:routes": "node scripts/check-routes.mjs",
+    "check:local-ops": "node scripts/check-local-ops.mjs",
     "gen:gateway-schema": "node scripts/gen-gateway-schema.mjs",
     "check:gateway-schema": "node scripts/check-gateway-schema.mjs",
     "gen:availability": "node scripts/gen-availability.mjs",

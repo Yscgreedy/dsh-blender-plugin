@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { winToWsl } from '../../config.js'
-import { errorMessage } from '../../core/json.js'
+import { errorMessage } from '../../foundation/json.js'
 import { noInputFileWarning } from '../../file_guard.js'
 import { workdirStagingWarning } from '../../proc_env.js'
 import type { StagingInfo } from '../../staging.js'

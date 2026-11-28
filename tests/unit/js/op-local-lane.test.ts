@@ -6,22 +6,26 @@
  *   A. 主机车道（假 Gateway）：提交请求打到哪个 route、回执含 job_id、失败必须 degraded。
  *   B. 作业脚本驱动（纯逻辑，不起 Blender）：op 名 → preload 模块 + Python API 调用。
  *   C. 与生成的 routing 表对拍：白名单里的 op 解析出的 api/模块不允许漂移。
+ *   D. 白名单单源：宿主常量 === runtime 常量 === config/local-ops.json（不再有第二份手写表）。
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import * as plugin from '../../../src/index'
+import { LOCAL_OPS, LOCAL_PREFIXES, isLocalLaneOp } from '../../../src/tools/op/local'
 import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
 import type { JobRecord } from '../../../runtime/core/queue/types.js'
 import {
   LOCAL_OP_NAMES,
+  LOCAL_OP_PREFIXES,
   buildLocalOpJob,
   isLocalOp,
   localOpTarget,
 } from '../../../runtime/execution/local-op/index.js'
 import { createFakeContext, type CapturedTool } from '../../helpers/fake-context'
 import { startFakeBackend } from '../../helpers/fake-backend.mjs'
+import { pkgPath } from '../../helpers/pkg'
 
 type Backend = Awaited<ReturnType<typeof startFakeBackend>>
 
@@ -439,5 +443,43 @@ describe('白名单与 routing 表对拍（漂移即失败）', () => {
     expect(isLocalOp('shape_solve')).toBe(false)
     expect(isLocalOp('audit_clash_all')).toBe(false)
     expect(isLocalOp('montage')).toBe(true)
+  })
+})
+
+// ──────────────── D. 白名单单源（config → 两份生成物） ────────────────
+describe('白名单单源：config/local-ops.json → runtime + 宿主', () => {
+  interface LocalOpsConfig {
+    version: number
+    ops: string[]
+    prefixes: string[]
+  }
+  const CONFIG = JSON.parse(
+    fs.readFileSync(pkgPath('config', 'local-ops.json'), 'utf8'),
+  ) as LocalOpsConfig
+
+  it('config 是唯一真源：version 1 + 8 个 op + img_ 前缀', () => {
+    expect(CONFIG.version).toBe(1)
+    expect(CONFIG.ops).toHaveLength(8)
+    expect(CONFIG.prefixes).toEqual(['img_'])
+  })
+
+  it('runtime 常量 === 宿主常量 === config（不再比两份手写表）', () => {
+    expect([...LOCAL_OP_NAMES]).toEqual(CONFIG.ops)
+    expect([...LOCAL_OPS]).toEqual(CONFIG.ops)
+    expect([...LOCAL_OPS]).toEqual([...LOCAL_OP_NAMES])
+    expect([...LOCAL_OP_PREFIXES]).toEqual(CONFIG.prefixes)
+    expect([...LOCAL_PREFIXES]).toEqual(CONFIG.prefixes)
+  })
+
+  it('宿主判定与 runtime 判定逐个名字一致', () => {
+    const names = [
+      ...CONFIG.ops,
+      ...CONFIG.prefixes.map((prefix) => prefix + 'anything'),
+      'shape_solve',
+      '',
+      '   ',
+      ' audit_mesh ',
+    ]
+    for (const name of names) expect(isLocalLaneOp(name), name).toBe(isLocalOp(name))
   })
 })

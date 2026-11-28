@@ -108,9 +108,18 @@ Install the standalone modeling skill (only needed for hosts that do not load th
         npm run build
         # Optional: DSH_CHECKOUT=/path/to/dsh-harness npm run build links DSH host packages
 
-3. Add the package to your DSH profile as a bundle. Link the checkout into the profile, then add the dependency and bundle entry to the profile package.json.
+3. Add the package to your DSH profile as a bundle. The one-command path (resolves the profile, copies only changed files, never touches `runtime/ext`, triggers HMR and verifies `/health` + `/status` + the catalog):
+
+        npm run dsh:link       # dev: profile dep becomes link:<repo>; later updates: npm run dsh:reload
+        npm run dsh:install    # release-like: overlay the npm package file list onto the installed copy
+        npm run dsh:verify     # check only
+        npm run dsh:install -- --with-addon   # also drop the Blender extension into user_default
+
+   Manual equivalent (link the checkout into the profile, then add the dependency and bundle entry to the profile package.json):
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/dsh-blender-plugin
+
+   Measurements and the safety rules are in [docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md).
 
     Profile package.json:
 
@@ -149,12 +158,12 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ## Tools
 
-The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (38 families / 269 ops), so the surface stays small.
+The plugin exposes exactly 6 model-facing tools; all planning, audit, assembly, export, and evaluation operations live behind `blender_op` (38 families / 270 ops), so the surface stays small.
 
 | Tool | What it gives you |
 |---|---|
 | blender_session | GUI session lifecycle and ownership: list/status/doctor, attach, claim/release, grant/revoke write scopes, pause state, presence, and `action=txn` snapshots/marks for rollback. Blender and the Gateway are host-managed. |
-| blender_op | The capability catalog (`op="catalog"`, 38 families / 269 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
+| blender_op | The capability catalog (`op="catalog"`, 38 families / 270 ops) and the execution surface for modeling, audit, assembly, delivery, and evaluation; also `action=loop|opt|preset`. Executing ops needs a ready GUI session. |
 | blender_py | Runs Python in the attached GUI session with a persistent kernel; `see=true` returns a frame. GUI-only: there is no headless fallback. |
 | blender_see | GUI capture only: `viewpoint=viewport|camera|custom`, `mode=frame|sequence`, fixed aspect/size tiers. Camera animation and batch renders go to `blender_run(kind="render")`. |
 | blender_run | The only job entry point: `action=submit` with `kind=render|headless` returns a job id immediately; `status/wait/collect/cancel/list` manage it; `action=tune` covers render performance. |
@@ -176,6 +185,7 @@ On Windows and Linux the Gateway can launch an isolated Blender GUI for the agen
 - Third-party checklist: [docs/给第三方的安装清单.md](docs/给第三方的安装清单.md)
 - DSH upgrade compatibility: [docs/DSH-更新适配.md](docs/DSH-更新适配.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
+- Current architecture + Axiomatic Design audit: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Closed backlog (animation/toon round): [CHANGELOG.md](CHANGELOG.md) · archive snapshot [docs/archive/2026-11-20-角色动画与卡通渲染需求.md](docs/archive/2026-11-20-角色动画与卡通渲染需求.md)
 - OCCT backend plan (deferred): [docs/OCCT后端-接入计划.md](docs/OCCT后端-接入计划.md)
 - Modeling skill: [skills/blender-modeling/](skills/blender-modeling/)

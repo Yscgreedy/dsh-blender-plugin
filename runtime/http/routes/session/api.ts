@@ -7,7 +7,10 @@
 import type { ServerResponse } from 'node:http'
 import { currentCaller } from '../../caller.js'
 import type { AvailabilityFailure } from '../../../core/availability.js'
+import type { JobQueue } from '../../../core/queue/manager.js'
 import type { SessionRegistry } from '../../../core/sessions/registry.js'
+import { crewRows, crewSummaryText } from '../../../core/sessions/session-views.js'
+import type { CrewJobSource } from '../../../core/sessions/session-views.js'
 import type { CallerIdentity, SessionResult, ViewPose } from '../../../core/sessions/types.js'
 import { callerView } from '../../../core/sessions/types.js'
 import {
@@ -15,6 +18,11 @@ import {
   consentApproveCommand,
   denyConsentRequest,
 } from '../../../core/sessions/consent-requests.js'
+import {
+  policyLock,
+  resolveConsentPolicy,
+  setConsentPolicy,
+} from '../../../core/sessions/consent-policy.js'
 
 function statusFor(result: AvailabilityFailure): number {
   if (result.code === 'invalid_params') return 400
@@ -35,6 +43,25 @@ function targetCaller(payload: Record<string, unknown>, base: CallerIdentity): C
 export interface SessionApiResult {
   status: number
   body: Record<string, unknown>
+  /**
+   * True when the response answers a browser (the session panel): the lease
+   * route then adds the host CORS headers so the page can read it.
+   */
+  cors?: boolean
+}
+
+/**
+ * Loopback origins the session panel may be served from. A browser page on any
+ * other origin gets no data and no decision: the panel's handle is not a public
+ * capability. Requests without an Origin (the human's curl, an agent call) are
+ * not browsers and keep the pre-panel behaviour.
+ */
+const PANEL_ORIGIN_RE = /^(https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?|dsh-app:\/\/app)$/
+
+export function panelOriginAllowed(origin: unknown): boolean {
+  const raw = String(origin || '').trim()
+  if (!raw) return true
+  return PANEL_ORIGIN_RE.test(raw)
 }
 
 /** Gateway 控制面（reload / shutdown）：由 /lease 路由注入，不属于会话注册表。 */
@@ -44,6 +71,11 @@ export interface SessionControl {
   shutdown: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** Base URL of this Gateway (for the human consent command in a receipt). */
   httpBase?: string
+  /**
+   * 作业队列（观测数据，台账 B）：`action=list` 的 crew[] 靠它数 running/queued。
+   * 缺失 / 取不到时 crew 照出、计数按 0 —— list 永远不因队列失败。
+   */
+  jobQueue?: JobQueue | null
 }
 
 /** Add the exact human approve/deny commands to a consent_required receipt. */
@@ -60,11 +92,60 @@ function withHumanAction(
     ...body,
     request_id: requestId,
     human_action: {
+      panel:
+        'the Blender session panel in this conversation shows the request; approving there completes the start that is waiting',
       approve: consentApproveCommand(base, requestId),
       deny: consentApproveCommand(base, requestId, 'consent_deny'),
-      form: 'run it in any terminal on the Gateway host (PowerShell or bash)',
-      then: 'call blender_session action=start kind=virtual-gui again; the approved request is consumed once',
+      form: 'or run it in any terminal on the Gateway host (PowerShell or bash)',
+      then: 'if the waiting start already returned state=pending, call action=start again; the approved request is consumed once',
       preapprove_env: 'DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow on the Gateway host skips this step',
+    },
+  }
+}
+
+/**
+ * Switch the policy from the panel: the only write path besides approve/deny.
+ *
+ * The gate is the same door as a decision (loopback or no Origin, and never a
+ * DSH-attributed call), plus the env lock: an environment variable that pins the
+ * mode makes a write a lie, so it is refused instead of silently overridden.
+ * Only `virtualGuiConsent` is written; the file gets a .bak first.
+ */
+function policySetAction(payload: Record<string, unknown>, origin: unknown): SessionApiResult {
+  if (!panelOriginAllowed(origin)) return forbiddenOrigin('a policy change', origin)
+  const lock = policyLock()
+  if (lock.locked)
+    return {
+      status: 409,
+      cors: true,
+      body: {
+        ok: false,
+        code: 'policy_locked',
+        root_cause:
+          lock.env + '=' + String(lock.value) + ' pins the virtual-gui policy for this Gateway',
+        fix: 'unset ' + lock.env + ' on the Gateway host, then switch the mode in the panel',
+        evidence: { env: lock.env, value: lock.value },
+      },
+    }
+  const written = setConsentPolicy(payload.mode)
+  const policy = resolveConsentPolicy()
+  return {
+    status: written.ok ? 200 : 500,
+    cors: true,
+    body: {
+      ok: written.ok,
+      policy: {
+        mode: policy.mode,
+        policy: policy.policy,
+        auto: policy.auto,
+        source: policy.source,
+        file: written.file,
+      },
+      effective: written.ok ? 'immediate' : null,
+      audit: { at: Date.now(), origin: origin === undefined ? null : String(origin || '') },
+      ...(written.ok
+        ? { backup: written.backup, previous: written.previous, created: written.created }
+        : { code: 'policy_write_failed', root_cause: written.error }),
     },
   }
 }
@@ -74,15 +155,50 @@ function withHumanAction(
  * approve/deny are the only actions allowed without a caller — and they need the
  * unguessable request id that a start just showed to the human.
  */
+/**
+ * 台账 B（面板余项）：面板行的 crew[] 与 /who、action=list 同源 —— 纯逻辑在 core
+ * （session-views.crewRows），这里只把本 Gateway 的作业队列喂进去（缺省按 0 个作业算）。
+ */
+function withPanelCrew(
+  panel: Record<string, unknown>,
+  jobQueue: CrewJobSource | null | undefined,
+): Record<string, unknown> {
+  if (!Array.isArray(panel.sessions)) return panel
+  // 展开已有对象：既有键（ts / policy / resources / requests / sessions…）的位置不变。
+  const sessions = crewRows(panel.sessions, jobQueue).map((row) => ({
+    ...row,
+    // 一行摘要由 core 压好：客户端只显示，不复制判据（见 session-views.crewSummaryText）。
+    crew_text: crewSummaryText(row.crew),
+  }))
+  return { ...panel, sessions }
+}
+
 function humanConsentAction(
+  registry: SessionRegistry,
   action: string,
   payload: Record<string, unknown>,
+  origin: unknown,
+  jobQueue?: CrewJobSource | null,
 ): SessionApiResult | null {
+  if (action === 'consent_panel') {
+    if (!panelOriginAllowed(origin)) return forbiddenOrigin('a session panel read', origin)
+    return {
+      status: 200,
+      cors: true,
+      body: withPanelCrew(
+        registry.consentPanel(String(payload.dshSessionId || payload.sessionId || '')),
+        jobQueue,
+      ),
+    }
+  }
+  if (action === 'consent_policy_set') return policySetAction(payload, origin)
   if (action !== 'consent_approve' && action !== 'consent_deny') return null
+  if (!panelOriginAllowed(origin)) return forbiddenOrigin('a consent decision', origin)
+  const ref = payload.requestId ?? payload.handle
   const decided =
     action === 'consent_approve'
-      ? approveConsentRequest(payload.requestId, 'human')
-      : denyConsentRequest(payload.requestId, String(payload.reason || 'human denied'))
+      ? approveConsentRequest(ref, String(payload.source || 'human'))
+      : denyConsentRequest(ref, String(payload.reason || 'human denied'))
   if (!decided.ok)
     return {
       status: decided.reason === 'missing' ? 404 : 409,
@@ -99,11 +215,15 @@ function humanConsentAction(
     }
   return {
     status: 200,
+    cors: true,
     body: {
       ok: true,
       decided: action === 'consent_approve' ? 'approved' : 'denied',
       request: decided.request,
-      then: 'the agent calls blender_session action=start kind=virtual-gui again',
+      then:
+        action === 'consent_approve'
+          ? 'the waiting start completes with consent_source=approved_request; if it already returned, one more start consumes the approval'
+          : 'the waiting start returns reason=request_denied; no Blender process is started',
     },
   }
 }
@@ -112,19 +232,71 @@ function humanConsentAction(
 function agentConsentAction(
   registry: SessionRegistry,
   action: string,
-  payload: Record<string, unknown>,
+  _payload: Record<string, unknown>,
 ): SessionResult<Record<string, unknown>> | null {
   if (action === 'consent_request')
     return registry.requestConsent(currentCaller() as CallerIdentity)
   if (action === 'consent_status') return registry.consentStatus(currentCaller() as CallerIdentity)
-  if (action === 'consent_approve')
-    return registry.approveConsent(
-      payload.requestId,
-      'agent:' + String(payload.source || 'explicit'),
-    )
-  if (action === 'consent_deny')
-    return registry.denyConsent(payload.requestId, String(payload.reason || 'denied'))
   return null
+}
+
+/**
+ * Decisions are human-only.
+ *
+ * 3.3.2 field review: `consent_approve` used to be callable by the agent that
+ * filed the request, so the whole gate was decorative — start → read the id →
+ * approve → spawn. A consent surface the model can drive is the same as no
+ * consent surface, so a DSH-attributed call is refused here, not just dropped
+ * from the tool schema (a raw HTTP call with identity headers ends up in the
+ * same place). The human channel is the one without an identity: the session
+ * panel / terminal command. Unattended hosts use the policy (`auto`), which is
+ * a human-written file, not a tool call.
+ */
+const HUMAN_ONLY_ACTIONS = new Set([
+  'consent_approve',
+  'consent_deny',
+  // The panel may switch the policy; an agent that could switch it to auto has
+  // no gate at all. Same 403 as a self-approval.
+  'consent_policy_set',
+])
+
+function humanOnlyRefusal(action: string, payload: Record<string, unknown>): SessionApiResult {
+  return {
+    status: 403,
+    body: {
+      ok: false,
+      code: 'consent_human_only',
+      stage: 'session',
+      root_cause:
+        'an agent cannot decide a virtual-gui consent request (action=' +
+        action +
+        ' carries a DSH identity)',
+      fix:
+        'the human decides in the Blender session panel (or the terminal command from the start receipt); ' +
+        'unattended hosts set virtualGuiConsent=auto in the profile / config file',
+      fallback: { kind: 'unavailable', summary: 'no consent was granted or revoked' },
+      evidence: {
+        action,
+        request_id: payload.requestId || payload.handle || null,
+        caller: callerView(currentCaller() as CallerIdentity),
+      },
+    },
+  }
+}
+
+/** One refusal shape for every panel action reached from a foreign origin. */
+function forbiddenOrigin(what: string, origin?: unknown): SessionApiResult {
+  return {
+    status: 403,
+    cors: true,
+    body: {
+      ok: false,
+      code: 'origin_not_allowed',
+      root_cause: what + ' from this origin is not accepted',
+      fix: 'use the session panel of the DSH conversation (loopback origin), or the terminal command from the receipt',
+      evidence: { origin: origin === undefined ? null : String(origin || '') },
+    },
+  }
 }
 
 export async function dispatchSessionAction(
@@ -132,10 +304,11 @@ export async function dispatchSessionAction(
   action: string,
   payload: Record<string, unknown>,
   control?: SessionControl,
+  origin?: unknown,
 ): Promise<SessionApiResult> {
   const caller = currentCaller()
   if (!caller) {
-    const human = humanConsentAction(action, payload)
+    const human = humanConsentAction(registry, action, payload, origin, control?.jobQueue)
     if (human) return human
     return {
       status: 400,
@@ -146,6 +319,7 @@ export async function dispatchSessionAction(
       },
     }
   }
+  if (HUMAN_ONLY_ACTIONS.has(action)) return humanOnlyRefusal(action, payload)
   const consent = agentConsentAction(registry, action, payload)
   const result = consent || (await runSessionAction(registry, caller, action, payload, control))
   if (!result.ok)
@@ -154,6 +328,47 @@ export async function dispatchSessionAction(
       body: withHumanAction(result as unknown as Record<string, unknown>, control),
     }
   return { status: 200, body: result as unknown as Record<string, unknown> }
+}
+
+/**
+ * start：手动同意策略下这次调用会等人类在面板里点批准（waitMs），所以参数在这里
+ * 归一化，runSessionAction 只留一行。
+ */
+function startAction(
+  registry: SessionRegistry,
+  caller: CallerIdentity,
+  payload: Record<string, unknown>,
+): Promise<SessionResult<Record<string, unknown>>> {
+  const requested = payload.waitMs ?? payload.wait_ms
+  return registry.start(caller, {
+    kind: payload.kind === undefined ? undefined : (String(payload.kind) as 'virtual-gui'),
+    consentToken: payload.consentToken === undefined ? undefined : String(payload.consentToken),
+    waitMs: requested === undefined || requested === null ? undefined : Number(requested),
+  })
+}
+
+/** reload / shutdown：只有宿主接上了控制面才可用，否则如实说没接。 */
+async function controlAction(
+  control: SessionControl | undefined,
+  action: string,
+  payload: Record<string, unknown>,
+): Promise<SessionResult<Record<string, unknown>>> {
+  if (!control)
+    return {
+      ok: false,
+      code: 'feature_disabled',
+      stage: 'config',
+      root_cause: action + ' control is not wired in this Gateway build',
+      fix:
+        action === 'reload'
+          ? 'rebuild the Gateway (npm run build) or use blender_session action=reload'
+          : 'rebuild the Gateway (npm run build)',
+      fallback: { kind: 'unavailable', summary: action + ' unavailable' },
+      evidence: { action },
+    }
+  if (action === 'reload')
+    return control.reload(payload) as unknown as SessionResult<Record<string, unknown>>
+  return (await control.shutdown(payload)) as unknown as SessionResult<Record<string, unknown>>
 }
 
 async function runSessionAction(
@@ -167,34 +382,15 @@ async function runSessionAction(
   switch (action) {
     // H2：一步式热更（HTTP 面）。宿主面同构，见 src/tools/session/reload.ts。
     case 'reload':
-      if (!control)
-        return {
-          ok: false,
-          code: 'feature_disabled',
-          stage: 'config',
-          root_cause: 'reload control is not wired in this Gateway build',
-          fix: 'rebuild the Gateway (npm run build) or use blender_session action=reload',
-          fallback: { kind: 'unavailable', summary: 'reload unavailable' },
-          evidence: { action },
-        }
-      return control.reload(payload) as unknown as SessionResult<Record<string, unknown>>
+      return await controlAction(control, 'reload', payload)
     // H4：插件 dispose / 热更重启前的收尾（virtual-gui + 作业 + 进程）
     case 'shutdown':
-      if (!control)
-        return {
-          ok: false,
-          code: 'feature_disabled',
-          stage: 'config',
-          root_cause: 'shutdown control is not wired in this Gateway build',
-          fix: 'rebuild the Gateway (npm run build)',
-          fallback: { kind: 'unavailable', summary: 'shutdown unavailable' },
-          evidence: { action },
-        }
-      return (await control.shutdown(payload)) as unknown as SessionResult<Record<string, unknown>>
+      return await controlAction(control, 'shutdown', payload)
     case 'whoami':
       return { ok: true, caller: callerView(caller), ...callerView(caller) }
     case 'list':
-      return { ok: true, sessions: registry.listFor(caller) }
+      // 台账 B：模型侧回执与 GET /who 同源 —— 每行多一个 crew[]（additive，sessions 仍是数组）。
+      return { ok: true, sessions: crewRows(registry.listFor(caller), control?.jobQueue) }
     case 'attach':
     case 'claim':
       return registry.attachChecked(caller, {
@@ -214,10 +410,7 @@ async function runSessionAction(
     case 'consent':
       return registry.issueConsent(caller)
     case 'start':
-      return await registry.start(caller, {
-        kind: payload.kind === undefined ? undefined : (String(payload.kind) as 'virtual-gui'),
-        consentToken: payload.consentToken === undefined ? undefined : String(payload.consentToken),
-      })
+      return await startAction(registry, caller, payload)
     case 'stop':
       return await registry.stop(caller, sessionId)
     case 'grant':
@@ -270,7 +463,7 @@ async function runSessionAction(
         code: 'invalid_params',
         stage: 'config',
         root_cause: 'unknown session action: ' + action,
-        fix: 'use whoami, list, attach, claim, detach, release, status, doctor, consent, consent_request, consent_status, consent_approve, consent_deny, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown',
+        fix: 'use whoami, list, attach, claim, detach, release, status, doctor, consent, consent_request, consent_status, start, stop, grant, revoke, grants, pause, resume, mark_read, presence, update_view, update_selection, heartbeat, reload, shutdown (consent_approve / consent_deny are human-only: session panel or terminal)',
         fallback: { kind: 'unavailable', summary: 'the session action was not executed' },
         evidence: { action },
       }

@@ -1184,3 +1184,15 @@ if _K is not None:
                                        # v0.9.4：把"什么时候会自动跑诊断"的阈值一并暴露，
                                        # 自检才能对"diagnostics 标志 == (显式要求 or 字节数 < 阈值)"做机械断言
                                        "empty_png_bytes": EMPTY_PNG_BYTES}})
+
+
+# ---- 端口（provider 端口倒置）：core 的 c_evidence 只 call_port("view_capture") ----
+# 注册点就在提供方自己的模块尾：谁 preload/ensureView 了 view，谁就登记；没加载 = 端口不存在 =
+# 消费方 fail-closed（core 不再出现 render 的私有 API 名，core → render 的 2-环断在调用侧）。
+def _port_capture(payload):
+    """端口 view_capture：dict 与 JSON 文本两种入参归一后交给 capture（引擎直调走 JSON，进程内走 dict）。"""
+    spec = json.loads(payload) if isinstance(payload, str) else payload
+    return capture(spec if spec is not None else {})
+
+
+_KIT.register_port("view_capture", _port_capture, VIEW_VERSION)

@@ -137,7 +137,8 @@ export class JobQueue {
         queueFailure(
           'queue_render_script',
           'render does not execute Python scripts',
-          'Use kind=headless for a script.',
+          // Q-5 方案 a：render 只放行 pre_script（渲染前跑一次的场景准备），整段脚本仍走 headless。
+          'Use kind=headless for a script, or pass render pre_script=<inline Python> for scene preparation (it runs once, before the declarative render prelude).',
         ),
       )
     if (pendingCount(this.jobs) >= this.capacity.pending) {
@@ -145,8 +146,15 @@ export class JobQueue {
         queueFailure(
           'queue_full',
           'The job queue is full.',
-          'Wait for a running job to finish, or raise the documented pending limit.',
-          { pending: pendingCount(this.jobs), limit: this.capacity.pending },
+          // Q-3：文案必须指向**真实存在**的键（以前写的是不存在的 "documented pending limit"）。
+          'Wait for a running job to finish (action=list then action=collect/cancel), ' +
+            'or raise the pending limit: env DSH_BLENDER_QUEUE_PENDING ' +
+            'or features.queue.pending in dsh-blender.config.json (see docs/配置参考.md).',
+          {
+            pending: pendingCount(this.jobs),
+            limit: this.capacity.pending,
+            set: 'DSH_BLENDER_QUEUE_PENDING',
+          },
         ),
       )
     }
@@ -185,12 +193,12 @@ export class JobQueue {
     this.jobs.push(job)
     this.persist()
     this.pump()
-    return Object.assign(this.snapshot(job), { queued_ahead: queuedAhead })
+    return Object.assign(this.view(job), { queued_ahead: queuedAhead })
   }
 
   status(id: string): JobRecord | null {
     const job = this.find(id)
-    return job ? this.snapshot(job) : null
+    return job ? this.view(job) : null
   }
 
   async wait(
@@ -211,9 +219,16 @@ export class JobQueue {
           ),
         )
       if (terminalOf(job.state))
-        return { job: this.snapshot(job), waitedMs: Date.now() - t0, waitTimedOut: false }
+        return { job: this.view(job), waitedMs: Date.now() - t0, waitTimedOut: false }
       if (Date.now() - t0 >= budget)
-        return { job: this.snapshot(job), waitedMs: Date.now() - t0, waitTimedOut: true }
+        return {
+          job: this.view(job),
+          waitedMs: Date.now() - t0,
+          waitTimedOut: true,
+          // Q-4：超时**不是失败**。显式给出"作业仍在跑（或仍在排队等槽位）"，免得调用方
+          // 把 waitTimedOut 读成 failed；到达终态的那条路径不带这个字段。
+          still_running: !terminalOf(job.state),
+        }
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
     }
   }
@@ -229,7 +244,7 @@ export class JobQueue {
         ),
       )
     this.authorize(caller, job, 'collect')
-    const snap = this.snapshot(job)
+    const snap = this.view(job)
     return {
       job: {
         ...snap,
@@ -298,12 +313,26 @@ export class JobQueue {
     return dropped
   }
 
-  list(filter: { state?: string; kind?: string; owner?: string } = {}): JobRecord[] {
-    return this.jobs
+  list(
+    filter: {
+      state?: string
+      kind?: string
+      owner?: string
+      sinceMs?: number
+      limit?: number
+      offset?: number
+    } = {},
+  ): JobRecord[] {
+    const rows = this.jobs
       .filter((job) => !filter.state || job.state === filter.state)
       .filter((job) => !filter.kind || job.kind === filter.kind)
       .filter((job) => !filter.owner || job.owner.dshSessionId === filter.owner)
-      .map((job) => this.snapshot(job))
+      .filter((job) => !filter.sinceMs || Number(job.createdAt || 0) >= Number(filter.sinceMs))
+    // C-13：历史队列可达数百条，list 必须有边界（offset/limit），否则一次回执 602 行。
+    const offset = Math.max(0, Math.trunc(Number(filter.offset) || 0))
+    const limit = Math.trunc(Number(filter.limit) || 0)
+    const page = limit > 0 ? rows.slice(offset, offset + limit) : rows.slice(offset)
+    return page.map((job) => this.view(job))
   }
 
   perf(): Record<string, unknown> {
@@ -471,6 +500,21 @@ export class JobQueue {
     return this.jobs.find((job) => job.id === id) || null
   }
 
+  /**
+   * 读路径的作业视图（Q-3）：排队中的作业若**还没有** decision，就用 scheduler 的
+   * explainWaiting 当场算一次 —— 同一条策略，绝不在这里复制一份分支。
+   *
+   * 为什么需要：recordWaiting() 只给队首记原因，第二行之后在 status/list 里是
+   * decision=null，调用方看不出"我在等什么"。派生值不落盘、不进事件链：读一次不改状态，
+   * 也不会把队列拍成"每次 status 都变一次"。
+   */
+  private view(job: JobRecord): JobRecord {
+    const snap = this.snapshot(job)
+    if (snap.state !== 'queued') return snap
+    snap.decision = explainWaiting(job, this.jobs, this.capacity, this.reservedGpu())
+    return snap
+  }
+
   private snapshot(job: JobRecord): JobRecord {
     return JSON.parse(JSON.stringify(job)) as JobRecord
   }
@@ -490,7 +534,22 @@ function cap(text: string): string {
   return text.length > LOG_CAP ? text.slice(-LOG_CAP) : text
 }
 
+/**
+ * 日志尾部（T-1）：`tail` 仍是**字符上限**，但窗口起点不落在行中间。
+ *
+ * 按字符 slice 会把一行切成两半：JSON / `HEADLESS {...}` 这类结构化行一旦断在开头，
+ * 逐行解析就失败（现场看到的 "STK_JSON 解析不出来"，其实是回执把行截断了）。
+ * 所以只做一件事：窗口起点在行中间时，丢掉那半行、从下一个换行之后开始。
+ *
+ * 两条保持原样：整段没有换行（单行超长输出只能按字符切），以及窗口本来就落在换行后。
+ */
 function tailText(text: string, tail: number): string {
   const n = Math.max(0, Math.min(LOG_CAP, Number(tail) || 4000))
-  return text.length > n ? text.slice(-n) : text
+  if (text.length <= n) return text
+  const cut = text.length - n
+  const slice = text.slice(cut)
+  // 上一字符是换行 ⇒ 窗口正好从行首开始，整段都能用。
+  if (text.slice(cut - 1, cut) === '\n') return slice
+  const at = slice.indexOf('\n')
+  return at < 0 ? slice : slice.slice(at + 1)
 }

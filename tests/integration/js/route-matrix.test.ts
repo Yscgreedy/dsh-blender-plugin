@@ -286,7 +286,9 @@ beforeAll(async () => {
     leaseView,
     releaseStaleLease,
     leaseAcquire,
-    leaseGate,
+    // Single-arg LeaseGateFn: this harness sends no caller headers, so it wires
+    // the legacy path explicitly (the registry is null).
+    leaseGate: (p: Record<string, unknown> | null | undefined) => leaseGate(p, null),
     isReadOnly,
     trimJob,
     clampIntParam,

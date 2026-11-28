@@ -20,8 +20,11 @@ import {
 import { executeReload } from './reload.js'
 import { executeTxn } from './txn.js'
 
-/** consent 动作：请求/批准/拒绝都只带 request_id（与 session 归属无关）。 */
-const CONSENT_ACTIONS = ['consent_request', 'consent_status', 'consent_approve', 'consent_deny']
+/**
+ * 人类专属的决定动作。保留在这里只为了给出**明确的拒绝**（而不是"未知动作"），
+ * 让人知道批准发生在会话面板 / 终端，而不是模型这一侧。
+ */
+const HUMAN_ONLY_ACTIONS = ['consent_approve', 'consent_deny']
 
 const CAMEL: Record<string, string> = {
   request_id: 'requestId',
@@ -65,7 +68,12 @@ interface ListContext {
   addon: Record<string, unknown> | null
 }
 
-/** 工单 6：list 的本地证据 + addon 实例表来自 Gateway 的 /status?evidenceOnly=1（不付 addon 往返）。 */
+/**
+ * 工单 6：list 的本地证据 + addon 实例表来自 Gateway 的 /status?evidenceOnly=1（不付 addon 往返）。
+ *
+ * 这里不解析会话行（只取 local_evidence / addon），所以没有可迁移的 ready 判定：
+ * resolveSession 回答"这次调用驱动哪一个会话"，这里回答"本机看见了什么"。
+ */
 async function listContextOf(port: number, args: Record<string, unknown>): Promise<ListContext> {
   const q = new URLSearchParams({ evidence: '1', evidenceOnly: '1' })
   const fixture = strArg(args, 'probeFixture', 'probe_fixture')
@@ -109,32 +117,28 @@ function payloadFor(action: string, args: Record<string, unknown>): Record<strin
     p.kind = present(args.kind) ? text(args.kind) : 'virtual-gui'
     const token = args.__consent_token ?? args.consent_token
     if (present(token)) p.consentToken = text(token)
+    const waitMs = args.wait_ms ?? args.waitMs
+    if (present(waitMs)) p.waitMs = Number(waitMs)
   }
   return p
 }
 
-const NEED_SESSION = [
-  'detach',
-  'release',
-  'stop',
-  'pause',
-  'resume',
-  'mark_read',
-  'presence',
-  'heartbeat',
-  'grants',
-  'grant',
-  'revoke',
-]
+/** start 的 HTTP 预算：人可能要看一眼面板再点批准，别让传输层先超时。 */
+function startTimeout(args: Record<string, unknown>): number {
+  const raw = Number(args.wait_ms ?? args.waitMs)
+  const wait = Number.isFinite(raw) && raw >= 0 ? raw : 20000
+  return Math.min(120000, wait) + 20000
+}
+
+/**
+ * Actions that must name a session. presence / grants / heartbeat / detach are
+ * intentionally absent: the registry resolves the caller's own session
+ * (`findForCaller`) and the old guard only produced "需要 session_id" with no
+ * candidate id even when the caller had exactly one session (field report C-12).
+ */
+const NEED_SESSION = ['release', 'stop', 'pause', 'resume', 'mark_read', 'grant', 'revoke']
 
 function validate(action: string, args: Record<string, unknown>): string | null {
-  if (
-    CONSENT_ACTIONS.includes(action) &&
-    action !== 'consent_request' &&
-    action !== 'consent_status' &&
-    !present(args.request_id)
-  )
-    return action + ' 需要 request_id（从 action=start 的 consent_required 回执里取）'
   if (action === 'start') {
     const kind = present(args.kind) ? text(args.kind) : 'virtual-gui'
     if (kind !== 'virtual-gui')
@@ -148,6 +152,10 @@ function validate(action: string, args: Record<string, unknown>): string | null 
   return null
 }
 
+/**
+ * status 要**整张**会话表（formatStatus 逐行渲染），不是"挑一个 ready 会话"；
+ * sessionRefOf 只描述一行，用它会把多行证据压成一个。这里保留 listSessions。
+ */
 async function statusOf(port: number): Promise<unknown> {
   const listed = await listSessions(port)
   if (!listed.ok) return listed.failure
@@ -216,6 +224,9 @@ function sessionReceipt(action: string, body: Record<string, unknown>): Record<s
     out.is_mine = row.is_mine ?? null
     out.borrowed = row.borrowed ?? null
   }
+  // 3.3.1：consent_source 是"这次 start 凭什么被允许"的唯一字段，放在回执顶层，
+  // 别逼调用方去 session.consent_source 里翻。
+  if (row.consent_source !== undefined) out.consent_source = row.consent_source
   if (body.viewer !== undefined) out.viewer = body.viewer === true
   if (action === 'whoami') {
     out.caller = body.caller ?? null
@@ -250,6 +261,7 @@ export async function executeSession(
   if (action === 'status') return statusOf(port)
   if (action === 'doctor') return doctorOf(port, args)
   if (action === 'list') {
+    // 0 会话也要给出 attach 指引：这里需要全部行，不是 resolveSession 的单行结果。
     const listed = await listSessions(port)
     if (!listed.ok) return listed.failure
     // 6a：0 会话也要能看见 local_processes / ports / ports_evidence + 可粘贴的 attach。
@@ -261,9 +273,22 @@ export async function executeSession(
       addon: ctx.addon,
     }
   }
+  if (HUMAN_ONLY_ACTIONS.includes(action))
+    return toolError(
+      'consent_human_only',
+      action + ' 是人类动作：agent 不能批准自己刚落的 virtual-gui 请求',
+      '在会话的「Blender 会话」面板点「批准」，或让 Gateway 主机的终端执行回执里的命令；无人值守设 virtualGuiConsent=auto',
+      JSON.stringify({ action, request_id: args.request_id || null }),
+      'session',
+    )
   const bad = validate(action, args)
   if (bad) return toolError('invalid_params', bad, 'action=help 查看可用动作与参数')
-  const body = await sessionAction(port, action, payloadFor(action, args))
+  const body = await sessionAction(
+    port,
+    action,
+    payloadFor(action, args),
+    action === 'start' ? startTimeout(args) : undefined,
+  )
   if (isFailureBody(body)) return consentOrFailure(action, body)
   return sessionReceipt(action, asRecord(body))
 }

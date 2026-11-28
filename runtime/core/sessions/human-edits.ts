@@ -93,6 +93,10 @@ export function recordHumanEdits(
 
 function editOverlapsScope(edit: HumanEdit, scope: ScopeSpec): boolean {
   if (scope.kind === 'exclusive') return true
+  // aspect:/frames: 不按对象名判定（task-8）：世界/渲染/机位/灯组与帧区间都没有可
+  // 比对的对象身份，走到底部 prefix 兜底会把无关人类改动误判成 human_modified
+  // （'world_backdrop' 命中 aspect:world、'1-10_px' 命中 frames:1-10）。
+  if (scope.kind === 'aspect' || scope.kind === 'frames') return false
   const value = String(scope.value || '')
   if (!value) return false
   if (scope.kind === 'object') return edit.kind === 'object' && edit.name === value

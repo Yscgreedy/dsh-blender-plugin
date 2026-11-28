@@ -4,9 +4,9 @@ import { winToWsl, wslToWin } from '../../../config.js'
 import { WIN_TMP } from '../../../paths.js'
 import { describeMissingInput, validateFileOpt } from '../../../file_guard.js'
 import { inputPathBaseList, resolveExistingInput } from '../../input-paths.js'
-import { fileFingerprint } from '../../../core/scripts.js'
-import { errorMessage } from '../../../core/json.js'
-import { slipFixPath } from '../../../core/output/index.js'
+import { fileFingerprint } from '../../../foundation/scripts.js'
+import { errorMessage } from '../../../foundation/json.js'
+import { slipFixPath } from '../../../foundation/output/index.js'
 import type { HeadlessDeps, HeadlessOpts, ScriptFileInfo } from '../types.js'
 
 export interface HeadlessPaths {

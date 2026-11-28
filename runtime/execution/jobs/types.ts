@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
-import type { StageRecord } from '../../core/progress.js'
-import type { PathWarning } from '../../core/evidence.js'
+import type { StageRecord } from '../../foundation/progress.js'
+import type { PathWarning } from '../../foundation/evidence.js'
 import type { LedgerApi } from '../ledger/index.js'
 
 export interface JobsDeps {

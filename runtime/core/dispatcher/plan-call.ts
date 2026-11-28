@@ -1,11 +1,12 @@
 // plan/qc/audit 前缀路由（由 config/routing.json 生成表驱动）
 import { WIN_TMP, blenderJoin } from '../../paths.js'
-import { extractLoop } from '../output/index.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { extractLoop } from '../../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import { normalizeSelftestReceipt } from '../selftest.js'
 import type { PlanCallDeps } from './index.js'
-import { MAIN_ROUTES, MODULE_ROUTES } from './routes.generated.js'
-import type { GuiRoute } from './routes.generated.js'
+import { MAIN_ROUTES, MODULE_ROUTES } from '../../contracts/routes.generated.js'
+import type { GuiRoute } from '../../contracts/routes.generated.js'
+import { routeMatches } from '../../contracts/route-match.js'
 
 export type RouteDecision = { matched: true; result: Promise<unknown> } | { matched: false }
 
@@ -62,11 +63,6 @@ export async function dispatchViaKernelModule(
       timeoutMs,
     ),
   )
-}
-
-/** 生成表共用的匹配/切片口径：exact 行按 op 全等，prefix 行按前缀命中。 */
-export function routeMatches(route: GuiRoute, o: string): boolean {
-  return route.match === 'exact' ? o === route.op : o.indexOf(route.prefix) === 0
 }
 
 /** 固定 sub（别名）优先；否则按表里的 strip 长度从 op 上切掉前缀。 */

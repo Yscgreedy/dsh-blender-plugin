@@ -81,7 +81,14 @@ GATE_VERSION = 3   # 3（v0.9.6 最终集成）：**任一 skipped/degraded ⇒ 
                    #   2（v0.9.6 复审修复）：skipped 状态 + gate.skip_if_missing + gate_run(overrides=) +
                    #   回执 coverage / 嵌套三态（audit_connectivity 的 gate.verdict）
 
-# plan 级 op → (内核里的模块 API 属性, 该模块的子 op)
+# plan 级 op → 提供方。两种形态：
+#   ("dsh_audit_api", "scene")                      旧形态：内核里的模块 API 属性 + 该模块的子 op
+#   (PORT_PREFIX + "deliver_verify", "verify", "deliver")
+#                                                   端口优先：端口名 / 回退子 op / 回退模块短名
+# 为什么 deliver_verify 走端口：core 不许再认识 export 域的私有 API 名（core 全域零字面）。
+# 端口没注册时按 (回退子 op, 模块短名) 构造
+# dsh_<短名>_api 回退 —— 已经 preload 了 deliver 的旧调用路径照常能跑，但源码里不出现提供方的 API 字面。
+PORT_PREFIX = "port:"
 OP_MAP = {
     "audit_scene": ("dsh_audit_api", "scene"),
     "audit_mesh": ("dsh_audit_api", "mesh"),
@@ -98,7 +105,7 @@ OP_MAP = {
     "fix_repair": ("dsh_fix_api", "repair"),
     "motion_measure": ("dsh_motion_api", "measure"),
     "sweep_analyze": ("dsh_sweep_api", "analyze"),
-    "deliver_verify": ("dsh_deliver_api", "verify"),
+    "deliver_verify": (PORT_PREFIX + "deliver_verify", "verify", "deliver"),
     "audit_measure": ("dsh_audit_api", "measure"),
     "human_base": ("dsh_human_api", "base"),
     "human_measure": ("dsh_human_api", "measure"),
@@ -110,6 +117,32 @@ OP_MAP = {
     "asm_scan": ("dsh_assembly_api", "scan"),
     "asm_gate": ("dsh_assembly_api", "gate"),
 }
+
+
+def gate_provider(op):
+    """plan 级 op 的提供方解析 → dict(kind/name/sub/api_attr)。
+
+    kind="port"：name=端口名，api_attr=兼容回退的内核属性名（None 表示没有回退）；
+    kind="api" ：name=内核属性名（旧形态，行为不变）。
+    """
+    target = OP_MAP[str(op)]
+    if isinstance(target, tuple) and len(target) == 3 and str(target[0]).startswith(PORT_PREFIX):
+        port, sub, short = target
+        return {"kind": "port", "name": str(port)[len(PORT_PREFIX):], "sub": sub,
+                "api_attr": "dsh_%s_api" % short}
+    attr, sub = target
+    attr = str(attr)
+    return {"kind": "api", "name": attr, "sub": sub, "api_attr": attr}
+
+
+def gate_provider_label(op):
+    """回执里给人看的提供方名：端口名原样；API 名去掉 dsh_ / _api（gate_plan 的 module 字段用）。"""
+    prov = gate_provider(op)
+    if prov["kind"] == "port":
+        return prov["name"]
+    return prov["name"].replace("dsh_", "").replace("_api", "")
+
+
 ALLOWED_FUNCS = {"min": min, "max": max, "len": len, "abs": abs, "round": round,
                  "all": all, "any": any, "sum": sum, "float": float, "int": int, "str": str}
 

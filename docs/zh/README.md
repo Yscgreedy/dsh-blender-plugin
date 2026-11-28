@@ -105,9 +105,18 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
         npm run setup:dev
         npm run build
 
-3. 把插件加入 DSH profile。先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
+3. 把插件加入 DSH profile。一条命令即可（自动解析 profile、只复制变化文件、不动 `runtime/ext`、触发 HMR 并自证 `/health` + `/status` + catalog）：
+
+        npm run dsh:link      # 开发模式：profile 依赖切成 link:<repo>；之后更新用 npm run dsh:reload
+        npm run dsh:install   # 发布形态：按 npm 包文件清单覆盖安装目录
+        npm run dsh:verify    # 只验证
+        npm run dsh:install -- --with-addon   # 顺带把 Blender 扩展放进 user_default
+
+   手工方式（等价，排错时用）：先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/dsh-blender-plugin
+
+   实测数据与安全边界见 [安装与升级-加速方案.md](../安装与升级-加速方案.md)。
 
     profile 的 package.json：
 
@@ -146,12 +155,12 @@ addon 仍然是唯一支持的 Blender 侧 agent 桥。其他 Blender 侧 agent 
 
 ## 工具
 
-插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（38 family / 269 op）里，所以工具面保持很小。
+插件提供 6 个模型工具；plan、审计、装配、导出、评估等操作都收在 `blender_op`（38 family / 270 op）里，所以工具面保持很小。
 
 | 工具 | 它能给你什么 |
 |---|---|
 | blender_session | GUI 会话生命周期与归属：list/status/doctor、attach、claim/release、写作用域 grant/revoke、暂停状态、presence，以及 `action=txn` 快照/标记回滚。Blender 与 Gateway 由宿主管理。 |
-| blender_op | 能力目录（`op="catalog"`，38 family / 269 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
+| blender_op | 能力目录（`op="catalog"`，38 family / 270 op）与执行入口，覆盖建模、审计、装配、交付、评估；另有 `action=loop|opt|preset`。执行 op 需要 ready 的 GUI 会话。 |
 | blender_py | 在已 attach 的 GUI 会话里执行 Python，内核跨调用保留；`see=true` 顺带回一帧。仅 GUI，没有无头回退。 |
 | blender_see | 仅用于 GUI 取帧：`viewpoint=viewport|camera|custom`、`mode=frame|sequence`，固定宽高比分档。相机动画与批量渲染走 `blender_run(kind="render")`。 |
 | blender_run | 唯一作业入口：`action=submit` 配 `kind=render|headless` 立即返回 job id；`status/wait/collect/cancel/list` 管理作业；`action=tune` 管渲染性能。 |
@@ -173,6 +182,7 @@ Windows 与 Linux 上 Gateway 可以为 agent 拉起一个隔离的 Blender GUI�
 - 第三方安装清单：[docs/给第三方的安装清单.md](../给第三方的安装清单.md)
 - DSH 升级适配：[docs/DSH-更新适配.md](../DSH-更新适配.md)
 - 架构说明：[docs/architecture.md](../architecture.md)
+- 当前架构与公理化设计审计：[ARCHITECTURE.md](../../ARCHITECTURE.md)
 - 建模 skill：[skills/blender-modeling/](../../skills/blender-modeling/)
 - 版本说明：[GitHub Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 与 [CHANGELOG.md](../../CHANGELOG.md)
 
@@ -192,7 +202,7 @@ Windows 与 Linux 上 Gateway 可以为 agent 拉起一个隔离的 Blender GUI�
 - Node.js **24.9** 是最低支持版本；CI 使用 Node 24。
 - 开发环境：克隆后运行 `npm run setup:dev`，它会探测 Python 3.11+、创建或复用 `.venv`，安装
   `requirements-dev.txt`、`requirements-typecheck.txt` 与 npm 依赖（仅当 `node_modules` 缺失时才跑
-  `npm ci --legacy-peer-deps`）。`npm run setup:dev -- --check` 只验证不写入；
+  `npm ci --legacy-peer-deps`）。`npm run setup:dev -- --check` 只验证、零写入；
   `npm run setup:dev -- --force` 重建 `.venv`。`.venv` 与 `node_modules` 都不入库。
 - Python 测试需要装有 `pytest` 的虚拟环境（virtualenv，由 `npm run setup:dev` 创建）。测试会自动探测
   `.venv`；需要换解释器时用 `PYTHON` 指向别处（Windows 另设 `PYTHONIOENCODING=utf-8`、

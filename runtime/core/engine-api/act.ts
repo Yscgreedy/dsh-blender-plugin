@@ -1,7 +1,7 @@
 // engine API：Python 执行/命令透传
 import { ACT_WRAPPER } from '../../paths.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
-import { enrichError } from '../errors.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
+import { enrichError } from '../../foundation/errors.js'
 import { planOpCrossChannelHint } from '../../catalog/index.js'
 import type { EngineApiDeps } from './index.js'
 
@@ -62,6 +62,22 @@ function scopeOutcome(diag: Record<string, unknown>): {
  * prove it. Read-only scripts are not flagged: the wrapper only calls it no_effect
  * when the source contains bpy.ops.
  */
+/** C-6/C-7/C-16：跨调用指纹、变更归属与产物（与"改没改"分开陈述）。 */
+function crossCallFields(
+  p: Record<string, unknown>,
+  diag: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    sceneBefore: p.state_before || null,
+    sceneAfter: p.state_after || null,
+    artifacts: Array.isArray(p.artifacts) ? p.artifacts : [],
+    changedObjectsMine: Array.isArray(diag.changed_objects_mine) ? diag.changed_objects_mine : [],
+    changedObjectsOther: Array.isArray(diag.changed_objects_other)
+      ? diag.changed_objects_other
+      : [],
+  }
+}
+
 function actOutcome(
   p: Record<string, unknown>,
   errLine: string | null,
@@ -107,6 +123,8 @@ function actOutcome(
           : null,
     traceback: p.traceback || null,
     sceneEpoch: p.epoch || null,
+    // C-6：跨调用可比的内容指纹（state_probe 已经算好，以前被丢在这里）
+    ...crossCallFields(p, diag),
     changed: typeof p.changed === 'boolean' ? p.changed : null,
     facesBefore: p.faces_before ?? null,
     facesAfter: p.faces_after ?? null,
@@ -123,6 +141,7 @@ function actOutcome(
     warnings: Array.isArray(diag.warnings) ? diag.warnings : [],
     noSceneChange: diag.no_scene_change === true,
     hasOps: diag.has_ops === true,
+    fileOps: diag.file_ops === true,
     scopeViolations: scope.attempted,
     rolledBack: scope.rolledBack,
     unrolled: scope.unrolled,

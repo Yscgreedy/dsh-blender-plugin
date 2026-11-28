@@ -2,7 +2,7 @@
 // completion and receipt assembly. Extracted verbatim from createHeadlessRun().headless()
 // with behavior frozen; index.ts only sequences these stages.
 import { winToWsl } from '../../config.js'
-import { PLUGIN_VERSION, pathAudit, sceneHygieneAudit } from '../../core/evidence.js'
+import { PLUGIN_VERSION, pathAudit, sceneHygieneAudit } from '../../foundation/evidence.js'
 import { BLENDER_EXE, WIN_TMP } from '../../paths.js'
 import { buildChildEnv } from './child-env.js'
 import { buildHeadlessScript } from './script.js'

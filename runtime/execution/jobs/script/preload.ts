@@ -1,15 +1,15 @@
 // 作业脚本前导/正文拼装
 import fs from 'node:fs'
 import { GPU_PRELUDE, pyModuleFile, pyModuleNames } from '../../../paths.js'
-import { slipFixPath } from '../../../core/output/index.js'
+import { slipFixPath } from '../../../foundation/output/index.js'
 import {
   PATH_GUARD,
   envPrelude,
   scriptFileBlock,
   shotsBlock,
   workdirBlock,
-} from '../../../core/scripts.js'
-import { KERNEL_BOOTSTRAP } from '../../../core/kernel/index.js'
+} from '../../../foundation/scripts.js'
+import { KERNEL_BOOTSTRAP } from '../../../foundation/kernel/index.js'
 import { hardExitJobParts } from '../../../hard_exit.js'
 import { writeHeadlessScript } from '../../../staging.js'
 import type { JobsDeps } from '../types.js'
@@ -116,6 +116,7 @@ export function finalizeJobArgs(
   opts: Record<string, unknown>,
 ): void {
   a.args.push('--python', built.sp.win, '--')
-  if (opts.outdir) a.args.push(a.outdirWin)
+  // C-10：与 queue/headless 同一口径 —— 用户 args 先，outdir 最后。
   if (Array.isArray(opts.args)) for (const v of opts.args) a.args.push(String(v))
+  if (opts.outdir) a.args.push(a.outdirWin)
 }

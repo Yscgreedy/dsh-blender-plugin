@@ -1,6 +1,6 @@
 // engine API：内环 loop_*
-import { extractLoop } from '../output/index.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { extractLoop } from '../../foundation/output/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import type { EngineApiDeps } from './index.js'
 
 export function createLoopApi(E: EngineApiDeps) {

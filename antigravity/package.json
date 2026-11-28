@@ -1,0 +1,18 @@
+{
+  "name": "dsh-blender-antigravity",
+  "version": "3.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:panel": "vite build && node -e \"import('node:fs').then(fs=>fs.renameSync('dist/index.html','dist/panel.html'))\"",
+    "build": "npm run build:panel"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^0.3.0",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.0.0"
+  }
+}

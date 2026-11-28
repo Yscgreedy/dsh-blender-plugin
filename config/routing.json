@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": [
-    "runtime/core/dispatcher/routes.generated.ts"
+    "runtime/contracts/routes.generated.ts"
   ],
   "hostSideFamilies": [
     "ext",

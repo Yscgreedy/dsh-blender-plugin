@@ -32,6 +32,7 @@ _calls = 0
 _errors = 0
 _boot_info = None
 _seq = 0
+_FRAMING = None
 
 
 def _j(o):
@@ -216,11 +217,223 @@ def _frame_dir():
     return str(_arg("--frame-dir", None) or os.environ.get("DSH_WORKER_FRAME_DIR") or tempfile.gettempdir())
 
 
+def _framing():
+    """按 __file__ 加载同目录的 framing.py（纯取景数学，不 import bpy）。
+
+    worker 由 `blender -b --python <abs>/worker.py` 启动，sys.path 里不保证有本目录；
+    用 importlib 按路径加载，既不污染 sys.path，也不依赖宿主 preload。
+    """
+    global _FRAMING
+    if _FRAMING is not None:
+        return _FRAMING
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "framing.py")
+    spec = importlib.util.spec_from_file_location("dsh_worker_framing", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("取景模块缺失：%s" % path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _FRAMING = mod
+    return mod
+
+
+def _fit_requested(spec):
+    """spec.fit 是否真的要求自动取景（false/none/0/空串都按未请求处理）。"""
+    fit = spec.get("fit")
+    if fit is None or fit is False:
+        return False
+    if isinstance(fit, str) and fit.strip().lower() in ("", "false", "none", "off", "0"):
+        return False
+    return True
+
+
+def _fit_bbox(kind):
+    """fit=object|scene|<对象名> → (bbox_min, bbox_max, 对象名列表)。
+
+    与 GUI 通道 view.py:_fit_objects 同语义：object/selected 取选中 mesh（没有则全部
+    可见 mesh），scene 取全部可见 mesh，其它字符串按 bpy.data.objects 名字查。
+    取世界角点用 matrix_world @ bound_box（含物体变换；修改器求值后的包围盒不保证）。
+    """
+    import bpy
+    from mathutils import Vector
+    scene_meshes = [o for o in bpy.context.scene.objects
+                    if o.type == "MESH" and not (o.hide_render or o.hide_viewport)]
+    key = str(kind).strip().lower()
+    if key in ("true", "auto", "object", "selected"):
+        objs = [o for o in bpy.context.selected_objects if o.type == "MESH"] or scene_meshes
+    elif key == "scene":
+        objs = scene_meshes
+    else:
+        ob = bpy.data.objects.get(str(kind))
+        if ob is None:
+            raise ValueError("bpy.data.objects 里没有 %r" % str(kind))
+        objs = [ob]
+    if not objs:
+        raise ValueError("没有可框的 mesh（选中为空且场景没有可见 mesh）")
+    pts = []
+    for ob in objs:
+        try:
+            mw = ob.matrix_world
+            for c in ob.bound_box:
+                pts.append(mw @ Vector((c[0], c[1], c[2])))
+        except Exception:
+            continue
+    if not pts:
+        raise ValueError("对象没有可用的 bound_box")
+    box = _framing().bbox_of_points(pts)
+    if box is None:
+        raise ValueError("世界角点为空")
+    return box[0], box[1], [str(getattr(o, "name", "")) for o in objs]
+
+
+def _with_fit(out, fit_info, note):
+    """把取景回执挂到结果上（fit 生效 / 失败 / 未请求三态都不丢 note）。"""
+    if fit_info is not None:
+        out["fit"] = fit_info  # 生效或失败的取景回执（含 applied / bbox / error）
+    if note:
+        out["note"] = note
+    return out
+
+
+def _see_fit(spec, width, height):
+    """fit 只补缺失的 from/look_at（和 ortho 的 ortho_scale），返回 (fit_info, note)。
+
+    显式 from/look_at 优先；失败不抛：note 说明退回了哪套机位，渲染继续。
+    """
+    if not _fit_requested(spec):
+        return None, None
+    try:
+        bb_min, bb_max, names = _fit_bbox(spec.get("fit"))
+        view = _framing().fit_view(
+            bb_min, bb_max, aspect=float(width) / float(height),
+            lens_mm=float(spec.get("lens") or 50.0),
+            margin=float(spec.get("fit_margin") or 1.15),
+            ortho=bool(spec.get("ortho")), ortho_scale=spec.get("ortho_scale"))
+        applied = []
+        if not spec.get("from"):
+            spec["from"] = view["from"]
+            applied.append("from")
+        if not spec.get("look_at"):
+            spec["look_at"] = view["look_at"]
+            applied.append("look_at")
+        if bool(spec.get("ortho")) and not spec.get("ortho_scale") and view.get("ortho_scale"):
+            spec["ortho_scale"] = view["ortho_scale"]
+            applied.append("ortho_scale")
+        info = {"kind": str(spec.get("fit")), "objects": names[:40],
+                "bbox": {"min": [round(float(v), 6) for v in bb_min],
+                         "max": [round(float(v), 6) for v in bb_max]},
+                "applied": applied}
+        return info, None
+    except Exception as e:
+        # 取景失败不是渲染失败：默认机位仍会出图，但必须把原因写进回执。
+        note = "fit=%s 未生效（%s: %s）；已退回%s" % (
+            spec.get("fit"), type(e).__name__, str(e)[:160],
+            "显式 from/look_at" if (spec.get("from") and spec.get("look_at")) else "默认机位")
+        return {"kind": str(spec.get("fit")), "applied": [],
+                "error": "%s: %s" % (type(e).__name__, e)}, note
+
+
+def _see_saved(sc):
+    """渲染前快照：成功和失败都要还原（worker 是常驻进程，场景状态不能漏）。"""
+    return {"engine": sc.render.engine, "rx": sc.render.resolution_x, "ry": sc.render.resolution_y,
+            "pct": sc.render.resolution_percentage, "fp": sc.render.filepath,
+            "fmt": sc.render.image_settings.file_format, "cm": sc.render.image_settings.color_mode,
+            "transparent": bool(getattr(sc.render, "film_transparent", False)),
+            "camera": sc.camera}
+
+
+def _see_camera(bpy, sc, spec, Vector):
+    """建临时相机并设机位/镜头/正交；删除由调用方的 finally 负责。"""
+    cd = bpy.data.cameras.new("__dsh_see_cam")
+    cam = bpy.data.objects.new("__dsh_see_cam", cd)
+    sc.collection.objects.link(cam)
+    cam.location = tuple(float(x) for x in spec["from"][:3])
+    look = tuple(float(x) for x in spec["look_at"][:3])
+    if Vector is not None:
+        cam.rotation_euler = (Vector(look) - Vector(cam.location)).to_track_quat("-Z", "Y").to_euler()
+    cam.data.lens = float(spec.get("lens") or 50.0)
+    if bool(spec.get("ortho")):
+        cam.data.type = "ORTHO"
+        cam.data.ortho_scale = float(spec.get("ortho_scale") or 10.0)
+    sc.camera = cam
+    return cam
+
+
+def _see_render_setup(sc, spec, width, height, path):
+    """Workbench 离屏渲染参数（分辨率/格式/着色），与 geo.quick_views 同源。"""
+    sc.render.engine = "BLENDER_WORKBENCH"
+    sc.render.resolution_x = width
+    sc.render.resolution_y = height
+    sc.render.resolution_percentage = 100
+    sc.render.image_settings.file_format = "PNG"
+    sc.render.image_settings.color_mode = "RGBA"
+    sc.render.filepath = path
+    try:
+        sc.render.film_transparent = True
+    except Exception:
+        pass
+    try:
+        sh = sc.display.shading
+        sh.light = "STUDIO"
+        sh.color_type = "MATERIAL" if spec.get("shading") == "MATERIAL" else "SINGLE"
+        if sh.color_type == "SINGLE":
+            sh.single_color = (0.78, 0.78, 0.78)
+        sh.show_cavity = bool(spec.get("cavity", True))
+        sh.show_shadows = bool(spec.get("shadows", False))
+        sc.display.render_aa = str(spec.get("aa") or "8")
+    except Exception:
+        pass
+
+
+def _see_coverage(bpy, path):
+    """alpha>0.5 的像素占比（判空图用）；numpy/图像读取失败给 None，不影响出图。"""
+    try:
+        import numpy as np
+        img = bpy.data.images.load(path, check_existing=False)
+        n = int(img.size[0]) * int(img.size[1])
+        buf = np.empty(n * 4, dtype=np.float32)
+        img.pixels.foreach_get(buf)
+        value = round(float((buf[3::4] > 0.5).mean()), 4)
+        bpy.data.images.remove(img)
+        return value
+    except Exception:
+        return None
+
+
+def _see_restore(bpy, sc, saved, cam):
+    """删临时相机并还原渲染设置；两步各自兜底，还原失败不能盖掉渲染回执。"""
+    try:
+        if cam is not None:
+            bpy.data.objects.remove(cam, do_unlink=True)
+            if cam.data is not None and cam.data.users == 0:
+                bpy.data.cameras.remove(cam.data)
+    except Exception:
+        pass
+    try:
+        sc.render.engine = saved["engine"]
+        sc.render.resolution_x = saved["rx"]
+        sc.render.resolution_y = saved["ry"]
+        sc.render.resolution_percentage = saved["pct"]
+        sc.render.filepath = saved["fp"]
+        sc.render.image_settings.file_format = saved["fmt"]
+        sc.render.image_settings.color_mode = saved["cm"]
+        sc.render.film_transparent = saved["transparent"]
+        sc.camera = saved["camera"]
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
+
+
 def _see(spec=None):
     """无头离屏 see：临时相机 + bpy.ops.render.render + Workbench。
 
     不走 view.py 的 GPUOffScreen.draw_view3d（需要 VIEW_3D），也不走 render.opengl（需要窗口）——
     这条路径与 geo.quick_views 同源，blender -b 下可用（本机实测 512² 稳态 31–38 ms/帧）。
+
+    fit=object|scene|<对象名>：按对象世界 bbox 自动取景（数学在 framing.py）。
+    显式 from/look_at 优先，fit 只补缺失的那一项；ortho 且没给 ortho_scale 时也由 fit 补。
+    fit 失败不抛：退回默认机位，回执带 note（"不要静默给空图"）与 fit.error。
+    相机/渲染/还原的细节在 _see_camera / _see_render_setup / _see_restore。
     """
     global _seq
     import bpy
@@ -229,104 +442,43 @@ def _see(spec=None):
     except Exception:
         Vector = None
     spec = dict(spec or {})
+    width = int(spec.get("width") or spec.get("max_size") or 560)
+    height = int(spec.get("height") or max(120, round(width * 9.0 / 16.0)))
+    width = max(64, min(1600, width)); height = max(64, min(1600, height))
+    fit_info, note = _see_fit(spec, width, height)
     if not spec.get("from"):
         spec["from"] = [7, -7, 5]
     if not spec.get("look_at"):
         spec["look_at"] = [0, 0, 1]
-    width = int(spec.get("width") or spec.get("max_size") or 560)
-    height = int(spec.get("height") or max(120, round(width * 9.0 / 16.0)))
-    width = max(64, min(1600, width)); height = max(64, min(1600, height))
     sc = bpy.context.scene
-    saved = {"engine": sc.render.engine, "rx": sc.render.resolution_x, "ry": sc.render.resolution_y,
-             "pct": sc.render.resolution_percentage, "fp": sc.render.filepath,
-             "fmt": sc.render.image_settings.file_format, "cm": sc.render.image_settings.color_mode,
-             "transparent": bool(getattr(sc.render, "film_transparent", False)),
-             "camera": sc.camera}
+    saved = _see_saved(sc)
     cam = None
     t0 = time.time()
     try:
-        cd = bpy.data.cameras.new("__dsh_see_cam")
-        cam = bpy.data.objects.new("__dsh_see_cam", cd)
-        sc.collection.objects.link(cam)
-        cam.location = tuple(float(x) for x in spec["from"][:3])
-        look = tuple(float(x) for x in spec["look_at"][:3])
-        if Vector is not None:
-            cam.rotation_euler = (Vector(look) - Vector(cam.location)).to_track_quat("-Z", "Y").to_euler()
-        cam.data.lens = float(spec.get("lens") or 50.0)
-        if bool(spec.get("ortho")):
-            cam.data.type = "ORTHO"
-            cam.data.ortho_scale = float(spec.get("ortho_scale") or 10.0)
-        sc.camera = cam
-        sc.render.engine = "BLENDER_WORKBENCH"
-        sc.render.resolution_x = width
-        sc.render.resolution_y = height
-        sc.render.resolution_percentage = 100
-        sc.render.image_settings.file_format = "PNG"
-        sc.render.image_settings.color_mode = "RGBA"
-        try:
-            sc.render.film_transparent = True
-        except Exception:
-            pass
-        try:
-            sh = sc.display.shading
-            sh.light = "STUDIO"
-            sh.color_type = "MATERIAL" if spec.get("shading") == "MATERIAL" else "SINGLE"
-            if sh.color_type == "SINGLE":
-                sh.single_color = (0.78, 0.78, 0.78)
-            sh.show_cavity = bool(spec.get("cavity", True))
-            sh.show_shadows = bool(spec.get("shadows", False))
-            sc.display.render_aa = str(spec.get("aa") or "8")
-        except Exception:
-            pass
+        cam = _see_camera(bpy, sc, spec, Vector)
         _seq += 1
         path = os.path.join(_frame_dir(), "dsh_see_%d_%d.png" % (os.getpid(), _seq))
-        sc.render.filepath = path
+        _see_render_setup(sc, spec, width, height, path)
         _t_render = time.time()
         bpy.ops.render.render(write_still=True)
         _t_render_ms = int((time.time() - _t_render) * 1000)
         _t_read = time.time()
         data = open(path, "rb").read()
-        coverage = None
-        try:
-            import numpy as np
-            img = bpy.data.images.load(path, check_existing=False)
-            n = int(img.size[0]) * int(img.size[1])
-            buf = np.empty(n * 4, dtype=np.float32)
-            img.pixels.foreach_get(buf)
-            coverage = round(float((buf[3::4] > 0.5).mean()), 4)
-            bpy.data.images.remove(img)
-        except Exception:
-            coverage = None
-        return {"ok": True, "mode": "workbench-offscreen", "path": path,
-                "png_b64": base64.b64encode(data).decode("ascii"),
-                "width": width, "height": height, "bytes": len(data),
-                "coverage_estimate": coverage, "ms": int((time.time() - t0) * 1000),
-                "t": {"render_ms": _t_render_ms, "read_ms": int((time.time() - _t_read) * 1000),
-                      "total_ms": int((time.time() - t0) * 1000)},
-                "engine": "BLENDER_WORKBENCH"}
+        out = {"ok": True, "mode": "workbench-offscreen", "path": path,
+               "png_b64": base64.b64encode(data).decode("ascii"),
+               "width": width, "height": height, "bytes": len(data),
+               "coverage_estimate": _see_coverage(bpy, path),
+               "ms": int((time.time() - t0) * 1000),
+               "t": {"render_ms": _t_render_ms, "read_ms": int((time.time() - _t_read) * 1000),
+                     "total_ms": int((time.time() - t0) * 1000)},
+               "engine": "BLENDER_WORKBENCH"}
+        return _with_fit(out, fit_info, note)
     except Exception as e:
-        return {"ok": False, "mode": "workbench-offscreen", "error": "%s: %s" % (type(e).__name__, e),
-                "traceback": traceback.format_exc()[-2000:], "ms": int((time.time() - t0) * 1000)}
+        out = {"ok": False, "mode": "workbench-offscreen", "error": "%s: %s" % (type(e).__name__, e),
+               "traceback": traceback.format_exc()[-2000:], "ms": int((time.time() - t0) * 1000)}
+        return _with_fit(out, fit_info, note)
     finally:
-        try:
-            if cam is not None:
-                bpy.data.objects.remove(cam, do_unlink=True)
-                if cam.data is not None and cam.data.users == 0:
-                    bpy.data.cameras.remove(cam.data)
-        except Exception:
-            pass
-        try:
-            sc.render.engine = saved["engine"]
-            sc.render.resolution_x = saved["rx"]; sc.render.resolution_y = saved["ry"]
-            sc.render.resolution_percentage = saved["pct"]
-            sc.render.filepath = saved["fp"]
-            sc.render.image_settings.file_format = saved["fmt"]
-            sc.render.image_settings.color_mode = saved["cm"]
-            sc.render.film_transparent = saved["transparent"]
-            sc.camera = saved["camera"]
-            bpy.context.view_layer.update()
-        except Exception:
-            pass
+        _see_restore(bpy, sc, saved, cam)
 
 
 
@@ -337,7 +489,8 @@ def _watch(spec=None):
     spec = dict(spec or {})
     t0 = time.time()
     sh = {"width": 420, "height": 236}
-    for k in ("width", "height", "from", "look_at", "ortho", "ortho_scale", "lens", "shading"):
+    for k in ("width", "height", "from", "look_at", "ortho", "ortho_scale", "lens", "shading",
+              "fit", "fit_margin"):
         if spec.get(k) is not None:
             sh[k] = spec.get(k)
     out = {"ok": True, "mode": "workbench-offscreen-watch", "code": None,
@@ -392,6 +545,8 @@ def _watch(spec=None):
             if not r.get("ok"):
                 out["frames"].append({"i": i, "frame": f, "ok": False, "error": r.get("error"), "ms": r.get("ms")})
                 continue
+            if r.get("note") and not out.get("note"):
+                out["note"] = r["note"]  # fit 没生效：逐帧照出，但整段回执只报一次原因
             png = str(r.get("png_b64") or "")
             try:
                 digest = hashlib.md5(base64.b64decode(png)).hexdigest()[:12]
@@ -1007,12 +1162,15 @@ def _action_fcurves(act):
     不要用 hasattr(act, "fcurves") 判版本：第三方 shim 可能只暴露第一个
     channelbag，会把其它 slot 静默漏掉。结构判据是 act.layers。
     """
-    try:
-        from bpy_extras import anim_utils
+    layered = getattr(act, "layers", None) is not None
+    if layered:
         slots = list(getattr(act, "slots", None) or [])
-        if getattr(act, "layers", None) is not None:
-            curves = []
-            seen = set()
+        curves = []
+        seen = set()
+        # 首选 bpy_extras；拿不到就退回 Action API（strip.channelbag），不再掉进
+        # act.fcurves（layered action 上它不存在，旧写法会静默返回 []）。
+        try:
+            from bpy_extras import anim_utils
             for slot in slots:
                 bag = anim_utils.action_get_channelbag_for_slot(act, slot)
                 if bag is None:
@@ -1024,8 +1182,28 @@ def _action_fcurves(act):
                     seen.add(key)
                     curves.append(fc)
             return curves
-    except Exception:
-        pass
+        except Exception:
+            pass
+        try:
+            for layer in getattr(act, "layers", None) or []:
+                for strip in getattr(layer, "strips", None) or []:
+                    for slot in slots:
+                        try:
+                            bag = strip.channelbag(slot)
+                        except Exception:
+                            bag = None
+                        if bag is None:
+                            continue
+                        for fc in getattr(bag, "fcurves", None) or []:
+                            key = (fc.data_path, fc.array_index)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            curves.append(fc)
+            return curves
+        except Exception as exc:
+            # 两条路都失败：交给调用方记进 domains，不要假装"没有动画"
+            raise RuntimeError("layered action fcurves unreadable: %s" % exc)
     try:
         return list(act.fcurves)
     except Exception:
@@ -1056,7 +1234,8 @@ def _hash_actions(actions, h, domains):
                 for mod in getattr(fc, "modifiers", []) or []:
                     h.update(("FM|%s|%s" % (getattr(mod, "type", ""), getattr(mod, "mute", ""))).encode("utf-8"))
         except Exception:
-            pass
+            # 动画域读失败必须可见：旧写法 pass，digest 假装稳定。
+            domains.append("actions_unreadable")
 
 
 def _eval_stats(scene_objects):

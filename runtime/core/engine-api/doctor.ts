@@ -6,15 +6,21 @@ import {
 } from '../../transport/addon-ws.js'
 import type { AddonHandshakeError, AddonInstanceView } from '../../transport/addon-ws.js'
 import { FLAGS_CODE, REGION_CODE } from '../flags.js'
-import { jsonFromStdout } from '../output/index.js'
-import { PLUGIN_VERSION, RUNTIME_DIR, engineProvenance, runtimeFingerprint } from '../evidence.js'
+import { jsonFromStdout } from '../../foundation/output/index.js'
+import {
+  PLUGIN_VERSION,
+  RUNTIME_DIR,
+  engineProvenance,
+  provenanceLayers,
+  runtimeFingerprint,
+} from '../../foundation/evidence.js'
+import type { ProvenanceLayers } from '../../foundation/evidence.js'
 import { wslToWin } from '../../config.js'
 import { COMMAND_CATALOG } from '../../catalog/index.js'
-import { errorMessage } from '../json.js'
+import { errorMessage } from '../../foundation/json.js'
 import type { EngineApiDeps } from './index.js'
 import { metricsView } from './metrics.js'
-import { displayCapabilities } from '../../display/prerequisites.js'
-import { buildInstallPlans } from '../../display/install.js'
+import { virtualGuiSection, virtualGuiView } from './doctor-virtualgui.js'
 
 /**
  * addon 侧阶段预算。宿主 backendJson 默认 20s、T.commands 静态截止 60s；
@@ -68,7 +74,7 @@ function readinessView(
 
 export async function statusView(
   E: EngineApiDeps,
-  opts: { addonTimeoutMs?: number } = {},
+  opts: { addonTimeoutMs?: number; layers?: ProvenanceLayers } = {},
 ): Promise<Record<string, unknown>> {
   const {
     LEDGER,
@@ -103,7 +109,8 @@ export async function statusView(
       version: PLUGIN_VERSION,
       runtimeDir: wslToWin(RUNTIME_DIR),
       runtime: runtimeFingerprint(),
-      provenance: engineProvenance({}),
+      // 4a：HTTP 边界递进来的宿主层快照原样透传；没给就还是原来的「自己发现」路径。
+      provenance: engineProvenance({ layers: opts.layers }),
     },
     session: SESSION_NAME,
     resultsDir: wslToWin(RESULTS_DIR),
@@ -258,6 +265,7 @@ function gatewayFailure(
 async function gatewayDoctor(
   E: EngineApiDeps,
   instances: AddonInstanceView[],
+  layers?: ProvenanceLayers,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now()
   const ready = instances.filter((x) => x.ready)
@@ -284,7 +292,7 @@ async function gatewayDoctor(
   }
   const instance = ready[0]
   try {
-    const s = await statusView(E, { addonTimeoutMs: ADDON_DOCTOR_STATUS_TIMEOUT_MS })
+    const s = await statusView(E, { addonTimeoutMs: ADDON_DOCTOR_STATUS_TIMEOUT_MS, layers })
     if (s.addonError) throw new Error(String(s.addonError))
     const pingStart = Date.now()
     let pingMs: number | null = null
@@ -375,7 +383,7 @@ async function integrationStatus(E: EngineApiDeps): Promise<Record<string, unkno
  * 而不是只说"连不上 Blender"。路由层会把 local_evidence 并进来；这里只负责诊断与那**一行**
  * 可执行的激活方式（模型/人类照抄就能跑）。
  */
-function forcedDoctor(E: EngineApiDeps, _opts: Record<string, unknown>): Record<string, unknown> {
+function forcedDoctor(E: EngineApiDeps, opts: Record<string, unknown>): Record<string, unknown> {
   // 6b：模拟"没有 addon"，但**不跳过**本地证据 —— 路由层会把同一个 reader 的
   // local_processes / ports / ports_evidence 并进来（与 6a 同源）。
   return {
@@ -409,15 +417,9 @@ function forcedDoctor(E: EngineApiDeps, _opts: Record<string, unknown>): Record<
       instanceId: null,
       ready: false,
     },
-    virtualGui: displayCapabilities(),
+    virtualGui: virtualGuiSection(opts, true),
     metrics: metricsView(E),
   }
-}
-
-/** Capabilities plus the guided-install plans shared by doctor --fix and the add-on button. */
-function virtualGuiView(): Record<string, unknown> {
-  const capabilities = displayCapabilities()
-  return { ...capabilities, installPlans: buildInstallPlans(capabilities) }
 }
 
 export function createDoctorApi(E: EngineApiDeps) {
@@ -443,17 +445,18 @@ export function createDoctorApi(E: EngineApiDeps) {
             summary: 'engine 需要 Gateway addon client；3.1 不再直连 addon TCP 端口。',
             fix: '用 lib/runtime/gateway.js 启动 Gateway，并让 host/tools 只连 Gateway。',
           },
-          virtualGui: virtualGuiView(),
+          virtualGui: virtualGuiSection(opts, true),
           metrics: metricsView(E),
           error: 'gateway addon client required',
         }
       }
-      const result = await gatewayDoctor(E, gateway)
-      return { ...result, virtualGui: displayCapabilities() }
+      const result = await gatewayDoctor(E, gateway, provenanceLayers(opts))
+      return { ...result, virtualGui: virtualGuiSection(opts, false) }
     },
     /** 3D 视口区域 rect / 窗口尺寸 / 着色模式 */
-    status() {
-      return statusView(E)
+    /** /status 的 engine 侧：opts.layers 是 HTTP 边界显式递进来的宿主层快照（4a）。 */
+    status(opts: Record<string, unknown> = {}) {
+      return statusView(E, { layers: provenanceLayers(opts) })
     },
     async commands() {
       const out = await addon.send('execute_code', { code: FLAGS_CODE }, ADDON_FLAGS_TIMEOUT_MS)

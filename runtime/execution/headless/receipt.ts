@@ -1,4 +1,4 @@
-import { clipMiddle } from '../../core/output/index.js'
+import { clipMiddle } from '../../foundation/output/index.js'
 import type {
   ArtifactCollection,
   ExpectEval,

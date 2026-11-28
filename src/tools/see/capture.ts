@@ -10,6 +10,7 @@ import { fetchFrame, fetchView } from '../../host/http.js'
 import { dedupeNote, frameDedupe } from '../../utils/frame-cache.js'
 import { toAttachment } from '../../utils/image.js'
 import { toolError } from '../errors.js'
+import { frameKey } from '../shared/frame-key.js'
 import { publishView } from '../shared/session.js'
 import { appendEmptyFrameWarning, formatViewText, pngSize, type ViewLike } from './presenter.js'
 import type { FramePlan } from './validate.js'
@@ -68,7 +69,7 @@ export async function captureCamera(
   const mt = asRecord(fv.meta)
   const width = Number(mt.width) || 0
   const height = Number(mt.height) || 0
-  const dedupe = frameDedupe('see:camera', fv.hash, plan.force)
+  const dedupe = frameDedupe(frameKey('see', 'camera'), fv.hash, plan.force)
   const dims = { width, height }
   let t = formatViewText('camera', dims, fv as unknown as ViewLike, {})
   if (dedupe.dup) t += dedupeNote(dedupe.repeats)
@@ -103,7 +104,7 @@ export async function captureFull(
     return toolError('backend_error', 'SEE full 失败 · ' + text(failureFromView(e)), BACKEND_HINT)
   }
   const [width, height] = pngSize(fr.png)
-  const dedupe = frameDedupe('see:full:' + String(area), fr.hash, plan.force)
+  const dedupe = frameDedupe(frameKey('see', 'full', area), fr.hash, plan.force)
   let t =
     'SEE full(' +
     (area < 0 ? 'window' : 'area ' + String(area)) +
@@ -195,10 +196,11 @@ export async function captureView(
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
   }
+  // 去重键与 blender_py 的 see 同源：通道 + 调用方 + 参数（shared/frame-key.ts）。
   const key =
     plan.viewpoint === 'custom'
-      ? 'see:custom:' + JSON.stringify(spec)
-      : 'see:current:' + String(dims.width) + 'x' + String(dims.height)
+      ? frameKey('see', 'custom', JSON.stringify(spec))
+      : frameKey('see', 'current', dims.width + 'x' + dims.height)
   const dedupe = frameDedupe(key, fv.hash, plan.force)
   const mt = asRecord(fv.meta)
   let t = formatViewText(plan.viewpoint, dims, fv as unknown as ViewLike, spec)

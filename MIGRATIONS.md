@@ -44,22 +44,22 @@
 
 3.1 模型面从 15 个工具收口为 6 个：`blender_session`（会话/归属/权限/事务）、`blender_op`（catalog 与 loop/opt/preset）、`blender_py`（GUI 会话内执行 Python）、`blender_see`（GUI 视点截图与序列帧）、`blender_run`（唯一作业入口：render / headless）、`blender_inspect`（只读 addon 命令目录与执行）。旧名不再注册，调用旧名会得到迁移提示。
 
-| 3.1 之前 | 3.1 模型面 |
-|---|---|
-| `blender_rt_see` | `blender_see` |
-| `blender_rt_watch` | `blender_see(mode="sequence")`（`code=` 改由 `blender_py` 执行） |
-| `blender_rt_do` | `blender_py`（`session` / `preload` / `auto` / `view_size` 参数删除） |
-| `blender_rt_plan` | `blender_op`（`action` 默认 `plan`；`op` / `args` / `path` / `attach_images` 不变） |
-| `blender_rt_loop` | `blender_op(action="loop", …)` |
-| `blender_rt_opt` | `blender_op(action="opt", …)` |
-| `blender_rt_preset` | `blender_op(action="preset", …)` |
-| `blender_rt_perf` | `blender_run(action="tune", …)` |
-| `blender_rt_headless` | `blender_run(action="submit", kind="headless", …)`（异步提交；`wait` / `collect` 收取） |
-| `blender_rt_job` | `blender_run(action="submit" \| "status" \| "wait" \| "collect" \| "cancel" \| "list")` |
-| `blender_rt_cmd(name=X, params=Y)` | `blender_inspect(command=X, args=Y)` |
-| `blender_rt_commands` | `blender_inspect`（默认 help） |
-| `blender_rt_txn(op=O, …)` | `blender_session(action="txn", op=O, …)` |
-| `blender_viewport` | `blender_session`（status/doctor/presence；lease/launch/restart 改由宿主管理，不再是模型工具） |
+| 3.1 之前                           | 3.1 模型面                                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `blender_rt_see`                   | `blender_see`                                                                                  |
+| `blender_rt_watch`                 | `blender_see(mode="sequence")`（`code=` 改由 `blender_py` 执行）                               |
+| `blender_rt_do`                    | `blender_py`（`session` / `preload` / `auto` / `view_size` 参数删除）                          |
+| `blender_rt_plan`                  | `blender_op`（`action` 默认 `plan`；`op` / `args` / `path` / `attach_images` 不变）            |
+| `blender_rt_loop`                  | `blender_op(action="loop", …)`                                                                 |
+| `blender_rt_opt`                   | `blender_op(action="opt", …)`                                                                  |
+| `blender_rt_preset`                | `blender_op(action="preset", …)`                                                               |
+| `blender_rt_perf`                  | `blender_run(action="tune", …)`                                                                |
+| `blender_rt_headless`              | `blender_run(action="submit", kind="headless", …)`（异步提交；`wait` / `collect` 收取）        |
+| `blender_rt_job`                   | `blender_run(action="submit" \| "status" \| "wait" \| "collect" \| "cancel" \| "list")`        |
+| `blender_rt_cmd(name=X, params=Y)` | `blender_inspect(command=X, args=Y)`                                                           |
+| `blender_rt_commands`              | `blender_inspect`（默认 help）                                                                 |
+| `blender_rt_txn(op=O, …)`          | `blender_session(action="txn", op=O, …)`                                                       |
+| `blender_viewport`                 | `blender_session`（status/doctor/presence；lease/launch/restart 改由宿主管理，不再是模型工具） |
 
 `blender_rt_worker` 不再属于模型面：交互式「改一步看一眼」用 `blender_py` + `blender_see`（需要 ready 的 GUI 会话）；没有 GUI 时的脚本/渲染改用 `blender_run(action="submit", kind="headless")`，再 `wait`/`collect` 取产物。`session="auto"`、`preload="…worker…"`、worker see/watch 不再是对用户暴露的能力。
 
@@ -82,19 +82,20 @@ v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N
 - 旧「Blender 视口」tab、点击进消息、模型点选工具在 v2.3 全部消失，这是**预期行为**。
 - 选中入口改为：Blender 原生选中 → `N` →「Selection → DSH」→ 发送（多选 / 集合两种模式）。
 - v2.6 升级后同样需要**重启 DSH**；只改后端时重启宿主即可（Gateway 生命周期由宿主管理，没有模型侧 restart 工具）。
+
 ## 2.1 v3.2 行为变化（升级即生效，无需迁移动作）
 
 四条现场缺陷的修法会改变回执语义，调用方需要知道自己会看到什么：
 
-| 场景                                         | 旧行为                                                             | v3.2                                                                                                                                                                                                  |
-| -------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| addon 掉线后 `attach`                        | 回 `ok` + `status=ready`（陈旧回执），真调用才 `session_required`  | 回 `addon_disconnected`（记录被释放；30 分钟内仍记得是哪个 instance）；HTTP 路径先 ping，僵死回 `addon_unresponsive`                                                                                  |
-| `status`                                     | 只有 `status` 字段                                                 | 多 `live:{instanceReady, readyInstances}`；`false` = 记录在、Blender 不在                                                                                                                             |
-| `start kind=virtual-gui`                     | 直接 `consent_required`，没有请求对象、没有界面                    | 落一条待批准请求（`<workDir>/consent/<id>.json`），回执带 `request_id` + 人类可复制的一行 approve/deny 命令；批准后再 `start` 即成功（只消费一次），或 `DSH_BLENDER_VIRTUAL_GUI_CONSENT=allow` 预批准 |
-| `blender_py` 里写 `wm.read_factory_settings` | 直接执行 → addon 被卸掉、整条 GUI 通道报废                         | 默认拦下回 `factory_reset_blocked`（附替代做法）；确需重置传 `allow_factory_reset=true`，或改走 headless / worker                                                                                     |
-| headless / job 的相对 `script_file` / `file` | 按 Gateway cwd（DSH profile）解析；`.blend` 不校验，先起进程再报错 | 按 `workdir → 会话工作区 → DSH_BLENDER_WORKSPACE/DSH_WORKSPACE/DSH_PROJECT_DIR → cwd` 解析并在提交前校验；缺文件回 `input_missing`（带 `tried`/`bases`），**不起进程**；回执多一行 `path_base`，只落到宿主 cwd 时点名"回落" |
-| `blender_run`                                | 只有 submit/render/调参                                            | 新增 `action="worker"`：持久无头内核（同进程连续 `exec`/`see`/`watch`）+ `checkpoint`/`revert`/`checkpoints` 文件级 undo                                                                              |
-| worker `start` / `stop` 回执                 | 成功也写 `FAIL`（快照没有 `ok` 字段）；stop 睡 300 ms 就断言"已停" | 判据取信封；`start` 等 ready（未就绪写 `pending` + `next_action=status`），`stop` 等真退出（`stopped/alive/signaled`），并发 start 共享同一次启动（`joined:true`）                                     |
+| 场景                                         | 旧行为                                                             | v3.2                                                                                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| addon 掉线后 `attach`                        | 回 `ok` + `status=ready`（陈旧回执），真调用才 `session_required`  | 回 `addon_disconnected`（记录被释放；30 分钟内仍记得是哪个 instance）；HTTP 路径先 ping，僵死回 `addon_unresponsive`                                                                                                                                                  |
+| `status`                                     | 只有 `status` 字段                                                 | 多 `live:{instanceReady, readyInstances}`；`false` = 记录在、Blender 不在                                                                                                                                                                                             |
+| `start kind=virtual-gui`                     | 直接 `consent_required`，没有请求对象、没有界面                    | 落一条待批准请求（`<workDir>/consent/<id>.json`），回执带 `request_id` + 人类可复制的一行 approve/deny 命令；3.3.1 起会话里的「Blender 会话」面板直接弹卡片、点批准即让**同一次** `start` 成功（`wait_ms` 默认 20 s，只消费一次），或 `virtualGuiConsent=auto` 预批准 |
+| `blender_py` 里写 `wm.read_factory_settings` | 直接执行 → addon 被卸掉、整条 GUI 通道报废                         | 默认拦下回 `factory_reset_blocked`（附替代做法）；确需重置传 `allow_factory_reset=true`，或改走 headless / worker                                                                                                                                                     |
+| headless / job 的相对 `script_file` / `file` | 按 Gateway cwd（DSH profile）解析；`.blend` 不校验，先起进程再报错 | 按 `workdir → 会话工作区 → DSH_BLENDER_WORKSPACE/DSH_WORKSPACE/DSH_PROJECT_DIR → cwd` 解析并在提交前校验；缺文件回 `input_missing`（带 `tried`/`bases`），**不起进程**；回执多一行 `path_base`，只落到宿主 cwd 时点名"回落"                                           |
+| `blender_run`                                | 只有 submit/render/调参                                            | 新增 `action="worker"`：持久无头内核（同进程连续 `exec`/`see`/`watch`）+ `checkpoint`/`revert`/`checkpoints` 文件级 undo                                                                                                                                              |
+| worker `start` / `stop` 回执                 | 成功也写 `FAIL`（快照没有 `ok` 字段）；stop 睡 300 ms 就断言"已停" | 判据取信封；`start` 等 ready（未就绪写 `pending` + `next_action=status`），`stop` 等真退出（`stopped/alive/signaled`），并发 start 共享同一次启动（`joined:true`）                                                                                                    |
 
 计数不变：6 tools / 38 families / 269 ops / 25 registered addon commands（+ping=26 wire）/ 29 routes / protocol 12。
 没有新增工具、没有新增路由（consent 走 `/lease` 的 query-string 形式，worker ops 走已有 `/worker`）。
@@ -151,4 +152,3 @@ v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N
 3. **重启 DSH**；回滚后的 v2.6.2 是 15 工具面，按 §0.3 对照表换名调用；`addon_version` 应回到 v1.10 / protocol 11，catalog 应回到 34 family / 228 op。
 4. v2.6.2 tag 自带 `lib/` 与旧 `runtime/*.mjs`，不需要构建；v3.0.0 的 `lib/runtime` 与 `.ts` 不要混用。
 5. 回滚演练记录保存在本地重构工作区，不随仓库发布。
-

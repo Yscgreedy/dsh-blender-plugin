@@ -70,16 +70,27 @@ export class JobSurface {
         }
       if (op === 'cancel')
         return { ok: true, op, ...this.queue.cancel(caller, String(payload.id || '')) }
-      if (op === 'list')
+      if (op === 'list') {
+        const filter = {
+          state: typeof payload.state === 'string' ? payload.state : undefined,
+          kind: typeof payload.kind === 'string' ? payload.kind : undefined,
+          owner: typeof payload.owner === 'string' ? payload.owner : undefined,
+          sinceMs:
+            Number(payload.sinceMs ?? payload.since_ms) > 0
+              ? Number(payload.sinceMs ?? payload.since_ms)
+              : undefined,
+        }
+        const total = this.queue.list(filter).length
+        const limit = Math.trunc(Number(payload.limit) || 0)
+        const offset = Math.max(0, Math.trunc(Number(payload.offset) || 0))
         return {
           ok: true,
           op,
-          jobs: this.queue.list({
-            state: typeof payload.state === 'string' ? payload.state : undefined,
-            kind: typeof payload.kind === 'string' ? payload.kind : undefined,
-            owner: typeof payload.owner === 'string' ? payload.owner : undefined,
-          }),
+          jobs: this.queue.list({ ...filter, limit, offset }),
+          total,
+          offset,
         }
+      }
       if (op === 'perf') return { ok: true, op, perf: this.queue.perf() }
       return {
         ok: false,

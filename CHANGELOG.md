@@ -2,6 +2,196 @@
 
 ## Unreleased
 
+### 2026-11-21 一条命令安装/升级：`scripts/install-dsh.mjs`
+
+> 实测痛点：手工 `npm pack` + `robocopy /MIR` + 恢复 `runtime/ext` + reload + 手工 attach/验证，
+> 一次 ~40–60 s，且镜像会把 `runtime/ext`（16.8k 文件）删掉（忘记恢复 → `ext.*` 静默失效）。
+
+- **`npm run dsh:install`（pack）**：`npm pack --ignore-scripts --json --dry-run` 只取发布清单
+  （不产 tarball、不跑 prepack），按内容 sha256 只复制变化文件；只删除"上次 manifest 里有、这次没有"的
+  文件；`runtime/ext` / `node_modules` / `__pycache__` 永不删除。二次运行复制 0 个文件。
+- **`npm run dsh:link`（开发）**：把 profile 依赖改成 `link:<repo>`（备份 package.json + pnpm install），
+  之后 `npm run dsh:reload` = build + HMR + 自证，秒级。
+- **reload 自动化**：复用 `lib/host/reload/profile.js` 的 `triggerProfileHmr`（与
+  `blender_session action=reload` 同一行注释、原子写），轮询 `/health` 等 Gateway 换 pid。
+- **自证**：`/health`（pid/uptime/provenance）+ `/status`（pluginVersion/verdict）+ `POST /plan`
+  `catalog`（ops/families）一次核对；失败给出 `!` 行与下一步。
+- **`--with-addon`**：把 `extension/dsh_blender_bridge` 复制进 Blender `user_default` 扩展目录
+  （自动挑最高版本，`--blender-version` 可指定），省掉 Install from Disk；代码生效仍需 Reload Scripts。
+- **`--dry-run` / `--json` / `--no-build` / `--no-reload` / `--verify-only`**；profile 解析支持
+  `--profile` / `DSH_PROFILE_DIR` / `DSH_HOME/profiles/$DSH_PROFILE` / 最新 patch 兜底。
+- **文档**：新增 [docs/安装与升级-加速方案.md](docs/安装与升级-加速方案.md)（实测表、方案对比、安全边界、
+  已验证结果、后续优化：incremental、清单缓存、tarball、attach 自动化）；README / 操作教程 / 部署SOP /
+  AGENTS 命令表同步。
+- **测试**：`tests/unit/js/install-dsh.test.ts`（依赖解析、merge/protected、profile 解析、Blender 版本
+  目录、CLI dry-run 不落盘）。实测首次安装复制 1338 文件、二次复制 0；addon dry-run 正确识别 5.3 目录。
+
+### 2026-11-21 缺陷记录批次 4–6：场景指纹 / 归属分桶 / argv / 作业列表边界 / 动画域
+
+> 同一份审核（`tmp/dsh-blender-plugin_缺陷审核与修复计划_20261121.md`）的收尾三批。
+
+- **C-6（跨调用指纹）**：act 回执透出 `scene_fingerprint:{before,after}`（包装层早已算出
+  `state_before/state_after`，以前被丢掉）；宿主按 **DSH 会话**记住上一次收工时的指纹
+  （`src/tools/py/scene-baseline.ts`，进程内、64 会话上限），下次调用若 `before` 与基线不同，
+  回执加「⚠ 场景自上次调用后已变（sig a→b）」并给 `scene_drift:{from,to,facesBefore,at}`。
+  超时 / 老后端没有 `state_after` 时不更新基线，不编造 drift。
+- **C-7（变更归属 + 假阳性）**：`changed_objects_mine` / `changed_objects_other` 按本次
+  `write_scope` 分桶（owner / 未声明 scope 全算 mine；other 与 `scope_violations` 同源）。
+  `state_probe` 的坐标签名从**跨对象共享递减预算**改成**每对象固定上限**——增删一个对象不再让
+  后面一批对象在 "有坐标 / truncated" 之间翻转，消掉没人动过却出现在 `changed_objects` 里的假阳性。
+- **C-16（产物）**：包装层新增 `_dsh_artifacts()`，回执带 `artifacts[]`（`.blend` 与
+  `Render Result` 的真实路径/字节数）与「产物：…」文本行；与 `file_ops` / 场景变更分开陈述。
+- **C-10（sys.argv）**：三处 argv 拼装改成「调用方 args 在前、注入的 outdir 固定在 `--` 之后的
+  最后一位」(`core/queue/job-args.ts`、`execution/headless/script.ts`、`execution/jobs/script/preload.ts`)，
+  脚本按 `sys.argv[sys.argv.index('--')+1:]` 取参数不会再先吃到目录名。
+- **C-13（作业列表边界）**：`list` 默认 `owner=me`（`all` / 具体 session id 可放开）、默认 20 条、
+  支持 `limit/offset/since_ms`；回执给 `total/offset`，文本最多列 20 行并提示剩余；
+  `JobQueue.list` 支持切片与时间窗；ledger 超过 4 MB 时裁到最近 2000 行（原子写）。
+- **C-14（动画域）**：`state_probe` 的对象签名新增 `_state_anim_sig`（action 名 + slot id +
+  fcurve 数 + 每条前 8 个关键帧），只改 fcurve 不再 `changed=false`；`world_snapshot` 的
+  `animation` 与 `anim_rig_report` 的 action 行补 `fcurve_count`；`worker.py` 的 layered
+  action 读取改成 `bpy_extras` → `strip.channelbag` 双通道，两条都失败时把
+  `actions_unreadable` 写进 digest 域，不再静默 `[]`。
+- **测试**：新增 `act-wrapper-contract`、`render-device-headless`、panel-ops 用例；job-queue 增
+  argc 顺序 + list 分页；py-outcome 增 drift；session 增 owner 过期 grant / viewer 借读。
+  全量 `vitest` 157 files / 1435 passed；`pytest tests/unit/python` 389 passed；生成脚本
+  （act wrapper / headless job.py）均过 `py_compile`。
+
+### 2026-11-21 缺陷记录批次 0–3：wait_ms / checkpoint / 归属 / 作业 / headless 设备
+
+> 来源：`tmp/dsh-blender-plugin_缺陷记录_20261121.md` 审核后的修复（审核结论见
+> `tmp/dsh-blender-plugin_缺陷审核与修复计划_20261121.md`）。批次 0–3 已落地，批次 4–6 待做。
+
+- **C-4（py 排队）**：`/act` 对带调用方身份的 py 调用不再先过 `leaseGate`（那会在等待逻辑
+  之前就回 `py_busy`，实测 6–12 ms），授权与排队统一走 `beginPy/waitForPyLock`；`wait_ms` 现在
+  真的等锁，等满才回 `py_busy`。新增集成用例（等 300 ms 的 holder 释放后 200 成功）。
+- **C-3（scoped checkpoint）**：窄 scope 下不再先发一次必然 `scope_required` 的 `/txn` 快照；
+  回执写 `checkpoint=none` + "**没有发起快照请求**"。同时修掉"快照成功却被抹成 null"的覆盖。
+  对象级 `txn mark/revert` 仍是 scoped 场景的回退路径。
+- **C-11（失败回执）**：`py_error` 文案改为"脚本内部抛异常（通道正常；异常前的写可能已留下）"；
+  失败回执新增 `stderr / traceback / script_error / executed_before_error`，stdout 上限 1200 → 8000。
+  `traceback` 保留 `File "…"` 行（专用脱敏），stdout/stderr 仍是行级过滤口径。
+- **C-16（产物型执行）**：act 前导识别 `render.render` / `wm.save_mainfile` / `export_*` /
+  `object.export_*`，回执给 `file_ops=true` 并改说"场景不变是预期"；长任务告警降级为旁注。
+- **C-5（共享视口）**：`SEE` 行注明"共享用户视口，不是调用方机位"；帧去重键按调用方
+  （agentId/dshSessionId）分键，别人的画面不会再让本次静默少图。
+- **C-12（缺参）**：`presence / grants / heartbeat / detach` 移出"必须 session_id"，按调用方
+  自己的会话解析；schema 描述同步。
+- **C-15（scopes）**：工具描述写明"多个用英文逗号分隔"（工具契约仍是字符串；数组只在网关直连时可用）。
+- **C-1（start 指错方向）**：`session_already_available` 区分 mine / 借读：非 owner 回执明说
+  "attach 只能拿只读 viewer，要自己的窗口先请 owner release"，evidence 带 `is_mine/viewer/owner`。
+- **C-2（归属）**：owner 心跳过期（`owner=null`）时主控 `grant` 会先重新认领再授权，
+  不再永远 `scope_forbidden`；错误按 `owner_expired` 分开说。`callerFromExec` 不再用
+  "缺 parentAgentId" 覆盖显式 `role=subagent`。
+- **附加②（borrowed）**：写失败证据的 `is_mine / borrowed` 与 `status/list` 用同一判据。
+- **C-8（作业归属）**：`canManageJob` 先按 host / owner / parent / 同会话 main 判定，最后才用
+  `dshSessionId` 区分；子代理独立 sessionId 时父 agent 终于能 `collect` 它的作业。
+- **C-9（headless 设备）**：headless 作业前导新增设备枚举（默认 `device=auto`），
+  `device / compute_device_type` 进入 `HEADLESS_KEYS`，结果按 render 同一解析器写进
+  `parsed.applied`（`devices_used / fell_back_to_cpu / warnings`）。生成脚本通过 `py_compile`。
+- **附加③（测试隔离）**：consent 测试固定落一个 manual 策略锚点，不再读操作者真实的
+  `~/.dsh/dsh-blender.config.json`（本机 `virtualGuiConsent:auto` 曾让 9 条用例假红）。
+- **测试**：新增 `render-device-headless`、`panel-ops`、job-owner/py/consent 回归用例；
+  全量 `vitest` 1421+ 通过（隔离 HOME/workDir）。
+
+### 2026-11-21 「Blender 会话」面板补运维面：连接 / 通道 · 作业 · 诊断 · 设置
+
+> 来源：面板实测反馈「tab 太简陋，很多 DSH 设置与状态看不到」。这次把已经现成、零 Blender 往返的
+> 只读数据面接进面板，**不新增任何会话写路径**（仍然只有 `consent_approve|deny` 与 `consent_policy_set`）。
+
+- **连接 / 通道（常显）**：后端地址 + 来源（默认 / 宿主注入 / 插件配置 / 本地面板覆盖）、Gateway
+  `pid`、uptime、RSS、插件版本与 `provenance` verdict、通道「最近 ok 多久前 + 在飞数 + 最后命令」、
+  AI 暂停、写租约（holder / 剩余 / scope / holder 是否已退出）、渲染是否在跑（已多久 + 场景名）、
+  以及三份快照里任何一份失败时的原文（不吞错）。数据源：`/host/state` + `/health`。
+- **作业（可折叠）**：`运行中 N ｜ 共 M` + 最近 6 条作业（短 id / kind / 中文状态 / 耗时），
+  每行「日志」读 `/host/jobs/log?id=…&tail=6000` 并把 stdout+stderr 尾部渲染在面板里。
+- **诊断（按需，不轮询）**：点「运行诊断」才取 `/status` + `/doctor`，显示 verdict、插件版本、
+  `provenance`、addon 就绪实例、Blender 版本/exe、缺口摘要与修法、`next_actions`，以及
+  `/doctor.config` 的配置摘要（HTTP / Gateway / 工作目录 / Blender exe / 配置文件 / 租约 TTL / 平台）。
+  诊断不 spawn 任何进程。
+- **设置（本机）**：后端地址覆盖（校验 `http(s)://`、去尾斜杠、空 = 清除；只写 localStorage
+  `dsh-blender-plugin:backend`）、轮询间隔（`dsh-blender-plugin:panel:ops-poll-ms`，800–15000 ms，
+  有作业/渲染时自动 1000 ms）、原始快照开关（排错用，截断 4 KB）。**这些都不碰 Gateway 的
+  权限面**：不改 owner / grant / 策略文件。
+- **认领表**：每行补 kind / status 与「复制 attach」命令（`blender_session action=attach
+  instance_id=…`），并把 instanceId 加粗 —— 多 agent 共机时先看清"这个窗口是谁的"。
+- **轮询策略**：三条只读快照走同一条共享轮询（多面板位复用），空闲 2500 ms、忙时 1000 ms，
+  单个请求失败只进 `problems` 行，其余块照常显示。
+- **测试**：`tests/unit/js/blender-session-panel-ops.test.ts`（14 条：投影合并、缺数据降级、
+  诊断投影、四块渲染、作业日志、折叠、设置写入、认领表复制、URL/覆盖规范化、全失败不抛）。
+
+### 2026-11-21 面板迁到会话视图右侧栏 + 策略可在面板里切换
+
+- **容器迁移（用户实拍：折叠条贴在输入框上方、跟对话流无关）**：主体改成右侧栏的 tab 类型
+  `blender-session`（`sidebarRightTabs.register` + 两个 keyed 槽位 `sidebar.right.pane.tab` /
+  `sidebar.right.pane.tab.title`，标题单独注册）；入口是会话头部 `conversation.session.header.actions`
+  的按钮（有 pending 带徽标数），右侧栏服务缺失时落 `shell.overlay` 抽屉。**输入框上方只剩一行**
+  `Blender · N 待批准`（无 pending 灰显，点它开面板），卡片/认领表/策略都不再放那里。
+  展开状态换键 `dsh-blender-plugin:panel:tab-open`（并清理旧 key），避免状态错位。
+- **策略区（折叠行补 `待批准 N ｜ 认领 M`）**：manual / auto / deny 三态切换，显示当前值与来源
+  （`default` / `env:…` / `file:…`）与「改完立即生效，无需重启」；**切 auto 需二次确认**
+  （第一下变「确认自动批准」并写清"以后每次 start 都直接放行、不再询问"）。
+- **新写路径（只此一条）**：`POST /lease {"action":"consent_policy_set","mode":"manual|auto|deny"}`。
+  只接受回环 Origin（或无 Origin）+ 无 DSH 身份头；带 `X-DSH-*` 一律 403 `consent_human_only`
+  （agent 改不了策略）。只写 `virtualGuiConsent` 一个键（其它键不动），写前留 `.bak`，原子写；
+  回执 `{ok, policy:{mode,policy,auto,source,file}, effective:'immediate', audit:{at,origin}}`。
+  env `DSH_BLENDER_VIRTUAL_GUI_CONSENT` 存在时面板禁用控件并提示「被环境变量锁定」，
+  POST 回 409 `policy_locked`。`OPTIONS /lease` 为浏览器预检回 204 + CORS 头。
+- **保留与节流（验收侧提出）**：`<workDir>/consent` 超过 7 天或超出最近 200 个的请求文件自动清理
+  （pending/approved 不删，10 分钟扫一次）；同一 caller **60 s 内最多一条新请求**
+  （`DSH_BLENDER_CONSENT_MIN_INTERVAL_MS`，默认 60000），被挡时 `start` 回 `reason=rate_limited`、
+  `consent_request` 回 `consent_rate_limited`。
+- **测试隔离**：新增 `tests/helpers/consent-dir.ts`，`display-capabilities` 与 `virtual-gui-lifecycle`
+  也改用临时 consent 目录 —— 此前它们的 `caller=h/s/a` 会写进操作者真实的 workDir，出现在正在用的面板里。
+
+### 2026-11-21 virtual-gui 人工确认面板：从"复制 uuid 去终端"变成"在对话里点一下"
+
+> 来源：BlenderProject 实测（插件 3.3.0）。`start kind=virtual-gui` 首次回 `consent_required`，回执要人
+> 复制 request_id → 开终端 → 粘贴 curl → 回对话催 agent 再调一次；第一步就卡住，virtual-gui 的真能力
+> （有 GL 的真窗口、撤销栈、`screen.screenshot`、`render.opengl`）对使用者等于不存在。
+
+- **会话视图常驻「Blender 会话」面板**（`src/client/index.js`，挂在 `conversation.input.dock`，`order=80`）：
+  待批准卡片（请求方 agent/session/role、动作、资源影响「当前实例数 / 上限 / 低内存降到 2」、有效期倒计时、
+  批准/拒绝两个按钮，按钮自带 `handle`）；认领表（主 GUI 与每个 virtual-gui 一行：instance id、owner 会话、
+  `is_mine`、viewer、borrowed、heartbeat 年龄、归属剩余有效期、当前 grant）；顶部常显策略与来源。
+  **auto 时常显「自动批准已开」**，不允许只在配置文件里体现。面板只读 + 两个动作，没有任何写路径。
+- **审批策略可配、热生效**（`runtime/core/sessions/consent-policy.ts`）：`auto` / `manual`（默认）/ `deny`。
+  来源优先级 env `DSH_BLENDER_VIRTUAL_GUI_CONSENT` → profile 插件配置键 `virtualGuiConsent`（宿主在
+  拉起 Gateway 时注入）→ 配置文件 / `DSH_BLENDER_CONSENT_POLICY_FILE`（**每次调用重读，≤250 ms 生效**）。
+  旧名 `ask` / `allow` 继续认；回执里的 `policy:allow` / `reason:policy_denied` 语义不变。
+- **批准即续跑**：`start` 新增 `wait_ms`（默认 20000，上限 120000，0=立刻回 `state=pending`）。
+  manual 下 `start` 落请求后等待人类决定，面板点批准 → **同一次调用** 继续（实测 14 ms），
+  回执 `consent_source=approved_request`；超时回 `state=pending`，再 start 一次即消费（仍然只消费一次）。
+- **面板数据面（只读）**：`GET /lease?action=consent_panel&dshSessionId=<会话 id>` → `policy` /
+  `resources` / `requests[]` / `sessions[]`（与 `blender_session status` 同一份 `sessionView`：
+  owner / `is_mine` / `borrowed` / `heartbeat_age_ms` / `expiresInMs` / grants）。只答回环来源
+  （`127.0.0.1` / `localhost` / `dsh-app://`）或无 `Origin` 的终端请求，其它来源 403 `origin_not_allowed`。
+- **`/lease` 的 GET 语义修正**：回执里一直宣传的 `curl.exe -s "…/lease?action=consent_approve&requestId=…"`
+  在 HTTP 面其实是 404（路由只登记 POST，测试都直接调 `dispatchSessionAction`，所以没暴露）。现在 `/lease`
+  接受 GET，但**只放行 `consent_panel` / `consent_approve` / `consent_deny` / `consent_status`**；
+  其余动作的 GET 仍然回 404（与 POST-only 路由表时代的状态码一致，正文说明 GET 的用途），
+  不让 GET 偷偷改租约/会话状态。
+- **热更不丢面板状态**：待批准请求带 `handle` 落盘到 `<workDir>/consent/<request_id>.json`，Gateway 换代后
+  `consentRequestsAll()` 从磁盘恢复（`waitForConsentDecision` 用监听器即时唤醒，没有轮询延迟）。
+- **工具面**：`blender_session` 新增 `wait_ms`；回执顶层补 `consent_source`；`consent_status` 回
+  `mode` / `auto` / `policy_source`；`consent_required` 正文第一句改成"在这个会话的「Blender 会话」
+  面板里点批准即可"，终端命令降为等价通道。
+- **闸门收口（验收反馈同日，最高优先级）**：模型侧 `consent_approve` / `consent_deny` 过去能批准**自己刚落的**
+  请求（`agentConsentAction` → `registry.approveConsent(id,'agent:…')`），等于没有闸门。现在
+  ① 从 `blender_session` 动作表移除这两个动作（误调回 `consent_human_only`）；② HTTP 面**任何带 DSH 身份头**的
+  `consent_approve` / `consent_deny` 一律 403 `consent_human_only`（agent 直接 curl 也过不去，不是只删 schema）；
+  ③ `registry.approveConsent/denyConsent` 注明"非 caller 授权面，只服务人类通道与测试"；④ 无人值守仍走
+  `virtualGuiConsent=auto`（人写的配置，不经过任何工具调用）。
+- **验收**（`tests/unit/js/virtual-gui-consent-panel.test.ts`，15 条）：卡片 ≤1 s 出现、批准→同一次 start
+  落地 ≤2 s 且 `consent_source=approved_request`、auto 不弹卡片且面板常显、deny `policy_denied` 且
+  spawn=0、认领表与 `status` 逐字段一致、换代后从磁盘恢复、user-gui claim/release/viewer 语义不变、
+  非回环 Origin 403、`wait_ms=0` 回 pending 后一次 start 即消费、agent 自批 403 且请求仍 pending。
+- **证据边界（别当成时延保证）**：手动批准 → 落地的 **14 ms / 卡片 3 ms 来自 fake provider**（同一份
+  registry + lifecycle 代码路径），HTTP 面（`consent_panel` / `consent_approve` / `consent_deny` / CORS /
+  Origin 门）才是真 Gateway 真请求；本机没有就绪的 virtual-gui provider（helper + Blender），**真 spawn 链路
+  未在本机跑通**。面板没有截图/录屏（沙箱无浏览器自动化、React 未随包安装）：证据是 `panelTree` 的 HTML
+  预览 + 文本快照 + 渲染断言（按钮 `data-request`、auto 条款、认领表字段）。
+
 ## v3.3.0（2026-11-21）
 
 ### 2026-11-21 发布收口：3.3.0 · 行预算拆分 · 口径统一

@@ -7,8 +7,8 @@
 // **失败不静默**：做不了的都进 needsRestart。
 import type { HttpRouteDeps } from '../deps.js'
 import { objArg } from '../deps.js'
-import { hostProvenance } from '../../../core/evidence.js'
-import type { HostLayerProvenance } from '../../../core/evidence.js'
+import { hostProvenance } from '../../../foundation/evidence.js'
+import type { HostLayerProvenance } from '../../../foundation/evidence.js'
 import {
   decideReloadMode,
   emptyReloadReport,
@@ -17,6 +17,7 @@ import {
 } from '../../../core/hot-reload.js'
 import type { ReloadMode, ReloadReport } from '../../../core/hot-reload.js'
 import type { SessionResult } from '../../../core/sessions/types.js'
+import { hostLayerAtEdge } from '../health.js'
 
 export type ControlResult = SessionResult<Record<string, unknown>>
 
@@ -110,9 +111,12 @@ export function buildReloadReport(
   payload: Record<string, unknown>,
 ): ReloadReport {
   const t0 = Date.now()
-  const prov = objArg(E.engineProvenance({}))
+  // 4a：宿主层快照在 HTTP 边界显式取一次（清单路径来自 env）—— engineProvenance 与
+  // hostProvenance 共用同一份，foundation 不再自己发现 env/扫盘两次。
+  const hostSnap = hostLayerAtEdge()
+  const prov = objArg(E.engineProvenance({ layers: { host: hostSnap } }))
   // 宿主层必须吃 fresh：刚构建完就问，不能命中 /health 的短 TTL 缓存
-  const host = hostProvenance(true)
+  const host = hostProvenance(true, hostSnap)
   const runtimeStale = runtimeVerdictOf(prov) === 'stale'
   // current / stale = 有可信的「已装载」两侧；unknown = 判不了（缺清单 / 别人的清单）
   const hostKnown = host.verdict === 'current' || host.verdict === 'stale'

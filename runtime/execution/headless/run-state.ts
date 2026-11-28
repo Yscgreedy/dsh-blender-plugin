@@ -1,4 +1,4 @@
-import { startHeartbeat } from '../../core/progress.js'
+import { startHeartbeat } from '../../foundation/progress.js'
 import { workdirStagingWarning } from '../../proc_env.js'
 import type { BuiltHeadlessScript } from './script.js'
 import type { HeadlessDeps, HeadlessRunRec, PreparedHeadless } from './types.js'

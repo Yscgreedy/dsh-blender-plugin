@@ -57,10 +57,11 @@ describe('http lease module', () => {
   it('returns 409 envelope from leaseGate for a foreign holder', () => {
     resetLease()
     leaseAcquire('plugin-a', null, false)
-    const gate = leaseGate({ holder: 'plugin-b' }) as any
+    // null registry = the legacy lease path (no caller header in this unit test).
+    const gate = leaseGate({ holder: 'plugin-b' }, null) as any
     expect(gate).toMatchObject({ ok: false, error: 'leased', holder: 'plugin-a' })
     expect(gate.holderScope).toBeNull()
-    expect(leaseGate({ holder: 'plugin-a' })).toBeNull()
+    expect(leaseGate({ holder: 'plugin-a' }, null)).toBeNull()
   })
 
   it('reclaims the lease of a dead holder', () => {

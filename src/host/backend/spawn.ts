@@ -10,6 +10,25 @@ import { ensureHostManifest } from './host-manifest.js'
 
 let child: ChildProcess | null = null
 
+/**
+ * Profile-level consent mode for virtual-gui (plugin config key
+ * `virtualGuiConsent`). The Gateway reads its policy from the environment and
+ * from the config file; the profile YAML lives only in the host, so the host
+ * hands it over when it spawns the Gateway. An explicit env value still wins.
+ */
+let consentMode: string | null = null
+
+export function setGatewayConsentMode(mode: unknown): void {
+  const v = String(mode === undefined || mode === null ? '' : mode)
+    .trim()
+    .toLowerCase()
+  consentMode = v === 'auto' || v === 'manual' || v === 'deny' ? v : null
+}
+
+export function gatewayConsentMode(): string | null {
+  return consentMode
+}
+
 function openGatewayLog(): number | null {
   try {
     return openSync(gatewayLogPath(), 'a')
@@ -47,6 +66,11 @@ export function spawnChild(port: number): string {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       ...(hostManifest ? { [HOST_MANIFEST_ENV]: hostManifest } : {}),
+      // Profile key virtualGuiConsent → Gateway policy. An explicit environment
+      // value is the human's stronger statement and is never overwritten.
+      ...(consentMode && !process.env.DSH_BLENDER_VIRTUAL_GUI_CONSENT
+        ? { DSH_BLENDER_VIRTUAL_GUI_CONSENT: consentMode }
+        : {}),
     },
     stdio: logFd === null ? 'ignore' : ['ignore', logFd, logFd],
     detached: false,

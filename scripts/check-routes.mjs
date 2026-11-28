@@ -4,8 +4,9 @@
  * scripts/check-routes.mjs — verify the generated route tables are fresh .
  *
  * config/routing.json is the single routing source; scripts/gen-routes.mjs renders
- * the two generated tables. This gate fails when a generated file is missing,
- * stale after a routing edit, or was hand-edited (the header hash no longer matches).
+ * the generated contract table (runtime/contracts/routes.generated.ts). This gate fails when the
+ * generated file is missing, stale after a routing edit, or was hand-edited (the header hash no
+ * longer matches).
  */
 import fs from 'node:fs'
 import path from 'node:path'

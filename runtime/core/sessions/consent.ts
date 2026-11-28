@@ -2,29 +2,24 @@
 //
 // The model can never mint consent: the DSH host asks the human, then calls the
 // internal session action to issue a short-lived token bound to the caller.
+//
+// 3.3.1: the policy (auto / manual / deny) lives in consent-policy.ts and is read
+// per call, so the human can change it in the profile config and the panel shows
+// the change immediately. 'allow' means pre-approved, 'ask' means a request must
+// be approved by the human, 'deny' refuses.
 import { randomUUID } from 'node:crypto'
 import { fail } from './types.js'
+import { CONSENT_POLICY_ENV, resolveConsentPolicy } from './consent-policy.js'
+import type { ConsentMode, ConsentPolicy } from './consent-policy.js'
 import type { CallerIdentity, SessionResult } from './types.js'
 
 export const CONSENT_TTL_MS = 30_000
 
-/**
- * Policy switch for the human-consent step. The model can never mint consent,
- * and 3.1 offered the human no surface that could either: a subagent's
- * action=start simply failed with consent_required and nothing was recorded.
- * 'ask' keeps the gate and files a visible request; 'allow' is the human
- * pre-approving every virtual-gui start for this host; 'deny' refuses.
- */
-export const CONSENT_POLICY_ENV = 'DSH_BLENDER_VIRTUAL_GUI_CONSENT'
-export type ConsentPolicy = 'allow' | 'deny' | 'ask'
+export { CONSENT_POLICY_ENV }
+export type { ConsentMode, ConsentPolicy }
 
 export function consentPolicy(env: NodeJS.ProcessEnv = process.env): ConsentPolicy {
-  const raw = String(env[CONSENT_POLICY_ENV] || '')
-    .trim()
-    .toLowerCase()
-  if (['allow', 'allowed', 'on', 'yes', 'true', '1'].includes(raw)) return 'allow'
-  if (['deny', 'denied', 'off', 'no', 'false', '0'].includes(raw)) return 'deny'
-  return 'ask'
+  return resolveConsentPolicy(env).policy
 }
 
 interface ConsentToken {
@@ -75,25 +70,52 @@ export interface ConsentFailureExtra {
   requestId?: string
   expiresAt?: number
   policy?: ConsentPolicy
+  /** auto | manual | deny (what the human panel shows). */
+  mode?: ConsentMode
+  /** Where that policy came from (env / file / default). */
+  policySource?: string
+  /** True when a manual request is filed and the start waited long enough to give up. */
+  pending?: boolean
+  /** How long this start waited for a human decision. */
+  waitMs?: number
+  /** Throttle: how long until this caller may file a fresh request. */
+  retryAfterMs?: number
 }
 
 export function consentFailure<T = Record<string, unknown>>(
-  reason: ConsentReason | 'policy_denied' | 'request_denied',
+  reason: ConsentReason | 'policy_denied' | 'request_denied' | 'rate_limited',
   extra: ConsentFailureExtra = {},
 ): SessionResult<T> {
+  const resolved = resolveConsentPolicy()
+  const policy = extra.policy || resolved.policy
+  const mode = extra.mode || resolved.mode
+  const pending = extra.pending === true
   return fail(
     'consent_required',
     'session',
     'virtual-gui requires explicit human consent (' + reason + ')',
-    'a virtual Blender window is a visible process on the human desktop: ask them to run the ' +
-      'approve command from this receipt (or set ' +
-      CONSENT_POLICY_ENV +
-      '=allow on the Gateway host), then call action=start again',
+    reason === 'rate_limited'
+      ? 'this caller filed a consent request less than a minute ago: approve it in the panel, wait ' +
+          String(Math.ceil(Number(extra.retryAfterMs || 0) / 1000)) +
+          's, or set the policy to auto/deny in the panel'
+      : pending
+        ? 'a request is waiting in the Blender session panel of this conversation: approve it there and ' +
+          'the same start completes; if it already returned, call action=start again (an approval is ' +
+          'consumed once)'
+        : 'ask the human to approve the request in the Blender session panel (or run the approve command ' +
+          'from this receipt); ' +
+          CONSENT_POLICY_ENV +
+          '=allow on the Gateway host pre-approves every start',
     {
       reason,
-      policy: extra.policy || consentPolicy(),
+      policy,
+      mode,
+      policy_source: extra.policySource || resolved.source,
       request_id: extra.requestId || null,
       request_expires_at: extra.expiresAt || null,
+      state: pending ? 'pending' : null,
+      wait_ms: extra.waitMs ?? null,
+      retry_after_ms: extra.retryAfterMs ?? null,
       options: [
         { action: 'attach', label: 'attach the running Blender window (no consent needed)' },
         { action: 'start', label: 'start a virtual Blender window after human approval' },

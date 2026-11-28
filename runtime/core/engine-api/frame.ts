@@ -1,7 +1,7 @@
 // engine API：截图/渲染性能/对象精简
 import fs from 'node:fs'
 import { LIVE_PNG_WIN, LIVE_PNG_WSL } from '../../paths.js'
-import { KERNEL_BOOTSTRAP } from '../kernel/index.js'
+import { KERNEL_BOOTSTRAP } from '../../foundation/kernel/index.js'
 import type { EngineApiDeps } from './index.js'
 
 export function createFrameApi(E: EngineApiDeps) {
