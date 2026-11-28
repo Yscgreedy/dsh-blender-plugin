@@ -1,7 +1,7 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-28T03:53:44.820Z",
+  "generatedAt": "2026-11-28T07:24:49.318Z",
   "mode": "warn",
   "totals": {
     "all": 1574,
