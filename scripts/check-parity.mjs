@@ -83,6 +83,15 @@ const DECLARED_CATALOG_ADDITIONS = [
   { family: 'toon', ops: 2 },
 ]
 
+// Declared op additions for families that **already exist** in the base catalog.
+// 3.3 adds exactly one op to an existing family: contract.fingerprint (C-14 — the
+// geometry fingerprint was implemented long before it was listed in PLAN_CATALOG,
+// so blender_op(op="catalog") could not see it). Declaring the op here instead of
+// tolerating an ops_count delta keeps every downstream comparison strict: the op is
+// spliced into the base family at the same index the current catalog uses, and the
+// resulting base op list must equal the current one exactly (see the injection below).
+const DECLARED_CATALOG_OP_ADDITIONS = [{ family: 'contract', ops: ['fingerprint'] }]
+
 // 3.2: read-only ops added on top of the base whitelist (network reads that do not
 // touch the scene, so they stay exempt from the write lease).
 const DECLARED_READ_ONLY_ADDITIONS = [
@@ -92,6 +101,8 @@ const DECLARED_READ_ONLY_ADDITIONS = [
   'anim_rig_report',
   'anim_deform_audit',
   'toon_outline_audit',
+  // 3.3: contract.fingerprint only hashes scene/geometry state (no writes)
+  'fingerprint',
 ]
 
 // Declared user-visible catalog text patches: exact base -> current replacements
@@ -360,6 +371,42 @@ try {
     pathToFileURL(path.join(ROOT, 'lib', 'runtime', 'http', 'routes', 'index.js')).href
   )
 
+  // Declared op additions for existing families (DECLARED_CATALOG_OP_ADDITIONS).
+  // planOpNames() / catalogFingerprint() read PLAN_CATALOG lazily, so splicing the op into
+  // the imported base array is enough; the pre-mutation absence is asserted first, and the
+  // post-injection lists must match the current catalog exactly (no tolerated delta).
+  for (const decl of DECLARED_CATALOG_OP_ADDITIONS) {
+    const curFamily = curCatalog.PLAN_CATALOG.find((e) => e.f === decl.family)
+    if (!curFamily)
+      throw new Error('declared op addition references a missing current family: ' + decl.family)
+    const baseFamily = baseEngine.PLAN_CATALOG.find((e) => e.f === decl.family)
+    if (!baseFamily)
+      throw new Error('declared op addition references a missing base family: ' + decl.family)
+    for (const op of decl.ops) {
+      const index = curFamily.ops.indexOf(op)
+      if (index < 0)
+        throw new Error('declared op addition missing from current ' + decl.family + ': ' + op)
+      if (baseFamily.ops.includes(op))
+        throw new Error('declared op addition already present in base ' + decl.family + ': ' + op)
+      baseFamily.ops.splice(index, 0, op)
+      ok(
+        'declared-op-' + decl.family + '-' + op,
+        'declared catalog op addition injected into base',
+        {
+          family: decl.family,
+          op,
+          index,
+        },
+      )
+    }
+    eq(
+      'declared-ops-' + decl.family,
+      'declared op addition ' + decl.family + ' ops',
+      baseFamily.ops,
+      curFamily.ops,
+    )
+  }
+
   // 1. Public export set must be identical after the declared engine removals.
   const bKeysRaw = Object.keys(baseEngine).sort()
   const cKeys = Object.keys(curEngine).sort()
@@ -374,7 +421,7 @@ try {
   ok('declared-engine-removals', 'declared engine exports removed', DECLARED_ENGINE_REMOVALS.length)
   ok('exports-count', 'engine exports', bKeys.length)
 
-  // 2. Catalog fingerprint (base + declared additions -> 38 families / 269 ops / 25 commands / 6 tool details).
+  // 2. Catalog fingerprint (base + declared additions -> 38 families / 270 ops / 25 commands / 6 tool details).
   // The 3.1 tool-surface change is declared: toolDetailKeys shrinks 7 -> 6 and
   // the family metadata grows target fields, so the hash itself is not compared;
   // the structural contract counts are.
