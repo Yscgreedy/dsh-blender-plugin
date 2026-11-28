@@ -86,6 +86,37 @@ async function listContextOf(port: number, args: Record<string, unknown>): Promi
   }
 }
 
+/**
+ * 台账 B：文本里的 crew 与 evidence 必须是同一份数据。
+ *
+ * `/status?evidenceOnly=1` 的 `local_evidence.sessions` 是 sessionBriefs() 的投影（只有
+ * id/kind/status/instanceId），`crew[]` 只存在于 `/lease action=list` 的行上 —— 真机就是
+ * 因此出现"文本有 crew、evidence 没有"。这里按 id 把 crew 并回 brief：additive，既有字段
+ * 与顺序不变；行上没有 crew（老 Gateway）或 id 对不上就原样保留。
+ */
+export function withCrewEvidence(
+  evidence: Record<string, unknown> | null,
+  rows: readonly Record<string, unknown>[],
+): Record<string, unknown> | null {
+  if (!evidence) return evidence
+  const briefs = evidence.sessions
+  if (!Array.isArray(briefs)) return evidence
+  const crewById = new Map<string, unknown>()
+  for (const row of rows) {
+    const id = String(row.id || '')
+    if (id && Array.isArray(row.crew)) crewById.set(id, row.crew)
+  }
+  if (!crewById.size) return evidence
+  return {
+    ...evidence,
+    sessions: briefs.map((brief: unknown) => {
+      const rec = asRecord(brief)
+      const crew = crewById.get(String(rec.id || ''))
+      return crew ? { ...rec, crew } : rec
+    }),
+  }
+}
+
 /** scopes 接受数组、JSON 数组字符串，或逗号分隔字符串。 */
 function parseScopes(raw: unknown): string[] | undefined {
   if (raw === undefined || raw === null) return undefined
@@ -266,10 +297,12 @@ export async function executeSession(
     if (!listed.ok) return listed.failure
     // 6a：0 会话也要能看见 local_processes / ports / ports_evidence + 可粘贴的 attach。
     const ctx = await listContextOf(port, args)
+    // 台账 B：/status 的 sessionBriefs 投影不带 crew[]，而文本带 —— 并回去，两边同源。
+    const evidence = withCrewEvidence(ctx.evidence, listed.sessions)
     // 结构化面：文本给人看，evidence/addon 给判据（别让验收只能靠正则扒文本）。
     return {
-      text: formatSessionList(listed.sessions, ctx.evidence, ctx.addon),
-      evidence: ctx.evidence,
+      text: formatSessionList(listed.sessions, evidence, ctx.addon),
+      evidence: evidence,
       addon: ctx.addon,
     }
   }
