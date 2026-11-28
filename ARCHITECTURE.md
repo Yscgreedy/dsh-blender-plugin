@@ -23,7 +23,7 @@
 | Python 源码层 SCC（import + API 字面） | **5 个单点**（P1-1a 收尾） | §7.2 |
 | Python 端口层 SCC | `{core, export}` 互调（交付必须过门，产品语义） | §7.2 |
 | 写鉴权 | **单一入口 + fail-closed**；跳过谓词仍分散 | §2.4、§4.4 |
-| 契约计数 | 6 工具 / 38 family / 270 op / 45 路由行 / 44 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12 | `capability.lock.json` |
+| 契约计数 | 6 工具 / 39 family / 275 op / 46 路由行 / 45 Python 模块 / 25 addon 命令 / 29 HTTP 路由 / protocol 12 | `capability.lock.json` |
 | 测试面 | unit 137 文件 / 1210 passed（2 skipped）；integration 32 / 309；contract 49 / 432；pytest 522 | §7.4、§7.6 |
 
 **评级：Decoupled（主干）/ Coupled（局部）**。仍 Coupled 的只剩 R4：`core→` 域 API 12 条字面 + `geometry↔assembly` 的归属（复核后确认要先做截面策略，不能靠搬文件解）。R2/D3/D4 均已收口。详见 §4。
@@ -155,12 +155,12 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 | ID | FR | 观测面 | 证据 |
 |---|---|---|---|
 | FR1 | 会话取得与授权：attach/claim/heartbeat/release；virtual-gui 需人类同意 | 会话型工具（op/py/see/run） | `src/tools/shared/session.ts`、`core/sessions/registry.ts` |
-| FR2 | 规划面解析与 op 调用：38/270 可发现、可路由 GUI/本地无头 | `blender_op` | `catalog/data.ts`、`core/dispatcher/plan-call.ts`、`src/tools/op/local.ts` |
+| FR2 | 规划面解析与 op 调用：39/275 可发现、可路由 GUI/本地无头 | `blender_op` | `catalog/data.ts`、`core/dispatcher/plan-call.ts`、`src/tools/op/local.ts` |
 | FR3 | GUI 内执行与观察：Python、取帧、事务、worker 热内核 | `blender_py`/`blender_see` | `src/tools/py/*`、`see/*`、`runtime/py/core/worker.py` |
 | FR4 | 作业执行：render/headless 提交、排队、执行、恢复、回收 | `blender_run` | `core/queue/*`、`execution/jobs/*` |
 | FR5 | 证据与验收：provenance/verdict/receipt，三态判定 | 所有返回值 | `foundation/evidence.ts`、`src/tools/receipt.ts` |
 | FR6 | 装配与生命周期：装载、Gateway 启停/热重载、显示、doctor | `blender_session action=doctor` | `src/plugin-lifecycle.ts`、`gateway/app.ts`、`foundation/layers.ts` |
-| FR7 | 契约稳定：6/38/270/25/29/12、单源、迁移门 | `test:contract` | `tests/unit/js/contract/*`、`scripts/check-*.mjs` |
+| FR7 | 契约稳定：6/39/275/25/29/12、单源、迁移门 | `test:contract` | `tests/unit/js/contract/*`、`scripts/check-*.mjs` |
 | FR8 | 人类可见面：Web 面板/TUI/卡片；可批准同意 | 右侧栏 tab + chip | `src/client/index.js`（3058 行）、`src/tui/*` |
 | FR9 | 扩展命令执行：25 命令在 bpy 内执行并回传 | `blender_inspect`/`/cmd` | `extension/.../command_registry.py` |
 

@@ -49,11 +49,11 @@ function opsLine(family: string): string[] {
 }
 
 describe('plan op catalog contract', () => {
-  it('keeps 38 families and 270 op entries with one documented duplicate', () => {
-    expect(PLAN_CATALOG).toHaveLength(38)
+  it('keeps 39 families and 275 op entries with one documented duplicate', () => {
+    expect(PLAN_CATALOG).toHaveLength(39)
     const names = planOpNames()
-    expect(names).toHaveLength(270)
-    expect(new Set(names).size).toBe(269)
+    expect(names).toHaveLength(275)
+    expect(new Set(names).size).toBe(274)
     const dup = names.filter((n: any) => n === 'help')
     expect(dup).toHaveLength(2)
     expect(
@@ -78,7 +78,7 @@ describe('plan op catalog contract', () => {
     expect(local.map((f: any) => f.f).sort()).toEqual(['ext', 'render_guard'])
     expect(local.every((f: any) => f.write_scope === 'none')).toBe(true)
     const gui = PLAN_CATALOG.filter((f: any) => f.requires_session)
-    expect(gui).toHaveLength(36)
+    expect(gui).toHaveLength(37)
     expect(gui.every((f: any) => f.write_scope === 'exclusive')).toBe(true)
     expect(PLAN_CATALOG.every((f: any) => f.requires_session === (f.write_scope !== 'none'))).toBe(
       true,
@@ -104,11 +104,11 @@ describe('plan op catalog contract', () => {
     }
   })
 
-  it('freezes the 104-name read-only whitelist and gates 173 write entries', () => {
+  it('freezes the 109-name read-only whitelist and gates 173 write entries', () => {
     expect([...PLAN_READ_ONLY_OPS].sort()).toEqual([...baseline].sort())
-    expect(PLAN_READ_ONLY_OPS).toHaveLength(104)
+    expect(PLAN_READ_ONLY_OPS).toHaveLength(109)
     const names = planOpNames()
-    expect(names.filter((name: any) => PLAN_READ_ONLY.has(name))).toHaveLength(97)
+    expect(names.filter((name: any) => PLAN_READ_ONLY.has(name))).toHaveLength(102)
     const writes = names.filter((name: any) => !PLAN_READ_ONLY.has(name))
     expect(writes).toHaveLength(173)
     expect(PLAN_READ_ONLY.has('catalog')).toBe(true)
@@ -131,8 +131,8 @@ describe('plan op catalog contract', () => {
 
   it('reports one coherent fingerprint for the same catalog', () => {
     const fp = catalogFingerprint()
-    expect(fp.families).toBe(38)
-    expect(fp.opsCount).toBe(270)
+    expect(fp.families).toBe(39)
+    expect(fp.opsCount).toBe(275)
     expect(fp.commandCatalogKeys).toBe(25)
     expect(fp.catalogHash).toMatch(/^[0-9a-f]{12}$/)
   })

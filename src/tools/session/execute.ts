@@ -3,8 +3,9 @@
  *
  * Gateway 进程本身由宿主管理；这个工具不暴露 launch / lease / kill 运维动作。
  */
-import { BACKEND_HINT } from '../../constants.js'
+import { BACKEND_HINT, HOST_API } from '../../constants.js'
 import { asRecord, text } from '../../contracts/dynamic.js'
+import { hostApiBaselineView } from '../../host-api-baseline.js'
 import { ensureBackend } from '../../host/backend/index.js'
 import { backendJson } from '../../host/http.js'
 import { toolError } from '../errors.js'
@@ -84,6 +85,16 @@ async function listContextOf(port: number, args: Record<string, unknown>): Promi
   } catch {
     return { evidence: null, addon: null }
   }
+}
+
+/**
+ * H-4（优先级 1，additive）：宿主 API 的自证 + 冻结基线结论。
+ *
+ * 只读、只警告：读不到基线 / resolve 失败都只是 `status=unknown`，绝不让 doctor/status 失败。
+ * 宿主 API 只有**这一层**知道（import.meta.resolve 在宿主进程里），所以由 host 侧注入回执。
+ */
+function hostApiSection(): Record<string, unknown> {
+  return { api: HOST_API, baseline: hostApiBaselineView() }
 }
 
 /**
@@ -207,9 +218,12 @@ async function statusOf(port: number): Promise<unknown> {
       'status 失败 · ' + text(body.error || body.raw || 'unknown'),
       '先 blender_session action=doctor 看 Gateway/addon 状态',
     )
+  // H-4：宿主 API 段是宿主侧事实，注入到回执与文本（additive，不动 /status 的其它证据）。
+  body.hostApi = hostApiSection()
   return {
     text: formatStatus(body, listed.sessions, asRecord(body.local_evidence)),
     evidence: asRecord(body.local_evidence),
+    hostApi: body.hostApi,
   }
 }
 
@@ -238,10 +252,13 @@ async function doctorOf(port: number, args: Record<string, unknown>): Promise<un
       'doctor 失败 · ' + text(body.error),
       'Gateway 由宿主管理：重启 DSH 插件后重试；addon 需在 Blender N 面板点 Connect',
     )
+  // H-4：同上 —— doctor 回执带 hostApi（一行文本 + 结构化判定）。
+  body.hostApi = hostApiSection()
   return {
     text: formatDoctor(body),
     evidence: asRecord(body.local_evidence),
     verdict: body.verdict ?? null,
+    hostApi: body.hostApi,
   }
 }
 

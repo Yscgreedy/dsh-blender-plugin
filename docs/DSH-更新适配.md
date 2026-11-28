@@ -3,7 +3,7 @@
 > 触发场景：DSH 升级（`npm i -g @deepseek-ai/dsh@<版本>`）之后，本插件的 6 个工具是否还在、行为是否变了。
 > 结论依据：2026-09-23 对宿主 0.1.6-alpha.1 ↔ 0.1.7-alpha.2 的逐包 diff + 版本矩阵实测（**历史快照**）。
 >
-> **当前口径（2026-11-21）**：插件 **v3.3.1** · **6 个模型工具** · plan catalog **38 family / 270 op** ·
+> **当前口径（2026-11-21）**：插件 **v3.3.1** · **6 个模型工具** · plan catalog **39 family / 275 op** ·
 > addon **v2.0.0 / protocol 12**；验收仍以 `doctor` 回 `kind=ok` 为准。DSH 升级适配结论（§0–§4）不变，
 > 具体工具数 / 目录数以当前仓库与 `blender_op(op="catalog")` 为准。
 
@@ -13,7 +13,7 @@
 0.1.7-alpha.1 / 0.1.7-alpha.2 五个版本下全部注册成功、0 报错、参数 schema 逐字节一致）。
 真正要盯的是**四件与工具定义无关的事**：加载链、解析链、取消/超时、输出预算口径。
 
-> 2026-10-28 复核（历史口径）：工具数当时为 **15**（v3.0.1；v3.1 起为 **6**），plan catalog 计数以当前版本为准（历史：v3.2 为 35 / 261，v3.3 起 **38 family / 270 op**）；上述四个风险点的结论不变。
+> 2026-10-28 复核（历史口径）：工具数当时为 **15**（v3.0.1；v3.1 起为 **6**），plan catalog 计数以当前版本为准（历史：v3.2 为 35 / 261，v3.3 起 **39 family / 275 op**）；上述四个风险点的结论不变。
 
 ## 1. 本插件在 DSH 里的三条链（先认清结构，再看风险）
 
@@ -38,11 +38,36 @@ npm run test:dsh-api -- --version 0.1.7-alpha.2   # ③ 升级前预演：把待
 
 ```
 诊断：…
-宿主 API：dsh-tools@<当前版本> @ /usr/lib/node_modules/.../dsh-tools/lib/index.js   ← 自证（版本以本机为准）
+宿主 API：dsh-tools@<当前版本> @ /usr/lib/node_modules/.../dsh-tools/lib/index.js · baseline current   ← 自证 + 冻结基线（版本/路径以本机为准）
 插件：v3.3.1 @ /home/sixtyseven67/DSH/dsh-blender-plugin/lib/index.js
 ```
 
 `宿主 API` 这行是**升级后第一时间要看的**：它证明"插件挂上了哪一份宿主 API"。
+
+### 2.1 宿主 API 冻结基线（H-4，只警告不阻断）
+
+`宿主 API：…` 后面的尾巴是**当前解析结果 vs 冻结基线**的双轴结论（`blender_session` 的
+`doctor` / `status` 都带；结构化字段是回执里的 `hostApi.baseline`）：
+
+| 尾巴 | 含义 | 要做什么 |
+|---|---|---|
+| `baseline current` | 版本与路径都命中 | 什么都不用做 |
+| `baseline current · version_matches=false expected=<v> actual=<v>` | **宿主升级了**，安装布局没变 | 跑一次下面的刷新命令；不刷也只是常驻提示，不是故障 |
+| `⚠ 宿主 API baseline drift · reason=path_changed` | 解析链落到了**另一份/另一个位置**的 dsh-tools | 先确认新位置就是你要的那份，再刷新基线（否则插件会在载入期 `ERR_MODULE_NOT_FOUND`） |
+| `baseline unknown · reason=baseline_missing` | 没有基线文件（或读不到） | 跑一次刷新命令生成 `config/host-api-baseline.json` |
+
+```bash
+node scripts/refresh-host-api-baseline.mjs          # 写基线（确认新位置之后才跑）
+node scripts/refresh-host-api-baseline.mjs --check  # 只比对：drift 退出 1，其余 0
+```
+
+基线只记 `{package, hostApiVersion, pathSuffix, pathHash}`（**不含用户目录**）：`pathSuffix` 是
+`node_modules/@deepseek-ai/dsh-tools/lib/index.js` 这样的相对布局，`pathHash` 是包根目录的短 hash。
+所以"换机器 / 换家目录"不会误报；"换安装根"会露出 `hash_matches=false` 但仍算 current —— 只警告，不阻断。
+
+⚠ 基线的 `hostApiVersion` 记的是**生成时本机解析到的那一份**（开发机上常是 `node_modules` 里的
+测试版本），因此在真实宿主安装上第一眼通常是 `version_matches=false`——这正是"提醒你复核"的用途。
+
 若工具整体消失，先跑装配预演：
 
 ```bash
@@ -57,7 +82,7 @@ dsh --profile web --dump-config | grep -A3 dsh-blender-plugin
 | 编号 | 风险 | 状态 |
 |---|---|---|
 | R1 | 曾只能靠 super-injector 注入：第三方 hook 吃宿主内部面（`loader.internal.loadCache`/`entry._dispose`），loader 一重构就可能整体消失 | **已解决**：2026-09-23 切到官方 bundle 装配并删除 super-injector（见 §4） |
-| R2 | 解析链依赖全局安装的绝对路径；无冻结基线 | **已加自证**（`HOST_API` + doctor/status）；换安装位置仍需人工确认 |
+| R2 | 解析链依赖全局安装的绝对路径；无冻结基线 | **已加自证 + 冻结基线**（2026-11-28，H-4）：`HOST_API` 自证 + `config/host-api-baseline.json` 双轴比对（见 §2.1）。只警告不阻断：路径（suffix/hash）全不命中才 `drift`，版本变化只标 `version_matches=false`；刷新用 `node scripts/refresh-host-api-baseline.mjs` |
 | R3 | 宿主 `exec.signal` 未接、未声明 `timeoutMs` → 上游设默认截止时"Blender 还在跑、工具已判超时" | **已修**（当前 v3.3.1 仍成立：`EXEC_CTX` 贯通 + 6 个静态 `timeoutMs`） |
 | R4 | 0.1.7 把 spill 口径从 `maxInlineBytes: 50000` 改成 `maxInlineTokens: 12500`，且图片会计入省略 → 大文本可能改为落盘 spill、长会话图片可能被省略 | **观察项**：升级后按 token 重新校准本插件自己的 12KB 截断阈值 |
 | R5 | 新版 `plugin-manager` 按 `dsh.bundle` 判定 bundle | **已声明**（`package.json` + `cordis.patch.yml`），可切 §4 |
@@ -104,7 +129,8 @@ dsh --profile web --dump-config | grep -A3 "dsh-blender-plugin\|dsh-coc-dice\|ds
 2. 升级时：**别用裸 `npm i -g @deepseek-ai/dsh`** —— `latest` 可能比现装版本**旧**（2026-09-23 历史快照曾出现）。
    升级前先用 `npm view @deepseek-ai/dsh dist-tags`（或项目文档的推荐版本）核对，再用显式版本 / `@alpha` 安装。
 3. 升级后：§2 三步 + `dsh --profile web --dump-config | grep -c super-injector`（应为 0）
-   + `blender_session(action="doctor")` 看 `宿主 API` 行。
+   + `blender_session(action="doctor")` 看 `宿主 API` 行与它的基线尾巴（§2.1）：`version_matches=false`
+   说明只是宿主升级（跑一次 `node scripts/refresh-host-api-baseline.mjs` 即安静）；`drift` 才要确认安装位置。
 4. 若 R4 生效（结果改为落盘 spill）：调 `docs/配置参考.md` 里记录的截断阈值，并复跑一次大型
    `blender_op(op="audit_scene")` 看输出形态。
 ## 6. 热更新（不重启 DSH）

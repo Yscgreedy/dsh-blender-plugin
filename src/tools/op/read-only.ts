@@ -112,6 +112,12 @@ export const READ_ONLY_OPS: string[] = [
   'anim_rig_report',
   'anim_deform_audit',
   'toon_outline_audit',
+  // 2026-11-28 C-1：ref_* 参考图原语只读源图、只写输出文件（与 img_digest 同口径）
+  'ref_measure',
+  'ref_crop_atlas',
+  'ref_readability',
+  'ref_help',
+  'ref_selftest',
 ]
 
 export const READ_ONLY = new Set<string>(READ_ONLY_OPS)

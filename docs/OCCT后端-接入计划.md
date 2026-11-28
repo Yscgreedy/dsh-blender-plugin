@@ -152,7 +152,7 @@ surface_fit(points, axis="z", sections=8, ring=24, ..., backend="auto")
 
 **契约**
 
-- 6 tools / 38 families / 270 ops / 25 addon commands / protocol 12 不变。
+- 6 tools / 39 families / 275 ops / 25 addon commands / protocol 12 不变。
 - `surface_help` 与 catalog 文案同步；`quality` 语义写进 skill。
 - 失败回执可被 `gate_run` 的 `pass_if` 读取（不要只给自然语言）。
 

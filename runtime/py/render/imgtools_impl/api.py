@@ -5,6 +5,7 @@ from .ops_basic import img_annotate, img_crop, img_diff, img_rectify, img_scan
 from .hough import _fit_scale, _parse_known_lengths, _spec_px
 from .digest import img_digest
 from .measure import img_measure, img_probe
+from .ref_ops import ref_crop_atlas, ref_help, ref_measure, ref_readability, ref_selftest
 
 
 
@@ -260,6 +261,10 @@ def img_help():
             "img_probe": "v2 按需量测（读缓存快）：scan_y/scan_x 亚像素边缘与多段、circle/holes 圆孔、distance 两点距离、profile 剖面",
             "img_measure": "v2：像素→mm 并和期望值比，回 rows[{key,value_mm,expect_mm,delta_mm,delta_pct,verdict}]",
             "img_calib": "v2：多视逐视最小二乘 px_per_mm + shared 尺寸跨视换算 mm 两两比（不做自动消失点）",
+            "ref_measure": "C-1：原生图上量已知长度 → px_per_m + 站位表（带 err_m，误差随距离累积）+ 可选网格图",
+            "ref_crop_atlas": "C-1：批量原生**不缩放**裁剪 + atlas.json（源图/md5/px-m/换算尺寸）",
+            "ref_readability": "C-1：按 atlas/特征列表列出 < min_px（默认 8px）的不可读特征",
+            "ref_selftest": "C-1 自检（合成数字，验三条原语规则与坏输入拒绝）",
             "img_selftest": "自检（合成已知几何，断言 bbox/尺寸/IoU 都对）",
         },
         "protocol": ["看图必须产出数字（写进 spec.py），否则算白看",
@@ -292,7 +297,10 @@ def img_dispatch(op, args_json):
         return _j({"ok": False, "error": "引用解析失败: %s" % str(e)[:160]})
     ops = {"scan": img_scan, "rectify": img_rectify, "crop": img_crop, "annotate": img_annotate, "diff": img_diff,
            "digest": img_digest, "probe": img_probe, "measure": img_measure, "calib": img_calib,
-           "selftest": img_selftest, "help": img_help}
+           "selftest": img_selftest, "help": img_help,
+           # C-1：ref_* 走同一条路由/同一个 API（routing strip=0 ⇒ 传进来的就是全名）
+           "ref_measure": ref_measure, "ref_crop_atlas": ref_crop_atlas,
+           "ref_readability": ref_readability, "ref_help": ref_help, "ref_selftest": ref_selftest}
     fn = ops.get(str(op))
     if fn is None:
         return _j({"ok": False, "error": "unknown img op", "op": op, "ops": sorted(ops)})
@@ -317,4 +325,7 @@ if _K is not None:
     _K.dsh_img_api = _DshApi({"version": IMG_VERSION, "dispatch": img_dispatch, "scan": img_scan,
                               "crop": img_crop, "annotate": img_annotate, "diff": img_diff,
                               "digest": img_digest, "probe": img_probe, "measure": img_measure,
-                              "calib": img_calib, "selftest": img_selftest, "help": img_help})
+                              "calib": img_calib, "selftest": img_selftest, "help": img_help,
+                              "ref_measure": ref_measure, "ref_crop_atlas": ref_crop_atlas,
+                              "ref_readability": ref_readability, "ref_help": ref_help,
+                              "ref_selftest": ref_selftest})

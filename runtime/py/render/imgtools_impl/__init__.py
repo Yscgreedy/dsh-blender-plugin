@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Implementation package for imgtools.py; public facade keeps the original module path."""
-from . import common, ops_basic, analysis, contour, hough, cache, digest, measure, api
+from . import common, ops_basic, analysis, contour, hough, cache, digest, measure, ref_core, ref_ops, api
 
 __all__ = []
-for _module in (common, ops_basic, analysis, contour, hough, cache, digest, measure, api,):
+for _module in (common, ops_basic, analysis, contour, hough, cache, digest, measure, ref_core,
+                ref_ops, api,):
     for _name, _value in vars(_module).items():
         if _name.startswith("__"):
             continue

@@ -1,19 +1,19 @@
 {
   "version": 2,
-  "commit": "8299acfd9e40d9c497e118782b3110f2f263cceb",
-  "date": "2026-11-01",
-  "measuredAt": "2026-11-01T22:33:00+08:00",
+  "commit": "7c31e0d8833ce6982b0015e3854f5edeb1177cc0",
+  "date": "2026-11-28",
+  "measuredAt": "2026-11-28T15:36:41+08:00 (canonical CI run 46122003862, coverage artifact)",
   "javascript": {
-    "statements": 68.54,
-    "branches": 55.99,
-    "functions": 69.5,
-    "lines": 71.91,
+    "statements": 76.37,
+    "branches": 64.32,
+    "functions": 78.87,
+    "lines": 79.11,
     "mode": "single-file (no-file-parallelism)"
   },
   "changedLines": {
-    "lines": 67.698,
-    "total": 7724,
-    "missing": 2495,
+    "lines": 75.359,
+    "total": 15462,
+    "missing": 3810,
     "against": "v2.6.2"
   },
   "criticalModules": {
@@ -27,11 +27,11 @@
     },
     "runtime/http/router.ts": {
       "lines": 100,
-      "branches": 92.3
+      "branches": 93.33
     },
     "runtime/http/lease.ts": {
-      "lines": 98.55,
-      "branches": 88.5
+      "lines": 98.59,
+      "branches": 88.76
     },
     "src/tools/index.ts": {
       "lines": 100,
@@ -39,16 +39,16 @@
     }
   },
   "python": {
-    "scopeLines": 82.5,
-    "scopeBranches": 74.36,
-    "coveredLines": 580,
-    "scopeLinesTotal": 703,
-    "coveredBranches": 116,
-    "scopeBranchesTotal": 156
+    "scopeLines": 84.81,
+    "scopeBranches": 76.35,
+    "coveredLines": 575,
+    "scopeLinesTotal": 678,
+    "coveredBranches": 113,
+    "scopeBranchesTotal": 148
   },
   "e2e": {
-    "behaviorMatrixRows": 346,
-    "covered": 344,
+    "behaviorMatrixRows": 366,
+    "covered": 364,
     "planned": 0,
     "exempt": 2
   },
@@ -70,8 +70,8 @@
       "branches": 66.66
     },
     "runtime/execution/workers/index.ts": {
-      "lines": 81.63,
-      "branches": 77.5
+      "lines": 100,
+      "branches": 85.71
     },
     "runtime/execution/headless/index.ts": {
       "lines": 100,
@@ -83,7 +83,7 @@
     },
     "runtime/execution/headless/process.ts": {
       "lines": 94.82,
-      "branches": 57.14
+      "branches": 62.5
     },
     "runtime/execution/headless/result.ts": {
       "lines": 84.26,
@@ -106,6 +106,6 @@
       "branches": 81.94
     }
   },
-  "executionModulesMeasuredAt": "2026-11-01T22:33:00+08:00 (coverage-v8 5 AST-aware remapping re-baseline, canonical CI run 41315467806)",
-  "rebaselinedAt": "2026-11-01"
+  "executionModulesMeasuredAt": "2026-11-28T15:36:41+08:00 (v4 calibration, canonical CI run 46122003862 @ 7c31e0d)",
+  "rebaselinedAt": "2026-11-28"
 }

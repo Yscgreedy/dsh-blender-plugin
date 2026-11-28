@@ -421,7 +421,7 @@ try {
   ok('declared-engine-removals', 'declared engine exports removed', DECLARED_ENGINE_REMOVALS.length)
   ok('exports-count', 'engine exports', bKeys.length)
 
-  // 2. Catalog fingerprint (base + declared additions -> 38 families / 270 ops / 25 commands / 6 tool details).
+  // 2. Catalog fingerprint (base + declared additions -> 39 families / 275 ops / 25 commands / 6 tool details).
   // The 3.1 tool-surface change is declared: toolDetailKeys shrinks 7 -> 6 and
   // the family metadata grows target fields, so the hash itself is not compared;
   // the structural contract counts are.

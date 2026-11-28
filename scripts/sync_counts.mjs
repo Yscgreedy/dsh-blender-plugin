@@ -38,9 +38,9 @@ const targets = [
     file,
     pairs: [
       [/\d+ (?:个 )?family \/ \d+ (?:个 )?op/g, fams + ' 个 family / ' + ops + ' 个 op'],
-      // English form used by the repo AGENTS.md: "38 families / 270 ops"
+      // English form used by the repo AGENTS.md: "39 families / 275 ops"
       [/\d+ famil(?:y|ies) \/ \d+ ops/g, fams + ' families / ' + ops + ' ops'],
-      // "270 ops / 25 addon commands / 29 routes / protocol 12"
+      // "275 ops / 25 addon commands / 29 routes / protocol 12"
       [/\d+ ops \/ \d+ addon commands/g, ops + ' ops / 25 addon commands'],
       [/catalog（\d+\/\d+）/g, 'catalog（' + fams + '/' + ops + '）'],
       [/catalog 不是 \d+-\d+/g, 'catalog 不是 ' + fams + '-' + ops],

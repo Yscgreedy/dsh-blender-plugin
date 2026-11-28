@@ -316,7 +316,7 @@ npm run test:integration
 | 构建 | `npm run build && npm run check:build` | 产物一致 |
 | 单测 | `npm run test:unit` | 全绿（含函数预算门） |
 | 集成 | `npm run test:integration` | 全绿 |
-| 契约 | `npm run test:contract` | 6/38/270/25/29/12 不变 |
+| 契约 | `npm run test:contract` | 6/39/275/25/29/12 不变 |
 | 静态 | `npm run lint`、`npm run check:python-static` | 0 violation |
 | 结构 | `npm run check:structure`、`check:exceptions` | 0 新增债务 |
 | 导入图 | 自建脚本（ARCHITECTURE §0.2） | execution→core = 0；SCC 不增加 |

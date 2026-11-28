@@ -1,17 +1,17 @@
 {
   "version": 2,
-  "baselineCommit": "8299acfd9e40d9c497e118782b3110f2f263cceb",
-  "baselineDate": "2026-11-01",
-  "policy": "v3 (2026-11-01): @vitest/coverage-v8 5 switched the JS provider to AST-aware remapping, which changed the measurement scale on the same tree (branch points 3934 -> 6567, executable lines 17819 -> 6294). Re-baselined from canonical CI run 41315467806 at commit 8299acf: JS 71.91 lines / 55.99 branches / 69.5 functions, changed lines 67.698 against v2.6.2 (7724 changed / 2495 missing). Applying the unchanged rule (round down to 0.1pp, subtract 1.5pp) gives floors lines 70.4 / branches 54.4 / functions 68.0 and changed lines 66.1. This is a documented policy change required by the measurement-tool upgrade (explicit exception to the \"a floor must not be lowered\" rule); no tests or modules were removed. Critical contract modules stay >=90/75; execution-lifecycle modules keep their ratchet floors except runtime/execution/headless/process.ts branches 60 -> 55.6 (re-measured 57.14). Python pure logic stays 82.5/74.36 with floors 80/70. E2E 100%. The +2/PR ratchet remains a manual release-window policy. See docs/architecture.md coverage policy.",
+  "baselineCommit": "7c31e0d8833ce6982b0015e3854f5edeb1177cc0",
+  "baselineDate": "2026-11-28",
+  "policy": "v4 (2026-11-28): first regular calibration after the coverage-v8 5 AST-aware re-baseline (v3, 2026-11-01). Measured on canonical CI run 46122003862 (main, PR gate, conclusion success) at commit 7c31e0d: JS 79.11 lines / 64.32 branches / 78.87 functions, changed lines 75.359 against v2.6.2 (15462 changed / 3810 missing); Python pure logic 84.81 lines / 76.35 branches (575/678 lines, 113/148 branches). Applying the unchanged rule (round down to 0.1pp, subtract 1.5pp) tightens the floors to lines 77.6 / branches 62.8 / functions 77.3, changed lines 73.8 with target 75, Python 83.3/74.8. This is a tightening calibration driven by measured growth, not a threshold reduction: no tests, modules or assertions were removed, and every floor still sits 1.5pp below the measured value. Critical contract modules stay >=90/75; execution-lifecycle ratchet floors are unchanged (runtime/execution/headless/process.ts branches 55.6 stays below the re-measured 62.5). E2E stays 100%. The +2/PR ratchet remains a manual release-window policy; floors move only with a documented calibration on a canonical CI run. See docs/architecture.md coverage policy.",
   "javascript": {
     "globalFloor": {
-      "lines": 70.4,
-      "branches": 54.4,
-      "functions": 68
+      "lines": 77.6,
+      "branches": 62.8,
+      "functions": 77.3
     },
     "changedLinesFloor": {
-      "lines": 66.1,
-      "targetLines": 70,
+      "lines": 73.8,
+      "targetLines": 75,
       "ratchetPerPr": 2,
       "against": "v2.6.2",
       "ratchetMode": "manual"
@@ -105,12 +105,12 @@
       "extension/dsh_blender_bridge/selection/caps.py"
     ],
     "floor": {
-      "lines": 80,
-      "branches": 70
+      "lines": 83.3,
+      "branches": 74.8
     },
     "baseline": {
-      "lines": 82.5,
-      "branches": 74.36
+      "lines": 84.81,
+      "branches": 76.35
     },
     "omitReason": "UI 绘制/注册样板（registration.py、ui/**）、真 bpy 编辑模式上下文（selection/payload.py）与 bpy/网络命令实现（commands/** 除 selection/activity）由 E2E 覆盖，不并入行覆盖率。纯逻辑命令表 command_registry.py 与 selection/caps.py 已纳入 scope，并按最终代码重新基线（coverage policy notes）。"
   },

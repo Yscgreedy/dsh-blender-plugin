@@ -314,6 +314,17 @@ export const PLAN_CATALOG: PlanFamily[] = [
     key: '协议：**看图必须产出数字**（写进 spec.py），否则算白看；每次 ≤2 张图且带明确问题；先 crop 到 ROI 再放大；判"像不像"用 img_diff 的 IoU 不靠肉眼；像素↔毫米要标定。img_digest 一次给可确认数字表+原生裁剪图册+可读性；img_probe/img_measure 按需量测；img_calib 多视逐视标定',
   },
   {
+    f: 'ref',
+    requires_session: true,
+    write_scope: 'exclusive',
+    prefix: 'ref_',
+    when: '参考图要变成**可复核**的数字：标定 px/m、批量原生（不缩放）裁剪成图册、判图上哪些特征其实读不出来',
+    not: '不是"看图"或自动找特征：特征要你给（name + 米制或像素尺寸）；找轮廓/主尺寸用 img_*；判"像不像"用 qc_compare',
+    sk: 'op="ref_measure", args={image:"D:/ref/front_native.png", p1:[820,640], p2:[1620,648], known_len_m:6.45, out_grid_png:"D:/ref/front_grid.png"} → op="ref_crop_atlas", args={image:…, crops:[{name:"hatch", box_px:[700,600,1100,900], size_m:0.35}], outdir:"D:/ref/crops", px_per_m:124.03} → op="ref_readability", args={atlas_json:"D:/ref/crops/atlas.json", min_px:8}',
+    ops: ['measure', 'crop_atlas', 'readability', 'selftest', 'help'],
+    key: '量测在**原生像素**上做（不缩放）；回执带源图/md5/native_px 与 err_m——err_m 随离标定线的像素距离线性累积，没有 err_m 的站位表不许进契约；裁剪 scale 恒 1.0；<8px（min_px）的特征一律判不可读。ref_measure 的 stations 用 px_x（或 px_y + axis="Y"）换算',
+  },
+  {
     f: 'assembly',
     requires_session: true,
     write_scope: 'exclusive',
@@ -737,5 +748,11 @@ export const PLAN_READ_ONLY_OPS: string[] = [
   'anim_rig_report',
   'anim_deform_audit',
   'toon_outline_audit',
+  // C-1 参考图原语：只读源图、只写输出文件（与 img_digest/img_calib 同口径），不占写租约
+  'ref_measure',
+  'ref_crop_atlas',
+  'ref_readability',
+  'ref_help',
+  'ref_selftest',
 ]
 export const PLAN_READ_ONLY = new Set<string>(PLAN_READ_ONLY_OPS)
