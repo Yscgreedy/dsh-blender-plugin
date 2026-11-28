@@ -9,7 +9,8 @@ import { currentCaller } from '../../caller.js'
 import type { AvailabilityFailure } from '../../../core/availability.js'
 import type { JobQueue } from '../../../core/queue/manager.js'
 import type { SessionRegistry } from '../../../core/sessions/registry.js'
-import { crewRows } from './list.js'
+import { crewRows, crewSummaryText } from '../../../core/sessions/session-views.js'
+import type { CrewJobSource } from '../../../core/sessions/session-views.js'
 import type { CallerIdentity, SessionResult, ViewPose } from '../../../core/sessions/types.js'
 import { callerView } from '../../../core/sessions/types.js'
 import {
@@ -154,18 +155,40 @@ function policySetAction(payload: Record<string, unknown>, origin: unknown): Ses
  * approve/deny are the only actions allowed without a caller — and they need the
  * unguessable request id that a start just showed to the human.
  */
+/**
+ * 台账 B（面板余项）：面板行的 crew[] 与 /who、action=list 同源 —— 纯逻辑在 core
+ * （session-views.crewRows），这里只把本 Gateway 的作业队列喂进去（缺省按 0 个作业算）。
+ */
+function withPanelCrew(
+  panel: Record<string, unknown>,
+  jobQueue: CrewJobSource | null | undefined,
+): Record<string, unknown> {
+  if (!Array.isArray(panel.sessions)) return panel
+  // 展开已有对象：既有键（ts / policy / resources / requests / sessions…）的位置不变。
+  const sessions = crewRows(panel.sessions, jobQueue).map((row) => ({
+    ...row,
+    // 一行摘要由 core 压好：客户端只显示，不复制判据（见 session-views.crewSummaryText）。
+    crew_text: crewSummaryText(row.crew),
+  }))
+  return { ...panel, sessions }
+}
+
 function humanConsentAction(
   registry: SessionRegistry,
   action: string,
   payload: Record<string, unknown>,
   origin: unknown,
+  jobQueue?: CrewJobSource | null,
 ): SessionApiResult | null {
   if (action === 'consent_panel') {
     if (!panelOriginAllowed(origin)) return forbiddenOrigin('a session panel read', origin)
     return {
       status: 200,
       cors: true,
-      body: registry.consentPanel(String(payload.dshSessionId || payload.sessionId || '')),
+      body: withPanelCrew(
+        registry.consentPanel(String(payload.dshSessionId || payload.sessionId || '')),
+        jobQueue,
+      ),
     }
   }
   if (action === 'consent_policy_set') return policySetAction(payload, origin)
@@ -285,7 +308,7 @@ export async function dispatchSessionAction(
 ): Promise<SessionApiResult> {
   const caller = currentCaller()
   if (!caller) {
-    const human = humanConsentAction(registry, action, payload, origin)
+    const human = humanConsentAction(registry, action, payload, origin, control?.jobQueue)
     if (human) return human
     return {
       status: 400,

@@ -629,6 +629,7 @@ window.__ModuleLoader__.load({
         expiresInMs: owner ? Number(owner.expiresInMs) || 0 : null,
         grants: grantText,
         grantCount: grants.length,
+        crewText: String(r.crew_text || ''),
       }
     }
 
@@ -680,6 +681,12 @@ window.__ModuleLoader__.load({
       var limit = Number(res.limit) || 0
       var instances = Number(res.instances) || 0
       var claimM = rows.length
+      var instanceText =
+        '实例 ' +
+        instances +
+        '/' +
+        limit +
+        (res.low_resource === true ? '（低内存，已降到 ' + limit + '）' : '')
       return {
         ok: p.ok === true,
         ts: ts,
@@ -700,18 +707,8 @@ window.__ModuleLoader__.load({
         decidedCount: decided.length,
         rows: rows,
         claimCount: claimM,
-        instanceLabel:
-          '实例 ' +
-          instances +
-          '/' +
-          limit +
-          (res.low_resource === true ? '（低内存，已降到 ' + limit + '）' : ''),
-        resourceLabel:
-          '实例 ' +
-          instances +
-          '/' +
-          limit +
-          (res.low_resource === true ? '（低内存，已降到 ' + limit + '）' : ''),
+        instanceLabel: instanceText,
+        resourceLabel: instanceText,
         countsLabel: '待批准 ' + pending.length + ' ｜ 认领 ' + claimM,
         title:
           'Blender 会话' +
@@ -1737,6 +1734,9 @@ window.__ModuleLoader__.load({
                 },
                 '复制 attach',
               ),
+              row.crewText
+                ? h('span', { style: PANEL_STYLE.meta }, 'crew · ' + row.crewText)
+                : null,
             ),
           )
         }

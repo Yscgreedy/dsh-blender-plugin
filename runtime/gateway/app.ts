@@ -82,11 +82,47 @@ function addonEventSink(
   }
 }
 
+/**
+ * The live liveness probe attachChecked uses (S-1): the transport-level ping is
+ * the only proof that the addon inside that Blender still runs its command loop.
+ * Extracted so createGatewayApp stays an assembly sequence, not a closure gallery.
+ */
+function addonPingProbe(addonClient: GatewayAddonClient): (instanceId: string) => Promise<boolean> {
+  return async (instanceId: string): Promise<boolean> => {
+    try {
+      const reply = await addonClient.send('ping', {}, 3000, { instanceId })
+      const rec = reply && typeof reply === 'object' ? (reply as Record<string, unknown>) : {}
+      return rec.ok !== false
+    } catch (error) {
+      return false
+    }
+  }
+}
+
+/**
+ * How many headless/render jobs the queue is running right now (S-5c).
+ *
+ * Read through the queue's own perf projection instead of poking at job records:
+ * `byState.running` is the figure the queue already publishes on /host/jobs, and a
+ * queue that cannot answer (null, a shape change) reads as 0 — which is exactly
+ * the pre-S-5c budget behaviour rather than a blocked start.
+ */
+function runningJobCount(queue: JobQueue | null): number {
+  if (!queue) return 0
+  const byState = queue.perf().byState as Record<string, unknown> | undefined
+  const running = Number(byState ? byState.running : 0)
+  return Number.isFinite(running) && running > 0 ? Math.floor(running) : 0
+}
+
 /** Build the Gateway app without listening; tests and the process entry share it. */
 export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
   const port = opts.port ?? GATEWAY_DEFAULT_PORT
   const host = opts.host ?? HOST
   const registryRef: { current: SessionRegistry | null } = { current: null }
+  // S-5c: the registry is assembled before the queue (the queue's reservedGpu reads
+  // the registry), so the virtual-gui budget reaches the queue through this ref.
+  // Until it is filled, jobLoad reads 0 = the old budget.
+  const jobQueueRef: { current: JobQueue | null } = { current: null }
   const addonGateway = new AddonGateway({ ...opts, onEvent: addonEventSink(opts, registryRef) })
   const addonClient = new GatewayAddonClient(addonGateway)
   installPresencePublisher(addonClient)
@@ -101,17 +137,11 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
         project: x.project,
       })),
     {
-      // attachChecked: the transport-level ping is the only proof that the
-      // addon inside that Blender still runs its command loop.
-      verify: async (instanceId: string): Promise<boolean> => {
-        try {
-          const reply = await addonClient.send('ping', {}, 3000, { instanceId })
-          const rec = reply && typeof reply === 'object' ? (reply as Record<string, unknown>) : {}
-          return rec.ok !== false
-        } catch {
-          return false
-        }
-      },
+      // attachChecked: a live ping, not the listed socket.
+      verify: addonPingProbe(addonClient),
+      // S-5c: virtual-gui admission and the post-ready recheck reserve memory for
+      // the running headless/render jobs, so a start does not eat their budget.
+      jobLoad: () => runningJobCount(jobQueueRef.current),
     },
   )
   registryRef.current = sessionRegistry
@@ -130,6 +160,7 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     // 得到 decision.reason='virtual_gui'，而不是挤上去把显存打爆。
     reservedGpu: () => sessionRegistry.virtualGuiCount(),
   })
+  jobQueueRef.current = jobQueue
   const E: HttpRouteDeps = {
     sessionRegistry,
     jobQueue,

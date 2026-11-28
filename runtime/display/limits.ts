@@ -87,6 +87,15 @@ export function systemVirtualGuiLimits(
 export const VIRTUAL_GUI_PER_INSTANCE_BYTES = 1.5 * 1024 ** 3
 /** The host keeps this much free no matter how many instances it admits. */
 export const VIRTUAL_GUI_HOST_RESERVE_BYTES = 2 * 1024 ** 3
+/**
+ * Memory one running headless/render job is presumed to hold (S-5c).
+ *
+ * An estimate, not a measurement: the queue does not report per-job RSS and a
+ * real render can hold far more. The point is direction — a virtual-gui start must
+ * see that the machine already has job processes reserving memory, instead of
+ * pricing itself against a free figure that the queue is about to consume.
+ */
+export const VIRTUAL_GUI_JOB_MEMORY_ESTIMATE_BYTES = 1 * 1024 ** 3
 
 export interface VirtualGuiAdmissionInput {
   used?: number
@@ -95,6 +104,8 @@ export interface VirtualGuiAdmissionInput {
   totalMemBytes?: number
   perInstanceBytes?: number
   reserveHostBytes?: number
+  /** Memory the running headless/render jobs are presumed to hold (S-5c); 0 / absent = not counted. */
+  jobMemBytes?: number
 }
 
 export interface VirtualGuiAdmission {
@@ -109,6 +120,10 @@ export interface VirtualGuiAdmission {
   /** Budget the next instance needs: (used + 1) * per-instance + host reserve. */
   required_bytes: number
   low_resource: boolean
+  /** Memory subtracted for running jobs (S-5c); 0 = the caller reported none. */
+  job_mem_bytes: number
+  /** free - job_mem_bytes, floored at 0 — the figure the budget is compared against. */
+  effective_free: number
 }
 
 function countOf(value: unknown): number {
@@ -142,14 +157,22 @@ export function admitVirtualGui(input: VirtualGuiAdmissionInput = {}): VirtualGu
   const free = byteBudget(input.freeMemBytes, 0, true)
   const perInstance = byteBudget(input.perInstanceBytes, VIRTUAL_GUI_PER_INSTANCE_BYTES, false)
   const reserve = byteBudget(input.reserveHostBytes, VIRTUAL_GUI_HOST_RESERVE_BYTES, true)
+  const jobMem = byteBudget(input.jobMemBytes, 0, true)
+  // An unknown free figure stays unknown; a known one pays for the running jobs
+  // first (S-5c), so the budget is compared against what a new instance could
+  // really take. 0 keeps the pre-S-5c arithmetic byte for byte.
+  const effectiveFree = free > 0 ? Math.max(0, free - jobMem) : 0
+  // resolveVirtualGuiLimits reads free=0 as "unknown", so an exhausted budget is
+  // reported as 1 byte: "known to be under pressure", not "no information".
+  const pressureFree = free > 0 ? Math.max(1, effectiveFree) : 0
   const budget = resolveVirtualGuiLimits({
     configured,
     totalMemBytes: total,
-    freeMemBytes: free,
+    freeMemBytes: pressureFree,
   })
   const limit = budget.limit
   const required = (used + 1) * perInstance + reserve
-  const fits = free > 0 ? required <= free : true
+  const fits = free > 0 ? required <= effectiveFree : true
   const reason: VirtualGuiAdmission['reason'] = used >= limit ? 'limit' : fits ? 'ok' : 'memory'
   return {
     ok: reason === 'ok',
@@ -162,5 +185,7 @@ export function admitVirtualGui(input: VirtualGuiAdmissionInput = {}): VirtualGu
     reserve_host_bytes: reserve,
     required_bytes: required,
     low_resource: budget.low_resource,
+    job_mem_bytes: jobMem,
+    effective_free: effectiveFree,
   }
 }

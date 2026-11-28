@@ -71,7 +71,7 @@ function liveBudget(input: { limit?: number; configured?: number; total?: number
   return { state, snapshot }
 }
 
-function makeRegistry(budget: ReturnType<typeof liveBudget>) {
+function makeRegistry(budget: ReturnType<typeof liveBudget>, jobLoad?: () => number) {
   const started: DisplayStartRequest[] = []
   const stopped: DisplayInstance[] = []
   const provider: DisplayProvider = {
@@ -99,6 +99,7 @@ function makeRegistry(budget: ReturnType<typeof liveBudget>) {
     selectProvider: () => provider,
     waitForInstance: async () => true,
     limits: budget.snapshot,
+    ...(jobLoad ? { jobLoad } : {}),
   })
   return { reg, started, stopped }
 }
@@ -444,6 +445,146 @@ describe('virtual-gui post-ready budget recheck (S-5b)', () => {
       expect(released.ok).toBe(true)
       expect(reg.getSession(id)).toBeNull()
       expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+/**
+ * S-5c: the queue runs Blender processes of its own, and free memory alone does
+ * not say how many. Each running headless/render job is reserved at the estimate
+ * constant, so a virtual-gui start does not eat the memory a running job is using.
+ * An absent jobLoad (tests, older hosts) reproduces the previous behaviour.
+ */
+describe('virtual-gui job load reservation (S-5c)', () => {
+  it('reserves per running job and reports the effective free figure', () => {
+    const admission = admitVirtualGui({
+      used: 1,
+      configured: 4,
+      totalMemBytes: 16 * GIB,
+      freeMemBytes: 6 * GIB,
+      jobMemBytes: 2 * GIB,
+    })
+    // required (5 GiB) + jobs (2 GiB) > free (6 GiB): the jobs are why it fails.
+    expect(admission).toMatchObject({
+      ok: false,
+      reason: 'memory',
+      used: 1,
+      free: 6 * GIB,
+      required_bytes: 5 * GIB,
+      job_mem_bytes: 2 * GIB,
+      effective_free: 4 * GIB,
+    })
+    // Unknown / zero job memory keeps the old arithmetic exactly.
+    const legacy = admitVirtualGui({ used: 1, configured: 4, freeMemBytes: 6 * GIB })
+    expect(legacy).toMatchObject({ ok: true, job_mem_bytes: 0, free: 6 * GIB })
+    expect(legacy.effective_free).toBe(legacy.free)
+    const unknown = admitVirtualGui({ used: 0, freeMemBytes: 0, jobMemBytes: 2 * GIB })
+    expect(unknown).toMatchObject({ ok: true, free: 0, job_mem_bytes: 2 * GIB })
+    expect(unknown.effective_free).toBe(0)
+  })
+
+  it('refuses the start when running jobs use up the free memory', async () => {
+    const jobs = { running: 0 }
+    const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+    const { reg, started } = makeRegistry(budget, () => jobs.running)
+    expect((await startAs(reg, MAIN)).ok).toBe(true)
+
+    jobs.running = 2
+    budget.state.free = 6 * GIB
+    const refused = await startAs(reg, OTHER)
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.code).toBe('capacity')
+    expect(refused.evidence).toMatchObject({
+      used: 1,
+      limit: 4,
+      reason: 'memory',
+      free: 6 * GIB,
+      required: 5 * GIB,
+      job_mem: 2 * GIB,
+      effective_free: 4 * GIB,
+    })
+    expect(started).toHaveLength(1)
+  })
+
+  it('admits the same start when no job is running', async () => {
+    const jobs = { running: 0 }
+    const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+    const { reg, started } = makeRegistry(budget, () => jobs.running)
+    expect((await startAs(reg, MAIN)).ok).toBe(true)
+    budget.state.free = 6 * GIB
+    expect((await startAs(reg, OTHER)).ok).toBe(true)
+    expect(started).toHaveLength(2)
+  })
+
+  it('keeps the legacy receipt when the host injects no jobLoad', async () => {
+    const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+    const { reg } = makeRegistry(budget)
+    expect((await startAs(reg, MAIN)).ok).toBe(true)
+    expect((await startAs(reg, OTHER)).ok).toBe(true)
+    budget.state.free = 4.5 * GIB
+    const refused = await startAs(reg, THIRD)
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.evidence).toMatchObject({
+      reason: 'memory',
+      free: 4.5 * GIB,
+      job_mem: 0,
+      effective_free: 4.5 * GIB,
+    })
+  })
+
+  it('counts the job load in the post-ready recheck too', async () => {
+    vi.useFakeTimers()
+    try {
+      const jobs = { running: 0 }
+      const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+      const { reg, stopped } = makeRegistry(budget, () => jobs.running)
+      const started = await startAs(reg, MAIN)
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      // Free memory alone would still admit: 5 GiB required <= 6 GiB free. The
+      // two running jobs are what push it over.
+      budget.state.free = 6 * GIB
+      jobs.running = 2
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS)
+
+      const status = reg.status(MAIN, id)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.session.degradation).toMatchObject({
+        reason: 'memory',
+        free: 6 * GIB,
+        required: 5 * GIB,
+      })
+      expect(stopped).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves the instance healthy when the jobs finish before the recheck', async () => {
+    vi.useFakeTimers()
+    try {
+      const jobs = { running: 2 }
+      const budget = liveBudget({ free: 8 * GIB, total: 16 * GIB })
+      const { reg } = makeRegistry(budget, () => jobs.running)
+      const started = await startAs(reg, MAIN)
+      if (!started.ok) return
+      const id = String(started.session.id)
+
+      jobs.running = 0
+      budget.state.free = 6 * GIB
+      vi.advanceTimersByTime(VIRTUAL_GUI_BUDGET_RECHECK_MS)
+
+      const status = reg.status(MAIN, id)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.session.degradation).toBeUndefined()
     } finally {
       vi.useRealTimers()
     }

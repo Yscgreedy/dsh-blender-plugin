@@ -644,15 +644,6 @@
     },
     {
       "file": "runtime/py/core/worker.py",
-      "name": "_see",
-      "lines": 111,
-      "classification": "linear-pipeline",
-      "reason": "Headless see op: ordered camera/render/restore stages.",
-      "owner": "runtime",
-      "reviewBy": "2027-06-30"
-    },
-    {
-      "file": "runtime/py/core/worker.py",
       "name": "_watch",
       "lines": 94,
       "classification": "linear-pipeline",

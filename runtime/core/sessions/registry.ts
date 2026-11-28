@@ -16,14 +16,7 @@ import { InstanceBook } from './instance-book.js'
 import { SessionLifecycle } from './session-lifecycle.js'
 import { SessionViews } from './session-views.js'
 import { WriteAuthority } from './write-authority.js'
-import {
-  callerKey,
-  callerView,
-  fail,
-  isMain,
-  ownerMatches,
-  sessionView,
-} from './types.js'
+import { callerKey, callerView, fail, isMain, ownerMatches, sessionView } from './types.js'
 import { findCallerSession, unownedSessions } from './lookup.js'
 import { VirtualGuiLifecycle, waitForAddonInstance } from './virtual-gui.js'
 import type { ProviderSelector } from './virtual-gui.js'
@@ -48,6 +41,14 @@ export interface SessionRegistryOptions {
    * still looks listed but no longer answers.
    */
   verify?: (instanceId: string) => Promise<boolean>
+  /**
+   * Running headless/render job count for the virtual-gui memory budget (S-5c).
+   *
+   * Injected by the assembly (app.ts reads it from the job queue), because the
+   * registry is built before the queue exists. Absent = the budget never counts
+   * job memory, which is the pre-S-5c behaviour.
+   */
+  jobLoad?: () => number
 }
 
 function defaultProviderSelector(capabilities: DisplayCapabilities): DisplayProvider | null {
@@ -75,6 +76,7 @@ export class SessionRegistry {
       ((instanceId, timeoutMs) =>
         waitForAddonInstance(() => this.listInstances(), instanceId, timeoutMs))
     this.verifyFn = opts.verify || null
+    if (opts.jobLoad) this.jobLoad = opts.jobLoad
     this.lifecycle = new VirtualGuiLifecycle(this, opts.selectProvider || defaultProviderSelector)
     this.writes = new WriteAuthority({
       sessions: this.sessions,
@@ -118,6 +120,8 @@ export class SessionRegistry {
     })
   }
   private readonly verifyFn: ((instanceId: string) => Promise<boolean>) | null
+  /** Running job count for the virtual-gui budget (S-5c); injected, never guessed. */
+  readonly jobLoad?: () => number
   private listInstances: () => InstanceRef[]
   private readonly displayFn: () => DisplayCapabilities
   private readonly limitsFn: () => VirtualGuiLimits

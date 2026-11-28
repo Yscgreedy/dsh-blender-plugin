@@ -19,6 +19,7 @@
     "asset": "core",
     "anim": "core",
     "offline_bootstrap": "core",
+    "framing": "core",
     "geo": "geometry",
     "mesh_fix": "geometry",
     "sculpt": "geometry",

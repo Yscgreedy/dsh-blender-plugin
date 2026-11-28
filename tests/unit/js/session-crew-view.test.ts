@@ -5,13 +5,16 @@
  * 另外锁 presenter 的 crew 摘要行（每会话一行、无 crew 不显示、既有行不动）。
  */
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import vm from 'node:vm'
+import { pkgPath } from '../../helpers/pkg'
 import { SessionRegistry } from '../../../runtime/core/sessions/registry.js'
 import { grantView } from '../../../runtime/core/sessions/types.js'
 import type { CallerIdentity, InstanceRef } from '../../../runtime/core/sessions/types.js'
 import type { JobQueue } from '../../../runtime/core/queue/manager.js'
 import { runWithCaller } from '../../../runtime/http/caller.js'
 import { dispatchSessionAction } from '../../../runtime/http/routes/session/api.js'
-import { crewView } from '../../../runtime/http/routes/session/list.js'
+import { crewView } from '../../../runtime/core/sessions/session-views.js'
 import { formatSessionList } from '../../../src/tools/session/presenter.js'
 
 const NOW = 1_763_000_000_000
@@ -409,5 +412,129 @@ describe('grantView 的心跳 → last_write_at', () => {
     )
     expect(sub && sub.last_write_at).toBe(NOW - 3_000)
     expect(sub && sub.grant_expires_in_ms).toBe(60_000)
+  })
+})
+
+describe('consent_panel 面板行：crew[] 与 /who、action=list 同源', () => {
+  function registryWithGrant(): SessionRegistry {
+    const instances: InstanceRef[] = [{ instanceId: 'inst-1', ready: true }]
+    const registry = new SessionRegistry(() => instances)
+    expect(registry.attach(mainCaller()).ok).toBe(true)
+    expect(registry.attach(subCaller()).ok).toBe(true)
+    expect(
+      registry.grant(mainCaller(), 'user-gui:inst-1', ['collection:COL_A'], subCaller()).ok,
+    ).toBe(true)
+    return registry
+  }
+
+  function fakeQueue(jobs: Array<{ state: string; owner: { agentId: string } }>): JobQueue {
+    return {
+      list: (filter: { state?: string } = {}) =>
+        jobs.filter((j) => !filter.state || j.state === filter.state),
+    } as unknown as JobQueue
+  }
+
+  it('adds crew[] to every panel row when the route passes the queue', async () => {
+    const registry = registryWithGrant()
+    const res = await dispatchSessionAction(
+      registry,
+      'consent_panel',
+      { dshSessionId: 'dsh-1' },
+      {
+        reload: () => ({ ok: true }),
+        shutdown: async () => ({ ok: true }),
+        jobQueue: fakeQueue([{ state: 'running', owner: { agentId: 'agent-sub' } }]),
+      },
+    )
+    expect(res.status).toBe(200)
+    // 既有面板字段一个不少
+    for (const key of ['ok', 'ts', 'panel_session', 'policy', 'resources', 'requests', 'sessions'])
+      expect(res.body).toHaveProperty(key)
+    const rows = res.body.sessions as Array<Record<string, unknown>>
+    expect(rows.length).toBe(1)
+    expect(rows[0].id).toBe('user-gui:inst-1')
+    const crew = rows[0].crew as Array<Record<string, unknown>>
+    expect(crew.map((m) => m.agentId)).toEqual(['agent-main', 'agent-sub'])
+    expect(crew[1]).toMatchObject({
+      scopes: ['collection:COL_A'],
+      jobs_running: 1,
+      state: 'working',
+    })
+    // 一行摘要由服务端压好（客户端只显示，不复制判据）
+    expect(rows[0].crew_text).toBe(
+      'agent-main/main idle · agent-sub/subagent working scopes=collection:COL_A jobs=1r/0q',
+    )
+  })
+
+  it('still answers the panel without a jobQueue: crew is there, counts are zero', async () => {
+    const registry = registryWithGrant()
+    const res = await dispatchSessionAction(registry, 'consent_panel', { dshSessionId: 'dsh-1' })
+    expect(res.status).toBe(200)
+    const crew = (res.body.sessions as Array<Record<string, unknown>>)[0].crew as Array<
+      Record<string, unknown>
+    >
+    expect(crew.map((m) => m.agentId)).toEqual(['agent-main', 'agent-sub'])
+    for (const member of crew) {
+      expect(member.jobs_running).toBe(0)
+      expect(member.jobs_queued).toBe(0)
+      expect(member.state).toBe('idle')
+    }
+    expect(crew[1].scopes).toEqual(['collection:COL_A'])
+  })
+})
+
+describe('面板客户端：panelRow 的 crew 摘要行', () => {
+  /** 与 blender-session-panel-ops.test.ts 同款：按 DSH web app 的方式加载已构建的 bundle。 */
+  function clientSelf(): Record<string, any> {
+    const source = fs.readFileSync(pkgPath('lib', 'client.js'), 'utf8')
+    let registration: any = null
+    const sandbox = {
+      window: {
+        __ModuleLoader__: {
+          load: (def: any) => {
+            registration = def
+          },
+        },
+        localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      },
+      console,
+      fetch: async () => ({ ok: false, status: 0, json: async () => ({}) }),
+    }
+    vm.runInNewContext(source, sandbox, { filename: 'lib/client.js' })
+    const react = { useEffect: () => {}, useRef: (v: unknown) => ({ current: v }) }
+    const exported = registration.factory((id: string) => {
+      if (id === 'react') return react
+      throw new Error('unexpected require: ' + id)
+    })
+    return exported.__selftest
+  }
+
+  it('carries the one-line crew summary on the panel row', () => {
+    const row = clientSelf().panelRow({
+      id: 'user-gui:inst-1',
+      kind: 'user-gui',
+      status: 'ready',
+      owner: { dshSessionId: 'dsh-1', agentId: 'agent-main', role: 'main' },
+      crew: [{ agentId: 'agent-sub', role: 'subagent', state: 'working' }],
+      crew_text:
+        'agent-main/main idle · agent-sub/subagent working scopes=collection:COL_A jobs=1r/0q',
+    })
+    expect(row.crewText).toBe(
+      'agent-main/main idle · agent-sub/subagent working scopes=collection:COL_A jobs=1r/0q',
+    )
+    // 既有字段与顺序不受影响
+    expect(row.id).toBe('user-gui:inst-1')
+    expect(row.ownerAgent).toBe('agent-main')
+    expect(row.grantCount).toBe(0)
+  })
+
+  it('keeps the row unchanged when the panel has no crew (old Gateway)', () => {
+    const row = clientSelf().panelRow({
+      id: 'user-gui:inst-1',
+      kind: 'user-gui',
+      status: 'ready',
+      owner: { dshSessionId: 'dsh-1', agentId: 'agent-main', role: 'main' },
+    })
+    expect(row.crewText).toBe('')
   })
 })

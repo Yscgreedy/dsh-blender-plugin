@@ -10,7 +10,7 @@ import { isRecord } from '../../foundation/json.js'
 import { startVirtualGuiGate } from './display-gate.js'
 import { fail, ownerMatches, ownerOf, sessionView } from './types.js'
 import type { CallerIdentity, InstanceRef, SessionRecord, SessionResult } from './types.js'
-import { admitVirtualGui } from '../../display/limits.js'
+import { admitVirtualGui, VIRTUAL_GUI_JOB_MEMORY_ESTIMATE_BYTES } from '../../display/limits.js'
 import type { VirtualGuiAdmission, VirtualGuiLimits } from '../../display/limits.js'
 import type { DisplayCapabilities, DisplayInstance, DisplayProvider } from '../../display/types.js'
 
@@ -50,6 +50,13 @@ export interface VirtualGuiHost {
   removeSession(sessionId: string): void
   releaseSession(session: SessionRecord): void
   waitForInstance(instanceId: string, timeoutMs: number): Promise<boolean>
+  /**
+   * How many headless/render jobs the queue is running right now (S-5c).
+   *
+   * Optional: a host that cannot answer (tests, embedders) leaves the memory
+   * budget exactly as it was before S-5c.
+   */
+  jobLoad?: () => number
 }
 
 export type ProviderSelector = (capabilities: DisplayCapabilities) => DisplayProvider | null
@@ -103,6 +110,27 @@ function gib(bytes: number): string {
 }
 
 /**
+ * Memory the running job load reserves right now (S-5c).
+ *
+ * The queue owns its own Blender processes; free memory does not say how many are
+ * alive. Each running job is counted at VIRTUAL_GUI_JOB_MEMORY_ESTIMATE_BYTES so a
+ * virtual-gui start does not price itself against memory those jobs hold. A host
+ * without jobLoad, a throwing probe, or a non-positive answer all mean "0": the
+ * budget then behaves exactly as it did before S-5c.
+ */
+function jobReservationBytes(host: VirtualGuiHost): number {
+  if (!host.jobLoad) return 0
+  let running = 0
+  try {
+    running = Number(host.jobLoad())
+  } catch (error) {
+    return 0
+  }
+  if (!Number.isFinite(running) || running <= 0) return 0
+  return Math.floor(running) * VIRTUAL_GUI_JOB_MEMORY_ESTIMATE_BYTES
+}
+
+/**
  * Refuse an admission (S-5).
  *
  * Both refusals keep the historical `stage=session` / `code=capacity` pair —
@@ -129,7 +157,14 @@ function capacityFailure(
         gib(admission.reserve_host_bytes) +
         ' host reserve), ' +
         gib(admission.free) +
-        ' free'
+        ' free' +
+        (admission.job_mem_bytes > 0
+          ? ' minus ' +
+            gib(admission.job_mem_bytes) +
+            ' reserved for running jobs (' +
+            gib(admission.effective_free) +
+            ' effective)'
+          : '')
       : 'virtual-gui instance limit reached (' +
         String(admission.used) +
         '/' +
@@ -156,6 +191,9 @@ function capacityFailure(
       per_instance: admission.per_instance_bytes,
       reserve: admission.reserve_host_bytes,
       required: admission.required_bytes,
+      // S-5c: what the running jobs reserved, and the free figure left over.
+      job_mem: admission.job_mem_bytes,
+      effective_free: admission.effective_free,
     },
   })
 }
@@ -219,12 +257,14 @@ export class VirtualGuiLifecycle {
     // The registry's effective limit is the structural ceiling: it is what every
     // other surface (consent panel, status) advertises, so a deliberately
     // lowered cap is never raised here. Under it, the budget decides with the
-    // free memory read right now — not with a value cached at startup (S-5).
+    // free memory read right now — not with a value cached at startup (S-5) —
+    // after reserving what the running jobs hold (S-5c).
     const admission = admitVirtualGui({
       used: this.host.virtualGuiCount(),
       configured: Math.min(limits.limit, limits.configured),
       freeMemBytes: limits.free_mem_bytes,
       totalMemBytes: limits.total_mem_bytes,
+      jobMemBytes: jobReservationBytes(this.host),
     })
     if (!admission.ok) return capacityFailure(admission, limits)
     const provider = this.selectProvider(capability)
@@ -396,6 +436,7 @@ export class VirtualGuiLifecycle {
       configured: Math.min(limits.limit, limits.configured),
       freeMemBytes: limits.free_mem_bytes,
       totalMemBytes: limits.total_mem_bytes,
+      jobMemBytes: jobReservationBytes(this.host),
     })
     // Only memory pressure is a degradation of this instance; 'limit' means the
     // operator's cap was reached, which is the cap working, not a shortfall.
