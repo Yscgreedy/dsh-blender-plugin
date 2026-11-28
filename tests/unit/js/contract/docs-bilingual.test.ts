@@ -60,14 +60,26 @@ describe('human entry cross-links', () => {
     }
   })
 
-  it('documents the npm install path for both languages', () => {
-    const npmInstall = 'dsh plugin --profile <profile> add dsh-blender-plugin@3.3.1'
+  it('documents the checkout / release install path and keeps registry publishing closed', () => {
     for (const text of [README, ZH_README]) {
-      expect(text).toContain(npmInstall)
-      expect(text).toContain('dsh-blender-plugin@3.3.1')
+      expect(text).toContain('npm run dsh:install')
+      expect(text).toContain('dsh_blender_bridge.zip')
+      expect(text).not.toMatch(/dsh-blender-plugin@3\.3\./)
+      expect(text).not.toContain('npm i -g dsh-blender-plugin')
     }
-    expect(readText('docs/给第三方的安装清单.md')).toContain(npmInstall)
-    expect(readText('docs/AI-安装提示词.md')).toContain('dsh-blender-plugin@3.3.1')
+    expect(README).toContain('third party')
+    expect(ZH_README).toContain('第三方')
+    for (const path of [
+      'docs/给第三方的安装清单.md',
+      'docs/AI-安装提示词.md',
+      'docs/操作教程.md',
+      'docs/部署SOP.md',
+    ]) {
+      const text = readText(path)
+      expect(text).toContain('npm run dsh:install')
+      expect(text).not.toMatch(/dsh-blender-plugin@3\.3\./)
+      expect(text).not.toContain('npm i -g dsh-blender-plugin')
+    }
   })
 
   it('keeps both language versions structurally paired', () => {

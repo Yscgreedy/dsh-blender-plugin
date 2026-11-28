@@ -13,13 +13,13 @@
 ## ① 通用提示词（任何 AI 助手）
 
 ~~~text
-请帮我从 npm 安装这个 DSH 插件：dsh-blender-plugin@3.3.1
+请帮我从这个仓库的 checkout 安装 DSH × Blender 插件（不要从 npm registry 装：那里同名的 dsh-blender-plugin 是第三方旧版 3.0.6）：
 
 动手前的要求（必须遵守）：
-1. 先完整阅读仓库里的 docs/zh/README.md：前置条件、Quick start 的 npm 安装、常见故障，以及 AGENTS.md。
+1. 先完整阅读仓库里的 docs/zh/README.md：前置条件、Quick start 的 checkout / Release tarball 安装、常见故障，以及 AGENTS.md。
 2. 逐条核对 5 条前置条件；缺哪条先告诉我，不要跳过，也不要替我决定。
    当前版本：插件 v3.3.1 / 6 个模型工具 / plan catalog 39 family / 275 op / addon v2.0.0（protocol 12）。
-   注意：普通安装不需要 clone 或构建；npm 包自带 lib/。只有从源码开发才需要 npm ci --legacy-peer-deps && npm run build。
+   注意：npm 发布已关闭（registry 同名包是第三方 3.0.6），安装走 `git clone` → `npm ci --legacy-peer-deps && npm run build` → `npm run dsh:install`；备选是 GitHub Release 的 tarball + SHA256SUMS。不要从 registry 安装同名包（全局 npm i -g 或用 registry 名字跑 dsh plugin add 都不行）。
 3. 严格按 §3 的 5 步执行；配置项只从 docs/配置参考.md 里取，不要自己编路径 / 端口 / 配置名。
 4. 验收判据（按路线二选一，另一条不适用时说明原因）：
    · GUI 路线：curl -sS http://127.0.0.1:39877/doctor → kind=ok，且 blender_see(max_size=560) 回一帧图；

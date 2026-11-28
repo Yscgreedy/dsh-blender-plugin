@@ -34,15 +34,16 @@ plan catalog 应能列出 **39 family / 275 op**。
 
 ## 2. 安装插件
 
-普通用户从 npm 安装（不需要 clone 或构建）：
+**npm 发布已关闭**：公共 registry 的同名包是第三方 3.0.6，不要从 registry 安装同名包（`npm i -g` / `dsh plugin add` 用 registry 名字都不行）。主路径是 checkout：
 
 ~~~bash
-dsh plugin --profile <profile> add dsh-blender-plugin@3.3.1
+git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
+cd dsh-blender-plugin && npm ci --legacy-peer-deps && npm run build
+npm run dsh:install                     # 覆盖进 profile 并自证 /health + /status + catalog
 dsh --profile <profile> --dump-config | grep -A3 dsh-blender-plugin
-# 然后重启 DSH
 ~~~
 
-只有修改插件源码时才需要 clone + `npm ci --legacy-peer-deps` + `npm run build`，再把 checkout 以 `link:` 方式装进 profile。
+备选：GitHub Release 的 `dsh-blender-plugin-<version>.tgz` + `SHA256SUMS`（校验和后装进 profile，布局与 `dsh:install` 一致）。
 已安装过的机器更新本仓：`npm run dsh:install`（发布形态）/ `npm run dsh:link` + `npm run dsh:reload`（开发形态）；
 只复制变化的文件、**不动 `runtime/ext`**、自动触发 HMR 并自证，细节见 [安装与升级-加速方案.md](安装与升级-加速方案.md)。
 

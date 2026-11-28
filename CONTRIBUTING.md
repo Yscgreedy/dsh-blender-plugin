@@ -124,11 +124,11 @@ kept in the local refactor workspace, not in this repository.
 - `version` must match `package.json` and `PLUGIN_VERSION` in `src/constants.ts`;
 - `dry_run` defaults to `true` and only verifies and packages;
 - `dry_run=false` creates a **draft** GitHub Release and tag after the `release` environment approval;
-- `publish_npm` defaults to `false`; when enabled, the packed tarball is published with provenance.
+- there is no registry publishing step: registry publishing is closed (the public name belongs to a third party), so `package.json` is `private: true` and the packed tarball is only a release asset.
 
 The workflow never pushes `main` or a tag itself. `workflow_dispatch` only appears after this file is on the default branch, so run it from `main` after the refactor merge (or from a branch that contains the workflow for the dry-run stage). Real Blender
 E2E and the final GitHub Release publication remain human steps. Configure the `release` environment with
-required reviewers and protect `v*` tags. npm publishing uses trusted publishing (OIDC), so no `NPM_TOKEN` is stored in the environment.
+required reviewers and protect `v*` tags. The workflow holds no registry credential: registry publishing is closed, so nothing is uploaded there.
 
 ## License
 
