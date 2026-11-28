@@ -7,12 +7,7 @@
 //
 // Order in the file follows the original so a reviewer can diff block by block.
 
-import {
-  claimExisting,
-  claimFreeSession,
-  createSession,
-  pickInstance,
-} from './attach.js'
+import { claimExisting, claimFreeSession, createSession, pickInstance } from './attach.js'
 import type { AttachLiveness } from './attach.js'
 import { touchAgent } from './presence.js'
 import {
@@ -71,7 +66,9 @@ export class SessionLifecycle {
   ): SessionResult<{ session: SessionRecord; viewer?: boolean }> {
     this.host.prune()
     const requested = opts.instanceId ? 'user-gui:' + String(opts.instanceId) : ''
-    const existing = requested ? (this.host.sessions.get(requested) ?? null) : this.host.findForCaller(c)
+    const existing = requested
+      ? (this.host.sessions.get(requested) ?? null)
+      : this.host.findForCaller(c)
     if (existing) return this.adopt(claimExisting(existing, c, this.host.liveness(existing)), c)
     const picked = pickInstance(this.host.listInstances(), opts)
     if (!('instance' in picked)) {
@@ -210,7 +207,9 @@ export class SessionLifecycle {
 
   detach(c: CallerIdentity, sessionId?: string): SessionResult<{ released: boolean }> {
     this.host.prune()
-    const session = sessionId ? this.host.sessions.get(String(sessionId)) : this.host.findForCaller(c)
+    const session = sessionId
+      ? this.host.sessions.get(String(sessionId))
+      : this.host.findForCaller(c)
     if (!session) return { ok: true, released: false }
     if (session.owner && ownerMatches(session.owner, c) && isMain(session, c)) {
       this.releaseSession(session)
@@ -226,7 +225,9 @@ export class SessionLifecycle {
     opts: { force?: boolean } = {},
   ): SessionResult<{ released: boolean; reason: string; previous_owner?: Owner }> {
     this.host.prune()
-    const session = sessionId ? this.host.sessions.get(String(sessionId)) : this.host.findForCaller(c)
+    const session = sessionId
+      ? this.host.sessions.get(String(sessionId))
+      : this.host.findForCaller(c)
     if (!session) {
       // 静默 ok 是现场踩过的坑：调用方以为会话已经放掉，实际什么都没发生。
       return fail(
@@ -311,7 +312,9 @@ export class SessionLifecycle {
     sessionId?: string,
   ): SessionResult<{ session: Record<string, unknown>; viewer?: boolean }> {
     this.host.prune()
-    const session = sessionId ? this.host.sessions.get(String(sessionId)) : this.host.findForCaller(c)
+    const session = sessionId
+      ? this.host.sessions.get(String(sessionId))
+      : this.host.findForCaller(c)
     if (!session)
       return fail(
         'session_not_found',

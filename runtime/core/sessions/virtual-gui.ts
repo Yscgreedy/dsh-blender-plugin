@@ -119,11 +119,14 @@ function gib(bytes: number): string {
  * budget then behaves exactly as it did before S-5c.
  */
 function jobReservationBytes(host: VirtualGuiHost): number {
-  if (!host.jobLoad) return 0
-  let running = 0
+  const probe = host.jobLoad
+  if (!probe) return 0
+  // Assigned only on the success path: a throwing probe returns 0 before the
+  // value is ever read, so there is no meaningful initial value to declare.
+  let running: number
   try {
-    running = Number(host.jobLoad())
-  } catch (error) {
+    running = Number(probe())
+  } catch {
     return 0
   }
   if (!Number.isFinite(running) || running <= 0) return 0

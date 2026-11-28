@@ -160,7 +160,9 @@ describe('archive and lease security boundaries', () => {
     expect(serverSource).toContain('const gate = leaseGate(payload)')
     // 跳过判据只有一处解释器；路由问 shouldGateWrite，不再自己拼 isReadOnly
     expect(serverSource).toContain('export function shouldGateWrite(')
-    expect(serverSource).toContain("'/act': (payload) => payload.py === true && currentCaller() !== null")
+    expect(serverSource).toContain(
+      "'/act': (payload) => payload.py === true && currentCaller() !== null",
+    )
     expect(serverSource).toContain("'/worker': (payload) => payload.isolated === true")
     expect(serverSource).toContain(
       "const gate = shouldGateWrite('/loop', payload) ? leaseGate(payload) : null",

@@ -66,7 +66,8 @@ describe('write gate skip rules', () => {
     for (const entry of fs.readdirSync(dir)) {
       if (!entry.endsWith('.ts')) continue
       const rel = 'runtime/http/routes/' + entry
-      if (/\bisReadOnly\s*\(/.test(fs.readFileSync(path.join(dir, entry), 'utf8'))) offenders.push(rel)
+      if (/\bisReadOnly\s*\(/.test(fs.readFileSync(path.join(dir, entry), 'utf8')))
+        offenders.push(rel)
     }
     expect(offenders).toEqual([])
   })

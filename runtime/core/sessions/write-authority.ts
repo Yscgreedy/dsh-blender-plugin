@@ -42,10 +42,7 @@ export class WriteAuthority {
    *
    * A family/same-host subagent viewer may publish presence; it never takes ownership.
    */
-  writableSession(
-    c: CallerIdentity,
-    sessionId: string,
-  ): SessionResult<{ session: SessionRecord }> {
+  writableSession(c: CallerIdentity, sessionId: string): SessionResult<{ session: SessionRecord }> {
     this.host.prune()
     const session = this.host.sessions.get(String(sessionId))
     if (!session)
@@ -84,7 +81,9 @@ export class WriteAuthority {
     opts: { py?: boolean; waitMs?: number; scopeDeclared?: boolean } = {},
   ): SessionResult<{ sessionId: string; mode: 'main' | 'grant'; grantId?: string }> {
     this.host.prune()
-    const session = sessionId ? this.host.sessions.get(String(sessionId)) : this.host.findForCaller(c)
+    const session = sessionId
+      ? this.host.sessions.get(String(sessionId))
+      : this.host.findForCaller(c)
     if (!session) {
       return fail(
         'session_unavailable',
@@ -167,7 +166,11 @@ export class WriteAuthority {
     // 只有 HTTP 门明确说"没有声明 scope"（scopeDeclared=false）才改口径；
     // 直接调 registry 的调用方（测试/内部）传了 scopes 就算已声明。
     const pyNeedsScope = opts.py === true && opts.scopeDeclared === false
-    const code = pyNeedsScope ? 'scope_required' : otherSession ? 'session_in_use' : 'scope_required'
+    const code = pyNeedsScope
+      ? 'scope_required'
+      : otherSession
+        ? 'session_in_use'
+        : 'scope_required'
     const rootCause = pyNeedsScope
       ? 'Python writes are authorized by a declared write_scope; this call declared none (is_mine=' +
         String(!otherSession) +
@@ -183,13 +186,7 @@ export class WriteAuthority {
           "blender_session action=grant scopes=['collection:…'] (targetAgentId=…) and declare the same " +
           'write_scope on this call; read-only ops are allowed and carry owner/is_mine=false'
         : 'ask the main agent to grant the declared scope'
-    return fail(
-      code,
-      'session',
-      rootCause,
-      fix,
-      this.writeFailureEvidence(session, c, effective),
-    )
+    return fail(code, 'session', rootCause, fix, this.writeFailureEvidence(session, c, effective))
   }
 
   /** Field retest: a refusal names caller / owner / every grant holder, not just a code. */
