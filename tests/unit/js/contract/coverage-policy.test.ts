@@ -62,13 +62,13 @@ describe('coverage policy', () => {
     }
   })
 
-  it('applies the coverage-v8 5 re-baselined floors from the canonical CI run', () => {
+  it('applies the v4 calibrated floors from canonical CI run 46122003862', () => {
     expect(thresholds.javascript.globalFloor).toEqual({
-      lines: 70.4,
-      branches: 54.4,
-      functions: 68,
+      lines: 77.6,
+      branches: 62.8,
+      functions: 77.3,
     })
-    expect(thresholds.javascript.changedLinesFloor.lines).toBe(66.1)
+    expect(thresholds.javascript.changedLinesFloor.lines).toBe(73.8)
     expect(thresholds.javascript.globalFloor.lines).toBeLessThan(baseline.javascript.lines)
     expect(thresholds.javascript.changedLinesFloor.lines).toBeLessThan(baseline.changedLines.lines)
   })

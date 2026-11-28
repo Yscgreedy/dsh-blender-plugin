@@ -24,7 +24,7 @@ import { READ_ONLY } from './read-only.js'
 export function opHelp(): string {
   return [
     'blender_op 动作（catalog 算子与参数搜索；执行型需要 GUI 会话）：',
-    '  action=plan   op=<catalog op> args={...}：38 family / 270 op 的主入口（op=catalog 看目录）',
+    '  action=plan   op=<catalog op> args={...}：39 family / 275 op 的主入口（op=catalog 看目录）',
     '    · op=catalog args={format:"json"} 取机器可读目录（families[].ops[].needs_gui/headless）',
     '    · headless=true + args.file：白名单 op 强制走本地无头车道（有 GUI 会话也不抢；audit_mesh / img_* / visualreport_report / qc_render_views / montage）',
     '  action=loop   op=start|status|stop|board|export|help|bench：参数搜索内环（target=gui|session）',

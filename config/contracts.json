@@ -292,7 +292,26 @@
     },
     "img": {
       "api": "dsh_img_api",
-      "table": "img"
+      "table": "img",
+      "pythonExtras": [
+        "ref_measure",
+        "ref_crop_atlas",
+        "ref_readability",
+        "ref_help",
+        "ref_selftest"
+      ]
+    },
+    "ref": {
+      "api": "dsh_img_api",
+      "table": "img",
+      "mode": "subset",
+      "aliases": {
+        "measure": "ref_measure",
+        "crop_atlas": "ref_crop_atlas",
+        "readability": "ref_readability",
+        "help": "ref_help",
+        "selftest": "ref_selftest"
+      }
     },
     "assembly": {
       "api": "dsh_assembly_api",

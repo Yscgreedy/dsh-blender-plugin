@@ -423,6 +423,8 @@ export function formatStatus(
   const addon = asRecord(readiness.addon)
   const vg = asRecord(body.virtualGui)
   const lines = ['SESSION status']
+  // H-4：与 doctor 同一行口径（升级后第一时间要看的判据）。
+  lines.push(...hostApiLines(body))
   lines.push(
     'gateway  ' + (readiness.gateway ? 'up' : 'down') + (body.running ? ' · backend running' : ''),
   )
@@ -471,6 +473,54 @@ export function formatStatus(
   return lines.join(LF)
 }
 
+/**
+ * H-4（additive）：宿主 API 自证 + 冻结基线的双轴结论，一行说完。
+ *
+ * `body.hostApi` 缺失（老 Gateway / 非宿主回执）时返回空数组 —— 既有文本逐字不变。
+ * 三种状态各有可执行下一步：current 什么都不用做；version_matches=false 只是提示
+ * （宿主升级了，刷基线即可）；drift 才要人确认新位置。
+ */
+function hostApiLines(body: Record<string, unknown>): string[] {
+  const section = asRecord(body.hostApi)
+  if (!Object.keys(section).length) return []
+  const baseline = asRecord(section.baseline)
+  const status = text(baseline.status || 'unknown')
+  const reason = text(baseline.reason)
+  const expected = asRecord(baseline.expected)
+  const actual = asRecord(baseline.actual)
+  const refresh = 'node scripts/refresh-host-api-baseline.mjs'
+  const head = '宿主 API：' + text(section.api || '-')
+  if (status === 'drift')
+    return [
+      head +
+        ' · ⚠ 宿主 API baseline drift · reason=' +
+        (reason || 'path_changed') +
+        ' expected=' +
+        text(expected.pathSuffix || expected.pathHash || '-') +
+        ' actual=' +
+        text(actual.pathSuffix || actual.pathHash || '-') +
+        ' → ' +
+        refresh +
+        '（确认新位置后再刷新）',
+    ]
+  if (status === 'unknown')
+    return [
+      head + ' · baseline unknown · reason=' + (reason || 'baseline_missing') + ' → ' + refresh,
+    ]
+  if (baseline.version_matches === false)
+    return [
+      head +
+        ' · baseline current · version_matches=false expected=' +
+        text(expected.version || '-') +
+        ' actual=' +
+        text(actual.version || '-') +
+        '（宿主升级，跑 ' +
+        refresh +
+        ' 刷新基线）',
+    ]
+  return [head + ' · baseline current']
+}
+
 export function formatDoctor(body: Record<string, unknown>): string {
   const lines = [
     'SESSION doctor · ok=' +
@@ -479,6 +529,8 @@ export function formatDoctor(body: Record<string, unknown>): string {
       (body.verdict ? ' · verdict=' + text(body.verdict) : '') +
       (body.protocol !== undefined ? ' · protocol=' + text(body.protocol) : ''),
   ]
+  // H-4：宿主 API 自证紧跟头行（升级后第一时间要看的判据）。
+  lines.push(...hostApiLines(body))
   if (body.root_cause) lines.push('root_cause: ' + text(body.root_cause))
   if (body.fix) lines.push('fix: ' + text(body.fix))
   const checks = body.checks

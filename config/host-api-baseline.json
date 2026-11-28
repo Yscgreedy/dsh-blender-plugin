@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "package": "@deepseek-ai/dsh-tools",
+  "hostApiVersion": "0.0.1-rc.1",
+  "pluginVersion": "3.3.1",
+  "pathSuffix": "node_modules/@deepseek-ai/dsh-tools/lib/index.js",
+  "pathHash": "7ddb1fa28450e9a4",
+  "platform": "win32",
+  "generatedAt": "2026-11-28T08:23:16.915Z"
+}

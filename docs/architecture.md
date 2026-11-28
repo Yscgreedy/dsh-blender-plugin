@@ -25,7 +25,7 @@ There are three logical processes and one inbound endpoint:
 - the host owns the model-facing tools and the headless/fallback policy.
 
 The public model surface is 6 tools (blender_session, blender_op, blender_py, blender_see,
-blender_run, blender_inspect), 38 planning families, 270 operations, 25 addon commands
+blender_run, blender_inspect), 39 planning families, 275 operations, 25 addon commands
 (25 registered commands; the transport-only ping makes 26 wire commands), 29 HTTP routes, and
 protocol 12. These counts are facts, not goals; changing one requires updating the catalog, lock,
 tests, and migration notes in the same change.
@@ -355,7 +355,7 @@ gate.
 
 These are the rules that protect the architecture:
 
-- 6 tools / 7 capabilities / 38 families / 270 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
+- 6 tools / 7 capabilities / 39 families / 275 ops / 25 addon commands / 29 routes / protocol 12 stay stable unless a
   declared migration changes them. The 25 addon commands are the registered dispatch surface; the
   transport-only ping is the 26th wire command.
 - src/index.ts stays entry-only; production files stay under the line budgets enforced by
@@ -487,20 +487,26 @@ with diagnose.
 ### Coverage policy
 
 Coverage is measured with Vitest's single-file mode plus pytest branch coverage, and the gate reads
-only `config/coverage-thresholds.json`. The floors were re-baselined on 2026-11-01 when
+only `config/coverage-thresholds.json`. The first re-baseline happened on 2026-11-01 when
 `@vitest/coverage-v8` moved from 3 to 5: the provider switched to AST-aware remapping, which changed
 the measurement scale on the same tree (branch points 3934 -> 6567, executable lines 17819 -> 6294),
-so the previous 73.2/68.7/70.4 floors were no longer comparable. Canonical CI run
+so the previous 73.2/68.7/70.4 floors were no longer comparable (canonical CI run
 [41315467806](https://github.com/sixtysevenlf/dsh-blender-plugin/actions/runs/41315467806) at commit
-`8299acf` measured JS 71.91% lines / 55.99% branches / 69.5% functions and 67.698 changed lines
-against v2.6.2 (7724 changed / 2495 missing). Applying the unchanged rule (round down to 0.1pp,
-subtract 1.5pp) gives the current floors: lines 70.4, branches 54.4, functions 68, changed lines 66.1.
-This is a documented policy change required by the measurement-tool upgrade; no tests or modules were
-removed, and the previous "never below the prior floor" rule does not apply across a provider change.
-Critical contract modules stay >=90/75; execution-module floors are unchanged except
-`runtime/execution/headless/process.ts` branches 60 -> 55.6 (re-measured 57.14). Python pure logic is
-82.5/74.36 with floors 80/70. Future ratchets use the next canonical CI run and the manual +2/PR
-policy; a floor must not be lowered without a documented policy change in this guide.
+`8299acf`: JS 71.91/55.99/69.5, changed 67.698). That was a documented policy change required by the
+measurement-tool upgrade; no tests or modules were removed.
+
+The first regular calibration after that upgrade — and the one in force today — uses canonical CI run
+[46122003862](https://github.com/Yscgreedy/dsh-blender-plugin/actions/runs/46122003862) at commit
+`7c31e0d` (main, 2026-11-28, conclusion success): JS 79.11% lines / 64.32% branches / 78.87%
+functions and 75.359 changed lines against v2.6.2 (15462 changed / 3810 missing); Python pure logic
+84.81% lines / 76.35% branches (575/678 lines, 113/148 branches). Applying the unchanged rule (round
+down to 0.1pp, subtract 1.5pp) **tightens** the floors to lines 77.6, branches 62.8, functions 77.3,
+changed lines 73.8 (target 75) and Python 83.3/74.8 — every floor still sits 1.5pp below the measured
+value. This is a tightening calibration, not a reduction: nothing was removed, and the "a floor must
+not be lowered" rule is untouched. Critical contract modules stay >=90/75; execution-module ratchet
+floors are unchanged (`runtime/execution/headless/process.ts` branches 55.6, re-measured 62.5). E2E
+behavior-matrix coverage stays 100%. Future ratchets use the next canonical CI run and the manual
++2/PR policy; a floor moves only with a documented calibration in this guide.
 
 ## 9. Key choices and consequences
 

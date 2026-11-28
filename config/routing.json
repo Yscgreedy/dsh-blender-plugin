@@ -281,6 +281,20 @@
       "preload": "imgtools"
     },
     {
+      "id": "ext-ref",
+      "side": "gui",
+      "family": "ref",
+      "group": "ext",
+      "kind": "dispatch",
+      "match": "prefix",
+      "prefix": "ref_",
+      "strip": 0,
+      "api": "dsh_img_api",
+      "ensure": "ensureImg",
+      "timeoutMs": 300000,
+      "preload": "imgtools"
+    },
+    {
       "id": "ext-face",
       "side": "gui",
       "family": "face",

@@ -6,7 +6,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 
 # Blender 建模流程
 
-> **v3.3.1 · 2026-11-17**：配套插件 dsh-blender-plugin v3.3.1，6 个模型工具，plan 通道 38 个 family / 270 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
+> **v3.3.1 · 2026-11-17**：配套插件 dsh-blender-plugin v3.3.1，6 个模型工具，plan 通道 39 个 family / 275 个 op，addon v2.0.0 / protocol 12。**默认 GUI 优先**：先开 GUI Blender + Connect；无头用于批处理/长活/全新场景，通过 blender_run 后台作业提交、按 id 收图与产物。
 > 旧版按 v2/v3/v7 记录的“哪段是哪次实测加的”不再写在正文；需要追溯看 CHANGELOG。下面只写**当前有效口径**。
 
 先定形状，再走流程，改一步看一眼。**不要一口气写完整个模型再回来看**——每一步都要有画面或数字证据。
@@ -18,7 +18,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 | 工具 | 什么时候用 | 关键点 |
 |---|---|---|
 | blender_session | 会话与通道运维 | list/status/doctor/attach/claim/release/grant/revoke/pause/mark_read/presence；action=txn 回滚；Blender/Gateway 生命周期由宿主管理 |
-| blender_op | 契约层 + 判定/验收/导出/造型 | op=catalog 先查 38 个 family / 270 个 op；执行 op 需要 ready 的 GUI 会话（catalog/dry-run 本地只读、无需会话）；action=loop/opt/preset |
+| blender_op | 契约层 + 判定/验收/导出/造型 | op=catalog 先查 39 个 family / 275 个 op；执行 op 需要 ready 的 GUI 会话（catalog/dry-run 本地只读、无需会话）；action=loop/opt/preset |
 | blender_py | 改一步看一眼 | 在已 attach 的 GUI 会话里跑 Python，持久内核 K；see=true 回一帧；仅 GUI，重活转 blender_run |
 | blender_see | 看一眼画面 | 仅 GUI 取帧：viewpoint=viewport/camera/custom、mode=frame/sequence，固定分档；不动用户视口 |
 | blender_run | 批处理/长活 | 唯一作业入口：submit kind=render|headless 立即回 job id；status/wait/collect/cancel/list；action=tune 管渲染性能；超时不等于失败 |
@@ -142,7 +142,7 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 
 | 我要做什么 | 首选 | 备注 |
 |---|---|---|
-| 不知道该用什么 | blender_op(op="catalog") | 38 个 family / 270 个 op；单族 family=... |
+| 不知道该用什么 | blender_op(op="catalog") | 39 个 family / 275 个 op；单族 family=... |
 | 基本体/分面硬表面 | bmesh / geo primitives + bevel | 分面件不要 SubSurf |
 | 毫米口径建模 | `blender_op(op="geo_box", args={size_mm:[…], unit:"mm"})` | 坐标按 mm 收；回执带 `units{mm_per_bu,scale_length,unit_mode}`；`geo_join` 会先烘 `matrix_world`（阵列后 join 不再塌） |
 | 光滑硬表面 | Bevel + Subdivision + shade smooth | Bevel 必须在 SubSurf 前 |
@@ -341,7 +341,7 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
 
 **判据**：能用第一选择就不用第二选择；第二选择必须在回执里写明“为什么不用插件 op”。
 
-## 4. 当前 plan 通道速查（v3.3.1 · 38 个 family / 270 个 op）
+## 4. 当前 plan 通道速查（v3.3.1 · 39 个 family / 275 个 op）
 
 先 blender_op(op="catalog") 看“什么时候用 / 别用 / 最小骨架”，再单族展开。常用家族：
 
@@ -351,6 +351,7 @@ plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/ne
 | asm | 装配清单/扫描/合并/修复/导出/门 | asm_manifest / asm_scan / asm_merge / asm_repair / asm_export / asm_gate |
 | blockout | 声明式白模/批量/参考包 | blockout_base / blockout_batch / blockout_export / blockout_refsheet / blockout_turntable |
 | img | 参考图量具 | img_digest / img_probe / img_measure / img_calib / img_rectify / img_crop / img_diff |
+| ref | 参考图标定/原生裁剪/可读性 | ref_measure / ref_crop_atlas / ref_readability |
 | visualreport | 同机位 QC 报告 | visualreport_report |
 | shapesolve | 无头多视轮廓拟合 | shapesolve_solve |
 | eval | 缺陷注入/基线评估 | eval_run |

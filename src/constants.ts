@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { asRecord, errorMessage } from './contracts/dynamic.js'
+import { resolveHostApi } from './host-api-baseline.js'
 
 export const IS_WIN = process.platform === 'win32'
 
@@ -90,38 +90,24 @@ export const VIEWPORT_START_STATUS_TIMEOUT_MS = 12000
 export const VIEWPORT_DOCTOR_HEALTH_TIMEOUT_MS = 800
 
 /**
- * v0.9.2（R2 自证）：插件 import 到的 @deepseek-ai/dsh-tools 是哪一份、哪一版。
- * 本机解析链：插件 node_modules → ~/dsh-harness（fake checkout）→ /usr/lib/node_modules
- * 的**全局安装**。DSH 一升级，这里就是升级后那份；而全局安装位置一变，插件会在载入期
- * ERR_MODULE_NOT_FOUND（15 个工具整体消失）。doctor/status 带上它，用来一眼区分
- * "插件/宿主 API 坏了"与"Blender 没起"。
+ * v0.9.2（R2 自证）+ H-4（冻结基线）：插件 import 到的 @deepseek-ai/dsh-tools 是哪一份、哪一版。
+ *
+ * 本机解析链：插件 node_modules → ~/dsh-harness（fake checkout）→ 全局安装。DSH 一升级，
+ * 这里就是升级后那份；全局安装位置一变，插件会在载入期 ERR_MODULE_NOT_FOUND。doctor/status
+ * 带上它，用来一眼区分"插件/宿主 API 坏了"与"Blender 没起"；H-4 的基线比对见
+ * host-api-baseline.ts（这里只保证**字符串逐字不变**）。
  */
 function hostApiInfo(): string {
-  try {
-    const meta = import.meta as ImportMeta & { resolve?: (specifier: string) => string }
-    const resolveFn = meta.resolve
-    if (typeof resolveFn !== 'function')
-      return 'dsh-tools: import.meta.resolve 不可用（node < 20.6?）'
-    const url = String(resolveFn.call(import.meta, '@deepseek-ai/dsh-tools') || '')
-    let p = url
-    if (p.startsWith('file://')) p = fileURLToPath(p)
-    let ver = '?'
-    try {
-      const parsed: unknown = JSON.parse(
-        readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8'),
-      )
-      ver = String(asRecord(parsed).version || '?')
-    } catch {
-      /* 版本读不到不算错 */
-    }
-    return 'dsh-tools@' + String(ver) + ' @ ' + p
-  } catch (e: unknown) {
+  const api = resolveHostApi()
+  if (api.reason === 'resolve_unavailable')
+    return 'dsh-tools: import.meta.resolve 不可用（node < 20.6?）'
+  if (!api.ok || !api.path)
     return (
       'dsh-tools 解析失败：' +
-      errorMessage(e) +
+      String(api.error || 'unknown') +
       '（插件会在载入期就失败：检查全局安装位置是否变了）'
     )
-  }
+  return 'dsh-tools@' + String(api.version || '?') + ' @ ' + api.path
 }
 export const HOST_API = hostApiInfo()
 

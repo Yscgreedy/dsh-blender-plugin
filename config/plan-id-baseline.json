@@ -1,11 +1,11 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-28T07:24:49.318Z",
+  "generatedAt": "2026-11-28T08:38:14.892Z",
   "mode": "warn",
   "totals": {
-    "all": 1574,
-    "exempt": 1574,
+    "all": 1572,
+    "exempt": 1572,
     "residual": 0
   },
   "byPrefix": {},
@@ -77,8 +77,8 @@
       "residual": 0
     },
     "docs/已知问题台账.md": {
-      "count": 50,
-      "exempt": 50,
+      "count": 48,
+      "exempt": 48,
       "residual": 0
     },
     "docs/操作教程.md": {
