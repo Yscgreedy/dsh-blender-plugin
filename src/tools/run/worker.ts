@@ -213,6 +213,33 @@ function auxText(op: string, name: string, r: Record<string, unknown>, ok = true
   return lines.join(LF)
 }
 
+/**
+ * see/watch 回执里的取景行：成功给 applied，失败给 fit.error，note 单独一行。
+ *
+ * 真机反馈（task-34）：图对了，但工具文本只有尺寸/coverage，模型判断不了 fit
+ * 是否生效、失败原因是什么。没有任何 fit/note 时返回空数组 —— 正文一行都不加，
+ * 既有回执逐字节不变。
+ */
+export function workerSeeFitLines(r: Record<string, unknown>): string[] {
+  const lines: string[] = []
+  const fit = asRecord(r.fit)
+  if (Object.keys(fit).length) {
+    const kind = text(fit.kind) || '?'
+    const error = text(fit.error)
+    if (error) {
+      lines.push('fit=' + kind + ' · fit.error=' + error)
+    } else {
+      const applied = Array.isArray(fit.applied)
+        ? fit.applied.map((x) => text(x)).filter((x) => x)
+        : []
+      lines.push('fit=' + kind + ' · applied=' + (applied.length ? applied.join(',') : '-'))
+    }
+  }
+  const note = text(r.note)
+  if (note) lines.push('note: ' + note)
+  return lines
+}
+
 async function withImage(
   ctx: unknown,
   body: Record<string, unknown>,
@@ -220,8 +247,12 @@ async function withImage(
   label: string,
 ): Promise<Record<string, unknown>> {
   const b64 = text(r.png_b64)
+  const tail = workerSeeFitLines(r)
+    .map((line) => LF + line)
+    .join('')
   if (!b64) {
-    body.text = text(body.text) + LF + '（无图：' + text(r.error || 'worker 没回 png_b64') + '）'
+    body.text =
+      text(body.text) + LF + '（无图：' + text(r.error || 'worker 没回 png_b64') + '）' + tail
     return body
   }
   const png = Buffer.from(b64, 'base64')
@@ -243,7 +274,8 @@ async function withImage(
     String(r.ms ?? '?') +
     'ms · coverage=' +
     String(r.coverage_estimate ?? '?') +
-    (att.ref ? '' : ' · 图片未回传：' + text(att.why || ''))
+    (att.ref ? '' : ' · 图片未回传：' + text(att.why || '')) +
+    tail
   return body
 }
 

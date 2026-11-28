@@ -16,6 +16,7 @@ import { runWithCaller } from '../../../runtime/http/caller.js'
 import { dispatchSessionAction } from '../../../runtime/http/routes/session/api.js'
 import { crewView } from '../../../runtime/core/sessions/session-views.js'
 import { formatSessionList } from '../../../src/tools/session/presenter.js'
+import { withCrewEvidence } from '../../../src/tools/session/execute.js'
 
 const NOW = 1_763_000_000_000
 
@@ -536,5 +537,68 @@ describe('面板客户端：panelRow 的 crew 摘要行', () => {
       owner: { dshSessionId: 'dsh-1', agentId: 'agent-main', role: 'main' },
     })
     expect(row.crewText).toBe('')
+  })
+})
+
+describe('list 回执：evidence.sessions 与文本同源（/status 的 sessionBriefs 投影）', () => {
+  it('merges crew[] from the listed rows into the evidence briefs (additive)', () => {
+    const crew = crewView(sessionRow(), [job('agent-sub', 'running')], NOW)
+    const evidence = {
+      ok: true,
+      sessions: [
+        { id: 'user-gui:inst-1', kind: 'user-gui', status: 'ready', instanceId: 'inst-1' },
+      ],
+      ports: [],
+    }
+    const merged = withCrewEvidence(evidence, [{ id: 'user-gui:inst-1', crew }])
+    expect(merged).not.toBeNull()
+    const brief = (merged?.sessions as Array<Record<string, unknown>>)[0]
+    expect(brief.crew).toEqual(crew)
+    // 一行摘要要能看见 owner 行（真机就是这条丢了）
+    expect((brief.crew as Array<Record<string, unknown>>)[0]).toMatchObject({
+      agentId: 'agent-main',
+      role: 'main',
+      state: 'idle',
+    })
+    // additive：既有 brief 字段与顺序一字不动
+    expect(Object.keys(brief).slice(0, 4)).toEqual(['id', 'kind', 'status', 'instanceId'])
+    expect(brief).toMatchObject({
+      id: 'user-gui:inst-1',
+      kind: 'user-gui',
+      status: 'ready',
+      instanceId: 'inst-1',
+    })
+    expect(merged?.ok).toBe(true)
+    expect(merged?.ports).toEqual([])
+  })
+
+  it('works for crew built without a job queue (counts are zero, owner row still there)', () => {
+    const crew = crewView(sessionRow(), undefined, NOW)
+    const merged = withCrewEvidence({ sessions: [{ id: 'user-gui:inst-1', status: 'ready' }] }, [
+      { id: 'user-gui:inst-1', crew },
+    ])
+    const brief = (merged?.sessions as Array<Record<string, unknown>>)[0]
+    expect((brief.crew as Array<Record<string, unknown>>)[0]).toMatchObject({
+      agentId: 'agent-main',
+      jobs_running: 0,
+      jobs_queued: 0,
+      state: 'idle',
+    })
+  })
+
+  it('keeps the evidence untouched when a row has no crew or the ids do not match', () => {
+    const evidence = { sessions: [{ id: 'user-gui:inst-1', kind: 'user-gui' }] }
+    expect(withCrewEvidence(evidence, [{ id: 'user-gui:inst-1' }])?.sessions).toEqual([
+      { id: 'user-gui:inst-1', kind: 'user-gui' },
+    ])
+    expect(
+      withCrewEvidence(evidence, [{ id: 'user-gui:inst-9', crew: [{ agentId: 'x' }] }])?.sessions,
+    ).toEqual([{ id: 'user-gui:inst-1', kind: 'user-gui' }])
+  })
+
+  it('returns the evidence as-is when there is nothing to merge', () => {
+    expect(withCrewEvidence(null, [])).toBeNull()
+    const noSessions = { ok: true, ports: [] }
+    expect(withCrewEvidence(noSessions, [{ id: 'user-gui:inst-1', crew: [] }])).toBe(noSessions)
   })
 })
