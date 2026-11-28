@@ -210,8 +210,10 @@ model now separates three rights:
   `owner` / `is_mine=false` / `borrowed=true`; `blender_see` and read-only ops work and every op
   receipt carries `source.owner` + `source.is_mine`. Writes still fail (`session_in_use`) unless the
   owner issues a grant.
-- **owner reclaim**: owner records carry `role` and heartbeat age. A subagent owner is stale after 30 s;
-  a main owner after **30 min** (it may wait a whole subagent round), and any authenticated call
+- **owner reclaim**: owner records carry `role`, heartbeat age and an optional per-record `staleMs`
+  override. A subagent owner is stale after 30 s — except the subagent that **started** its own
+  virtual-gui, whose record carries 5 min (`Owner.staleMs`) so a 120 s job wait cannot be stolen; a
+  main owner after **30 min** (it may wait a whole subagent round), and any authenticated call
   refreshes the heartbeat. `prune` clears a stale owner unless a live `blender_py` holds the session,
   and `release` accepts `force=true` from a same-host main agent. Status/list show
   `heartbeat_age_ms` + `stale_after_ms` and the exact reclaim command instead of an opaque wait.

@@ -145,8 +145,15 @@ export class JobQueue {
         queueFailure(
           'queue_full',
           'The job queue is full.',
-          'Wait for a running job to finish, or raise the documented pending limit.',
-          { pending: pendingCount(this.jobs), limit: this.capacity.pending },
+          // Q-3：文案必须指向**真实存在**的键（以前写的是不存在的 "documented pending limit"）。
+          'Wait for a running job to finish (action=list then action=collect/cancel), ' +
+            'or raise the pending limit: env DSH_BLENDER_QUEUE_PENDING ' +
+            'or features.queue.pending in dsh-blender.config.json (see docs/配置参考.md).',
+          {
+            pending: pendingCount(this.jobs),
+            limit: this.capacity.pending,
+            set: 'DSH_BLENDER_QUEUE_PENDING',
+          },
         ),
       )
     }
@@ -185,12 +192,12 @@ export class JobQueue {
     this.jobs.push(job)
     this.persist()
     this.pump()
-    return Object.assign(this.snapshot(job), { queued_ahead: queuedAhead })
+    return Object.assign(this.view(job), { queued_ahead: queuedAhead })
   }
 
   status(id: string): JobRecord | null {
     const job = this.find(id)
-    return job ? this.snapshot(job) : null
+    return job ? this.view(job) : null
   }
 
   async wait(
@@ -211,9 +218,16 @@ export class JobQueue {
           ),
         )
       if (terminalOf(job.state))
-        return { job: this.snapshot(job), waitedMs: Date.now() - t0, waitTimedOut: false }
+        return { job: this.view(job), waitedMs: Date.now() - t0, waitTimedOut: false }
       if (Date.now() - t0 >= budget)
-        return { job: this.snapshot(job), waitedMs: Date.now() - t0, waitTimedOut: true }
+        return {
+          job: this.view(job),
+          waitedMs: Date.now() - t0,
+          waitTimedOut: true,
+          // Q-4：超时**不是失败**。显式给出"作业仍在跑（或仍在排队等槽位）"，免得调用方
+          // 把 waitTimedOut 读成 failed；到达终态的那条路径不带这个字段。
+          still_running: !terminalOf(job.state),
+        }
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
     }
   }
@@ -229,7 +243,7 @@ export class JobQueue {
         ),
       )
     this.authorize(caller, job, 'collect')
-    const snap = this.snapshot(job)
+    const snap = this.view(job)
     return {
       job: {
         ...snap,
@@ -317,7 +331,7 @@ export class JobQueue {
     const offset = Math.max(0, Math.trunc(Number(filter.offset) || 0))
     const limit = Math.trunc(Number(filter.limit) || 0)
     const page = limit > 0 ? rows.slice(offset, offset + limit) : rows.slice(offset)
-    return page.map((job) => this.snapshot(job))
+    return page.map((job) => this.view(job))
   }
 
   perf(): Record<string, unknown> {
@@ -483,6 +497,21 @@ export class JobQueue {
 
   private find(id: string): JobRecord | null {
     return this.jobs.find((job) => job.id === id) || null
+  }
+
+  /**
+   * 读路径的作业视图（Q-3）：排队中的作业若**还没有** decision，就用 scheduler 的
+   * explainWaiting 当场算一次 —— 同一条策略，绝不在这里复制一份分支。
+   *
+   * 为什么需要：recordWaiting() 只给队首记原因，第二行之后在 status/list 里是
+   * decision=null，调用方看不出"我在等什么"。派生值不落盘、不进事件链：读一次不改状态，
+   * 也不会把队列拍成"每次 status 都变一次"。
+   */
+  private view(job: JobRecord): JobRecord {
+    const snap = this.snapshot(job)
+    if (snap.state !== 'queued') return snap
+    snap.decision = explainWaiting(job, this.jobs, this.capacity, this.reservedGpu())
+    return snap
   }
 
   private snapshot(job: JobRecord): JobRecord {

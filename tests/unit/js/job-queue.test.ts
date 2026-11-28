@@ -8,7 +8,9 @@ import type { JobExecutor, JobHandle, JobRecord } from '../../../runtime/core/qu
 import { JobSurface, callerFromHeaders } from '../../../runtime/core/queue/handler.js'
 import { SpawnJobExecutor } from '../../../runtime/core/queue/spawn-executor.js'
 import { buildJobArgs } from '../../../runtime/core/queue/job-args.js'
-import type { CallerIdentity } from '../../../runtime/core/sessions/types.js'
+import { CFG, resolveQueueSetting } from '../../../runtime/config.js'
+import { listRows } from '../../../src/tools/run/presenter.js'
+import type { CallerIdentity, SessionRecord } from '../../../runtime/core/sessions/types.js'
 
 const main = (over: Partial<CallerIdentity> = {}): CallerIdentity => ({
   hostId: 'host-a',
@@ -229,6 +231,246 @@ describe('3.1 job queue', () => {
     const result = await pending
     expect(result.waitTimedOut).toBe(true)
     expect(queue.status(job.id)?.state).toBe('running')
+  })
+})
+
+describe('3.1 queue capacity is configuration, not a compile-time constant (Q-1/Q-2/Q-3)', () => {
+  it('rejects the second job when pending is configured to 1', () => {
+    const { queue } = setup({ capacity: { pending: 1 } })
+    queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    try {
+      queue.submit(main(), { kind: 'render', file: 'b.blend' })
+      throw new Error('expected queue full')
+    } catch (e) {
+      expect(e).toBeInstanceOf(QueueError)
+      const failure = (e as QueueError).failure
+      expect(failure.code).toBe('queue_full')
+      expect(failure.evidence.limit).toBe(1)
+      expect(failure.evidence.pending).toBe(1)
+    }
+  })
+
+  it('runs two renders at once when gpu is configured to 2', () => {
+    const { queue, executor } = setup({ capacity: { gpu: 2 } })
+    const a = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const b = queue.submit(main(), { kind: 'render', file: 'b.blend' })
+    expect(executor.starts).toHaveLength(2)
+    expect(queue.status(a.id)?.state).toBe('running')
+    expect(queue.status(b.id)?.state).toBe('running')
+    expect(queue.perf().slots).toMatchObject({ gpu: { used: 2, total: 2 } })
+    const third = queue.submit(main(), { kind: 'render', file: 'c.blend' })
+    expect(queue.status(third.id)?.state).toBe('queued')
+    expect(queue.status(third.id)?.decision?.reason).toBe('capacity')
+  })
+
+  it('bounds one owner with ownerQuota while other slots stay free', () => {
+    const { queue, executor } = setup({ capacity: { ownerQuota: 2, cpu: 8 } })
+    queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    queue.submit(main(), { kind: 'headless', script: 'print(2)' })
+    const third = queue.submit(main(), { kind: 'headless', script: 'print(3)' })
+    expect(executor.starts).toHaveLength(2)
+    expect(queue.status(third.id)?.state).toBe('queued')
+    expect(queue.status(third.id)?.decision?.reason).toBe('quota')
+    expect(queue.perf().capacity).toMatchObject({ ownerQuota: 2, cpu: 8 })
+  })
+
+  it('reserves a GPU slot per live virtual-gui and says virtual_gui', () => {
+    const { queue, executor } = setup({ capacity: { gpu: 2 }, reserved: 1 })
+    const first = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const second = queue.submit(main(), { kind: 'render', file: 'b.blend' })
+    expect(executor.starts).toHaveLength(1)
+    expect(queue.status(first.id)?.state).toBe('running')
+    expect(queue.status(second.id)?.state).toBe('queued')
+    expect(queue.status(second.id)?.decision?.reason).toBe('virtual_gui')
+    expect(queue.perf().slots).toMatchObject({ gpu: { used: 1, total: 2, reserved: 1 } })
+  })
+
+  it('points the queue_full fix at DSH_BLENDER_QUEUE_PENDING instead of a missing key', () => {
+    const { queue } = setup({ capacity: { pending: 1 } })
+    queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    let failure: QueueError | null = null
+    try {
+      queue.submit(main(), { kind: 'headless', script: 'print(2)' })
+    } catch (e) {
+      failure = e as QueueError
+    }
+    expect(failure).not.toBeNull()
+    expect(failure!.failure.fix).toContain('DSH_BLENDER_QUEUE_PENDING')
+    expect(failure!.failure.fix).not.toContain('documented pending limit')
+    expect(failure!.failure.evidence).toMatchObject({ pending: 1, limit: 1 })
+  })
+
+  it('explains every queued row through explainWaiting, not only the head', () => {
+    const { queue } = setup({ capacity: { gpu: 1 } })
+    queue.submit(main(), { kind: 'render', file: 'running.blend' })
+    const second = queue.submit(main(), { kind: 'render', file: 'second.blend' })
+    const third = queue.submit(main(), { kind: 'render', file: 'third.blend' })
+    // recordWaiting 只记队首；第三行以前在 status/list 里是 decision=null —— 看不出在等什么。
+    const status = queue.status(third.id)
+    expect(status?.state).toBe('queued')
+    expect(status?.decision).toMatchObject({
+      outcome: 'waiting',
+      reason: 'capacity',
+      detail: 'target slot is busy',
+    })
+    expect(queue.status(second.id)?.decision?.reason).toBe('capacity')
+    const queued = queue.list().filter((job) => job.state === 'queued')
+    expect(queued).toHaveLength(2)
+    expect(queued.every((job) => job.decision?.detail === 'target slot is busy')).toBe(true)
+    // 派生视图只读：不落盘、不改事件链。
+    expect(queue.status(third.id)?.events.map((e) => e.to)).toEqual(['queued'])
+  })
+
+  it('keeps the documented defaults and lets env win over the config file', () => {
+    expect(CFG.features.queue).toEqual({ gpu: 1, cpu: 2, pending: 64, ownerQuota: 8 })
+    const envName = 'DSH_BLENDER_QUEUE_GPU'
+    expect(resolveQueueSetting({ envName, envValue: '3', fileValue: 9, fallback: 1 })).toEqual({
+      value: 3,
+      source: 'env:DSH_BLENDER_QUEUE_GPU',
+    })
+    expect(
+      resolveQueueSetting({
+        envName,
+        envValue: undefined,
+        fileValue: 9,
+        fallback: 1,
+        fileFrom: 'x.json',
+      }),
+    ).toEqual({ value: 9, source: 'file:x.json' })
+    expect(resolveQueueSetting({ envName, envValue: '', fileValue: 9, fallback: 1 })).toEqual({
+      value: 9,
+      source: 'file:config',
+    })
+    expect(resolveQueueSetting({ envName, envValue: undefined, fallback: 1 })).toEqual({
+      value: 1,
+      source: 'default',
+    })
+  })
+
+  it('falls back to the default for invalid values and says invalid in the source', () => {
+    const envName = 'DSH_BLENDER_QUEUE_PENDING'
+    expect(resolveQueueSetting({ envName, envValue: 'nope', fallback: 64 })).toEqual({
+      value: 64,
+      source: 'invalid:env:DSH_BLENDER_QUEUE_PENDING',
+    })
+    expect(resolveQueueSetting({ envName, envValue: '0', fallback: 64 })).toEqual({
+      value: 64,
+      source: 'invalid:env:DSH_BLENDER_QUEUE_PENDING',
+    })
+    expect(
+      resolveQueueSetting({
+        envName,
+        envValue: undefined,
+        fileValue: -2,
+        fallback: 64,
+        fileFrom: 'x.json',
+      }),
+    ).toEqual({ value: 64, source: 'invalid:file:x.json' })
+    // 画面上的整数语义：小数向下取整，避免 2.7 变成 3 个 slot。
+    expect(resolveQueueSetting({ envName, envValue: '2.7', fallback: 64 }).value).toBe(2)
+  })
+})
+
+describe('3.1 gateway wiring reads capacity from configuration (Q-1/Q-2)', () => {
+  it('passes features.queue to JobQueue and reserves a GPU slot per virtual-gui', async () => {
+    process.env.DSH_BLENDER_QUEUE_GPU = '3'
+    vi.resetModules()
+    try {
+      const { createGatewayApp } = await import('../../../runtime/gateway/app.js')
+      const app = createGatewayApp({ port: 0 })
+      try {
+        // 构造点真的把配置传下去了（不是 DEFAULT_CAPACITY 的巧合：gpu 来自 env=3）。
+        // perf() 是 Record<string, unknown>，用 toMatchObject 一次断言四个键，不拿 any 吞边界。
+        expect(app.jobQueue.perf()).toMatchObject({
+          capacity: { gpu: 3, cpu: 2, pending: 64, ownerQuota: 8 },
+        })
+        // reservedGpu 接的是 registry 的 virtual-gui 计数：默认实现会恒为 0。
+        const virtual: SessionRecord = {
+          id: 'virtual-gui:v1',
+          kind: 'virtual-gui',
+          instanceId: 'v1',
+          status: 'ready',
+          owner: null,
+          agents: new Map(),
+          grants: new Map(),
+          paused: false,
+          pausedAt: null,
+          activePy: null,
+          humanEdits: new Map(),
+          humanModifiedAt: null,
+          display: null,
+          provider: null,
+          createdAt: 1,
+          lastActivityAt: 1,
+        }
+        app.sessionRegistry.addSession(virtual)
+        expect(app.jobQueue.perf().slots).toMatchObject({ gpu: { reserved: 1, total: 3 } })
+      } finally {
+        app.close()
+      }
+    } finally {
+      delete process.env.DSH_BLENDER_QUEUE_GPU
+      vi.resetModules()
+    }
+  })
+})
+
+describe('3.1 wait timeout says still_running and list rows carry decision detail (Q-4)', () => {
+  it('marks a timed-out wait on a live job with still_running', async () => {
+    vi.useFakeTimers()
+    const { queue } = setup()
+    const job = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const pending = queue.wait(main(), job.id, 1000)
+    await vi.advanceTimersByTimeAsync(1200)
+    const result = await pending
+    expect(result.waitTimedOut).toBe(true)
+    expect(result.still_running).toBe(true)
+    expect(typeof result.waitedMs).toBe('number')
+    expect((result.job as JobRecord).state).toBe('running')
+  })
+
+  it('omits still_running when the job already reached a terminal state', async () => {
+    const { queue, executor } = setup()
+    const job = queue.submit(main(), { kind: 'headless', script: 'print(1)' })
+    executor.finish(0)
+    await Promise.resolve()
+    const result = await queue.wait(main(), job.id, 1000)
+    expect(result.waitTimedOut).toBe(false)
+    expect(result).not.toHaveProperty('still_running')
+    expect((result.job as JobRecord).state).toBe('completed')
+  })
+
+  it('keeps still_running true for a job that never started', async () => {
+    vi.useFakeTimers()
+    const { queue } = setup({ reserved: 1 })
+    const job = queue.submit(main(), { kind: 'render', file: 'a.blend' })
+    const pending = queue.wait(main(), job.id, 1000)
+    await vi.advanceTimersByTimeAsync(1200)
+    const result = await pending
+    expect(result.waitTimedOut).toBe(true)
+    // "还没开始" 也是 still_running：超时不是失败，作业仍在队列里等槽位。
+    expect(result.still_running).toBe(true)
+    const snapshot = result.job as JobRecord
+    expect(snapshot.state).toBe('queued')
+    expect(snapshot.decision?.reason).toBe('virtual_gui')
+  })
+
+  it('exposes decision.detail in the blender_run list rows', () => {
+    const rows = listRows([
+      {
+        id: 'job-1',
+        kind: 'render',
+        state: 'queued',
+        decision: { outcome: 'waiting', reason: 'capacity', detail: 'target slot is busy' },
+      },
+      { id: 'job-2', kind: 'render', state: 'running', decision: null },
+    ])
+    expect(rows[0].decision).toEqual({
+      outcome: 'waiting',
+      reason: 'capacity',
+      detail: 'target slot is busy',
+    })
+    expect(rows[1].decision).toBeNull()
   })
 })
 

@@ -110,6 +110,17 @@ export interface Owner {
   /** Who claimed it: a subagent owner is reclaimed after 30 s without a call. */
   role?: 'main' | 'subagent'
   parentAgentId?: string
+  /**
+   * Per-record stale window override (S-6).
+   *
+   * The role default answers "what kind of agent owns this"; it cannot answer
+   * "what is this owner doing right now". A subagent that started its own
+   * virtual-gui keeps working through a 120 s blender_run wait, so that record
+   * carries a 5 min window instead of the generic 30 s. Absent = role default,
+   * and every consumer (prune, receipts, stale_after_ms) reads it through
+   * ownerStaleMs so they can never disagree.
+   */
+  staleMs?: number
 }
 
 export interface SessionRecord {
@@ -172,7 +183,16 @@ export function callerMatchesHolder(holder: CallerIdentity, c: CallerIdentity): 
   )
 }
 
-export function ownerOf(c: CallerIdentity): Owner {
+/**
+ * Record one caller as the owner.
+ *
+ * `staleMs` overrides the role default for this record only (see
+ * Owner.staleMs); omit it to keep 30 min for a main agent / 30 s for a subagent.
+ * A non-positive or non-numeric override is ignored rather than written, so a
+ * bad caller value can never produce a zero-length window.
+ */
+export function ownerOf(c: CallerIdentity, staleMs?: number): Owner {
+  const override = Number(staleMs)
   return {
     hostId: String(c.hostId || ''),
     dshSessionId: String(c.dshSessionId || ''),
@@ -181,6 +201,7 @@ export function ownerOf(c: CallerIdentity): Owner {
     heartbeatAt: Date.now(),
     role: c.role === 'main' ? 'main' : 'subagent',
     ...(c.parentAgentId ? { parentAgentId: c.parentAgentId } : {}),
+    ...(Number.isFinite(override) && override > 0 ? { staleMs: override } : {}),
   }
 }
 
@@ -215,7 +236,17 @@ export function readableBy(owner: Owner | null, c: CallerIdentity): boolean {
   return sameHost(owner, c)
 }
 
+/**
+ * Liveness window for one owner record.
+ *
+ * The record's own override wins (S-6: a subagent holds the virtual-gui it
+ * started for 5 min across a long job wait), then the role default (subagent
+ * 30 s / main 30 min). prune, release, status and stale_after_ms all ask here,
+ * so the reclaim rule and the receipt always describe the same window.
+ */
 export function ownerStaleMs(owner: Owner | null): number {
+  const override = Number(owner?.staleMs)
+  if (Number.isFinite(override) && override > 0) return override
   return owner && owner.role === 'subagent' ? OWNER_STALE_SUBAGENT_MS : OWNER_TTL_MS
 }
 
@@ -252,6 +283,9 @@ export function grantView(g: GrantRecord): Record<string, unknown> {
     grantedBy: callerView(g.grantedBy),
     scopes: g.scopes,
     createdAt: g.createdAt,
+    // 台账 B：续期就是一次“在用”的证据 —— crew[].last_write_at 直接用这个心跳，
+    // 不再退回 createdAt（additive：既有字段与顺序不变）。
+    heartbeatAt: g.heartbeatAt,
     expiresAt: g.expiresAt,
     expiresInMs: Math.max(0, g.expiresAt - Date.now()),
   }

@@ -14,6 +14,19 @@ import type { VirtualGuiLimits } from '../../display/limits.js'
 import type { DisplayCapabilities, DisplayInstance, DisplayProvider } from '../../display/types.js'
 
 export const VIRTUAL_GUI_HANDSHAKE_TIMEOUT_MS = 30_000
+/**
+ * Ownership window for a subagent that starts its own virtual-gui (S-6).
+ *
+ * attach.ts keeps "a subagent never becomes the owner" for a GUI that already
+ * exists, but the starter of this window has to own it: a subagent holds no
+ * grant on the session it just created and claimFreeSession refuses subagents,
+ * so without ownership it could not write into the Blender it spawned. With the
+ * generic 30 s subagent TTL — shorter than blender_run's 120 s default wait —
+ * any same-host attach during that wait saw a stale owner, prune cleared it and
+ * the newcomer claimed the session. Five minutes covers the longest synchronous
+ * tool call; afterwards the record still expires and stays reclaimable.
+ */
+export const VIRTUAL_GUI_SUBAGENT_OWNER_STALE_MS = 300_000
 const HANDSHAKE_POLL_MS = 100
 
 /** Everything the lifecycle needs from the registry it belongs to. */
@@ -180,7 +193,12 @@ export class VirtualGuiLifecycle {
       kind: 'virtual-gui',
       instanceId,
       status: 'ready',
-      owner: ownerOf(caller),
+      // The starter owns the window it spawned (S-6): a subagent keeps it for a
+      // full job wait instead of the generic 30 s, a main agent keeps 30 min.
+      owner: ownerOf(
+        caller,
+        caller.role === 'subagent' ? VIRTUAL_GUI_SUBAGENT_OWNER_STALE_MS : undefined,
+      ),
       agents: new Map(),
       grants: new Map(),
       paused: false,

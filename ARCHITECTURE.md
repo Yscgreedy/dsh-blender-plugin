@@ -281,7 +281,7 @@ DSH host ──src/tools（6 工具）──HTTP──> Gateway（runtime/http +
 
 ### 5.3 债务
 
-函数预算 110 条（`runtime/py` 80）、路径例外 17 条；`check:function-budget` / `check:exceptions` 均为 stale 0。
+函数预算 110 条（`runtime/py` 80）、路径例外 15 条；`check:function-budget` / `check:exceptions` 均为 stale 0。
 
 ---
 

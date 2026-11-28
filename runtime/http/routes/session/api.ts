@@ -7,7 +7,9 @@
 import type { ServerResponse } from 'node:http'
 import { currentCaller } from '../../caller.js'
 import type { AvailabilityFailure } from '../../../core/availability.js'
+import type { JobQueue } from '../../../core/queue/manager.js'
 import type { SessionRegistry } from '../../../core/sessions/registry.js'
+import { crewRows } from './list.js'
 import type { CallerIdentity, SessionResult, ViewPose } from '../../../core/sessions/types.js'
 import { callerView } from '../../../core/sessions/types.js'
 import {
@@ -68,6 +70,11 @@ export interface SessionControl {
   shutdown: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** Base URL of this Gateway (for the human consent command in a receipt). */
   httpBase?: string
+  /**
+   * 作业队列（观测数据，台账 B）：`action=list` 的 crew[] 靠它数 running/queued。
+   * 缺失 / 取不到时 crew 照出、计数按 0 —— list 永远不因队列失败。
+   */
+  jobQueue?: JobQueue | null
 }
 
 /** Add the exact human approve/deny commands to a consent_required receipt. */
@@ -359,7 +366,8 @@ async function runSessionAction(
     case 'whoami':
       return { ok: true, caller: callerView(caller), ...callerView(caller) }
     case 'list':
-      return { ok: true, sessions: registry.listFor(caller) }
+      // 台账 B：模型侧回执与 GET /who 同源 —— 每行多一个 crew[]（additive，sessions 仍是数组）。
+      return { ok: true, sessions: crewRows(registry.listFor(caller), control?.jobQueue) }
     case 'attach':
     case 'claim':
       return registry.attachChecked(caller, {

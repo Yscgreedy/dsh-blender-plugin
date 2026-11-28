@@ -100,6 +100,45 @@ describe('blender_run structured receipts', () => {
     expect(out.text).toContain('RUN list · 1 个作业')
   })
 
+  it('forwards still_running when a wait times out on a live job', async () => {
+    backend.setHandler('POST /job', () =>
+      json({
+        ok: true,
+        op: 'wait',
+        job: { ...JOB, state: 'running' },
+        waitedMs: 120000,
+        waitTimedOut: true,
+        still_running: true,
+      }),
+    )
+    const out = await run('blender_run', { action: 'wait', id: 'job-9' })
+    // Q-4：超时不是失败 —— 结构化回执要说清作业还在跑。
+    expect(out.timed_out).toBe(true)
+    expect(out.still_running).toBe(true)
+    expect(out.waited_ms).toBe(120000)
+    expect(out.state).toBe('running')
+    expect(out.envelope).toMatchObject({ action: 'wait', job_id: 'job-9' })
+    expect(out.text).toContain('仍在 running')
+    backend.setHandler('POST /job')
+  })
+
+  it('reports still_running=false once the job reached a terminal state', async () => {
+    backend.setHandler('POST /job', () =>
+      json({
+        ok: true,
+        op: 'wait',
+        job: { ...JOB, state: 'completed' },
+        waitedMs: 1200,
+        waitTimedOut: false,
+      }),
+    )
+    const out = await run('blender_run', { action: 'wait', id: 'job-9' })
+    expect(out.timed_out).toBe(false)
+    expect(out.still_running).toBe(false)
+    expect(out.state).toBe('completed')
+    backend.setHandler('POST /job')
+  })
+
   it('puts audit source/file_load/cleanup into the receipt envelope', () => {
     const env = planEnvelope('audit_mesh', {
       ok: true,

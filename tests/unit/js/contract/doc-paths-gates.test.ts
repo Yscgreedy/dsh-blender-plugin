@@ -70,8 +70,8 @@ describe('check-doc-paths', () => {
     expect(report).not.toBeNull()
     expect(report!.mode).toBe('warn')
     expect(report!.legacy.failures).toEqual([])
-    // 25 = 24（原 extended 口径）+ 新增的 docs/安装与升级-加速方案.md。
-    expect(report!.docs.extendedCount).toBe(25)
+    // 28 = 25（原 extended 口径）+ docs/已知问题台账.md + docs/通道已知问题与待修.md + docs/多代理并行分工协议.md。
+    expect(report!.docs.extendedCount).toBe(28)
     expect(report!.findings.orphanDocs).toHaveLength(0)
     expect(report!.findings.missingRefs).toHaveLength(7)
     expect(report!.baseline.present).toBe(true)

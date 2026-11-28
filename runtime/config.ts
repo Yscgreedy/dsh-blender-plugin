@@ -394,6 +394,81 @@ const FEATURE_VIRTUAL_GUI_MAX = (() => {
   return { value: '', source: 'default' }
 })()
 
+export interface QueueSetting {
+  value: number
+  source: string
+}
+
+/**
+ * 作业队列容量单键解析（Q-1）：env → 配置文件 `features.queue.<键>` → 默认值。
+ *
+ * 三段式与其它键一致，但**不做自适应**：默认恒为 1/2/64/8，不按设备数/核数/空闲内存浮动 ——
+ * 同一台机器今天 2 个 GPU slot、明天 1 个，比"配置要手写"更难排查（对比 virtualGuiMax 的
+ * 低内存降到 2）。要改就显式写配置。
+ *
+ * 非法值（非数字 / 0 / 负数）回落到 `fallback`，来源记成 `invalid:*` —— 不假装是默认值，
+ * doctor 与日志能看出"你配了但没生效"。纯函数：env 与文件值都由调用方给，单测不必起进程
+ * （tests/unit/js/job-queue.test.ts）。
+ */
+export function resolveQueueSetting(input: {
+  envName: string
+  envValue: unknown
+  /** 配置文件里这一键的原始值；**省略 = 配置段里没有这个键**（同一段缺键也是常态）。 */
+  fileValue?: unknown
+  fallback: number
+  fileFrom?: string | null
+}): QueueSetting {
+  const fileFrom = String(input.fileFrom || 'config')
+  const env = readString(input.envValue)
+  if (env && env.trim()) {
+    const n = Number(env)
+    if (Number.isFinite(n) && n > 0) return { value: Math.trunc(n), source: 'env:' + input.envName }
+    return { value: input.fallback, source: 'invalid:env:' + input.envName }
+  }
+  const raw = input.fileValue
+  const given = raw !== undefined && raw !== null && String(raw).trim() !== ''
+  if (!given) return { value: input.fallback, source: 'default' }
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) return { value: Math.trunc(n), source: 'file:' + fileFrom }
+  return { value: input.fallback, source: 'invalid:file:' + fileFrom }
+}
+
+/** 配置文件里的 features.queue 段（缺失或类型不对一律当空段）。 */
+const FILE_QUEUE: Record<string, unknown> = (() => {
+  const features = isRecord(FILE.cfg.features) ? FILE.cfg.features : null
+  const queue = features && isRecord(features.queue) ? features.queue : null
+  return queue || {}
+})()
+
+const QUEUE_GPU = resolveQueueSetting({
+  envName: 'DSH_BLENDER_QUEUE_GPU',
+  envValue: process.env.DSH_BLENDER_QUEUE_GPU,
+  fileValue: FILE_QUEUE.gpu,
+  fallback: 1,
+  fileFrom: FILE.from,
+})
+const QUEUE_CPU = resolveQueueSetting({
+  envName: 'DSH_BLENDER_QUEUE_CPU',
+  envValue: process.env.DSH_BLENDER_QUEUE_CPU,
+  fileValue: FILE_QUEUE.cpu,
+  fallback: 2,
+  fileFrom: FILE.from,
+})
+const QUEUE_PENDING = resolveQueueSetting({
+  envName: 'DSH_BLENDER_QUEUE_PENDING',
+  envValue: process.env.DSH_BLENDER_QUEUE_PENDING,
+  fileValue: FILE_QUEUE.pending,
+  fallback: 64,
+  fileFrom: FILE.from,
+})
+const QUEUE_OWNER_QUOTA = resolveQueueSetting({
+  envName: 'DSH_BLENDER_QUEUE_OWNER_QUOTA',
+  envValue: process.env.DSH_BLENDER_QUEUE_OWNER_QUOTA,
+  fileValue: FILE_QUEUE.ownerQuota,
+  fallback: 8,
+  fileFrom: FILE.from,
+})
+
 /** blender.exe 探测在 runtime/blender-detect.ts（可注入依赖；Windows 含 Steam 库）。
  *  config.ts 不再转出 detectBlenderExe：需要探测结果的调用方直接 import blender-detect.js；
  *  这里只用一次（模块级 CFG），探测来源见 CFG.source.blenderExe。
@@ -475,6 +550,25 @@ export const CFG = {
     /** virtual-gui 并发上限（1–16）；低资源时由 runtime/display/limits.ts 降到 2。 */
     virtualGuiMax: Number(FEATURE_VIRTUAL_GUI_MAX.value || VIRTUAL_GUI_DEFAULT_MAX),
     virtualGuiMaxSource: FEATURE_VIRTUAL_GUI_MAX.source,
+    /**
+     * 作业队列容量（Q-1）：gpu / cpu / pending / ownerQuota，默认 1/2/64/8。
+     * 不做自适应（见 resolveQueueSetting）；app.ts 把它整套传给 JobQueue。
+     * 默认值与 runtime/core/queue/types.ts 的 DEFAULT_CAPACITY 同口径（那里是 JobQueue
+     * 单独构造时的兜底），改默认值两处一起改，别让"配置默认"和"队列兜底"分叉。
+     */
+    queue: {
+      gpu: QUEUE_GPU.value,
+      cpu: QUEUE_CPU.value,
+      pending: QUEUE_PENDING.value,
+      ownerQuota: QUEUE_OWNER_QUOTA.value,
+    },
+    /** 每个容量键的来源：env:… / file:… / default / invalid:…（排错用，不参与调度）。 */
+    queueSource: {
+      gpu: QUEUE_GPU.source,
+      cpu: QUEUE_CPU.source,
+      pending: QUEUE_PENDING.source,
+      ownerQuota: QUEUE_OWNER_QUOTA.source,
+    },
   },
   // 溯源（doctor/日志/教程排查用）
   source: { configFile: FILE.from, workDir: WORK.from, blenderExe: BLENDER.from },

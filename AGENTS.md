@@ -114,5 +114,6 @@ review failure.
 | Addon and host integration contract | [docs/宿主集成-接口契约-v2.3增补.md](docs/宿主集成-接口契约-v2.3增补.md) |
 | Architecture and constraints | [docs/architecture.md](docs/architecture.md) |
 | Test layers and fixtures | [tests/README.md](tests/README.md) |
+| Known issues, boundaries, and re-check actions | [docs/已知问题台账.md](docs/已知问题台账.md) |
 | Version history and migrations | [CHANGELOG.md](CHANGELOG.md) · [MIGRATIONS.md](MIGRATIONS.md) |
 | External-project comparison and gap decisions (Mixar) | [docs/Mixar-差距分析.md](docs/Mixar-差距分析.md) |

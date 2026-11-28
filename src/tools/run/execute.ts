@@ -445,6 +445,8 @@ export async function executeRun(
       applied: jobApplied(job),
       waited_ms: typeof body.waitedMs === 'number' ? body.waitedMs : null,
       timed_out: body.waitTimedOut === true,
+      // Q-4：超时不是失败。终态时队列层不带这个字段，这里如实落 false（不编造"还在跑"）。
+      still_running: body.still_running === true,
       envelope: jobEnvelope(action, job),
     }
   }

@@ -1,11 +1,11 @@
 {
   "version": 1,
   "tool": "check-plan-ids",
-  "generatedAt": "2026-11-27T03:59:59.642Z",
+  "generatedAt": "2026-11-28T01:57:33.887Z",
   "mode": "warn",
   "totals": {
-    "all": 1522,
-    "exempt": 1522,
+    "all": 1584,
+    "exempt": 1584,
     "residual": 0
   },
   "byPrefix": {},
@@ -76,6 +76,11 @@
       "exempt": 52,
       "residual": 0
     },
+    "docs/已知问题台账.md": {
+      "count": 60,
+      "exempt": 60,
+      "residual": 0
+    },
     "docs/操作教程.md": {
       "count": 1,
       "exempt": 1,
@@ -84,6 +89,11 @@
     "docs/证据分级与读图纪律.md": {
       "count": 5,
       "exempt": 5,
+      "residual": 0
+    },
+    "docs/通道已知问题与待修.md": {
+      "count": 2,
+      "exempt": 2,
       "residual": 0
     },
     "runtime/blender-detect.ts": {

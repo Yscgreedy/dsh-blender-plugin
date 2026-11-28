@@ -25,7 +25,7 @@ function buildPyTool(ctx: HostContext, port: number) {
       write_scope: {
         type: 'json',
         description:
-          '写作用域：exclusive（默认）| collection:COL | prefix:LGT- | object:uid；须与父 grant 覆盖一致，超出记 scope_violation',
+          '写作用域：exclusive（默认）| collection:COL | prefix:LGT- | object:uid；aspect:名 / frames:START-END 只对静态 op 生效，py 的写后对象校验认不出它们（会记 scope_violation），请声明 object/collection/prefix；须与父 grant 覆盖一致',
       },
       checkpoint: {
         type: 'string',

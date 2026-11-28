@@ -282,8 +282,13 @@ export function listRows(jobs: Array<Record<string, unknown>>): Array<Record<str
         dshSessionId: text(owner.dshSessionId) || null,
         agentId: text(owner.agentId) || null,
       },
+      // Q-4：detail 一起透出（status 文本本来就有 detail，这里只是让结构化行对齐）。
       decision: j.decision
-        ? { outcome: text(decision.outcome) || null, reason: text(decision.reason) || null }
+        ? {
+            outcome: text(decision.outcome) || null,
+            reason: text(decision.reason) || null,
+            detail: text(decision.detail) || null,
+          }
         : null,
     }
   })

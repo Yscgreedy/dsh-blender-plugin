@@ -20,7 +20,24 @@ export function evaluateWriteGate(
       { sessionId: session.id, pausedAt: session.pausedAt },
     )
   }
-  const humanEdits = conflictingHumanEdits(session, parseScopes(scopes))
+  const writes = parseScopes(scopes)
+  // aspect:/frames: 是静态 op 的声明式写作用域。Python 没有静态 scope：放行一次
+  // 声明它们的 py 调用，就等于"门开、回执全量 scope_violation"（/act 的写后对象
+  // 校验认不出这两个 kind）。所以这里直接 fail-closed，让调用方改声明。
+  if (opts.py) {
+    const offending = writes.filter((s) => s.kind === 'aspect' || s.kind === 'frames')
+    if (offending.length) {
+      return fail(
+        'invalid_params',
+        'session',
+        'a Python write cannot be authorized by aspect/frames scopes',
+        'declare write_scope=object/collection/prefix (matching a grant) for a Python write; ' +
+          'aspect/frames only describe static-op write surfaces (lighting/camera, frame ranges)',
+        { sessionId: session.id, py: true, requested: writes, offending },
+      )
+    }
+  }
+  const humanEdits = conflictingHumanEdits(session, writes)
   if (humanEdits.length) {
     return fail(
       'human_modified',
@@ -51,7 +68,6 @@ export function evaluateWriteGate(
       },
     )
   }
-  const writes = parseScopes(scopes)
   // 反馈 1: a subagent with collection:_probe_x must be able to run Python there.
   // Python has no static scope, so the declared scope is the contract; the act
   // receipt reports the objects it actually changed and the Gateway flags any

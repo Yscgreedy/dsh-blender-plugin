@@ -149,6 +149,8 @@ export function createLeaseHandler(E: HttpRouteDeps) {
     reload: (payload) => buildReloadReport(E, payload) as unknown as Record<string, unknown>,
     shutdown: (payload) => drainGateway(E, payload),
     httpBase: 'http://' + String(E.HOST || '127.0.0.1') + ':' + String(E.PORT),
+    // 台账 B：action=list 的 crew[] 要数在跑作业 —— 队列从 E 透传，缺了也不影响 list。
+    jobQueue: E.jobQueue,
   }
   return async function lease(
     req: IncomingMessage,

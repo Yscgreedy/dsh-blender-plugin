@@ -163,6 +163,37 @@ function emptySessionListText(
   return head.concat(blocks).join(LF)
 }
 
+/**
+ * 台账 B：一行紧凑的 crew 摘要 —— “谁在改什么”。
+ *
+ * 只读 Gateway 新增的 `crew[]`（additive），不碰既有字段与顺序；没有 crew 的行
+ * （老 Gateway / 无发布者）返回空串，list 文本与旧版逐字一致。
+ */
+function crewSummary(s: SessionRow): string {
+  const crew = Array.isArray(s.crew) ? s.crew.filter(isRecord).map(asRecord) : []
+  if (!crew.length) return ''
+  const parts = crew.map((m) => {
+    const scopes = Array.isArray(m.scopes) ? m.scopes.map(text).filter(Boolean) : []
+    const running = Number(m.jobs_running ?? 0)
+    const queued = Number(m.jobs_queued ?? 0)
+    return (
+      text(m.agentId || '?') +
+      '/' +
+      text(m.role || '-') +
+      ' ' +
+      text(m.state || 'idle') +
+      (scopes.length ? ' scopes=' + scopes.join(',') : '') +
+      (running || queued ? ' jobs=' + String(running) + 'r/' + String(queued) + 'q' : '') +
+      (m.blocked_reason ? ' blocked=' + text(m.blocked_reason) : '') +
+      (m.last_write_at ? ' write=' + text(m.last_write_at) : '') +
+      (typeof m.grant_expires_in_ms === 'number'
+        ? ' grant=' + String(m.grant_expires_in_ms) + 'ms'
+        : '')
+    )
+  })
+  return '  crew(' + String(crew.length) + ') · ' + parts.join(' · ')
+}
+
 export function formatSessionList(
   sessions: SessionRow[],
   evidence?: Record<string, unknown> | null,
@@ -212,6 +243,9 @@ export function formatSessionList(
               : '')
           : ''),
     )
+    // 台账 B：紧跟在会话行下面的一行摘要，让人和主控一眼看到全队的 scopes 与在跑作业。
+    const crew = crewSummary(s)
+    if (crew) lines.push(crew)
   }
   return lines.concat(blocks).join(LF)
 }

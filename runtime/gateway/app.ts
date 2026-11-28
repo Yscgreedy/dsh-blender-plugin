@@ -4,7 +4,7 @@ import http from 'node:http'
 import type { Server } from 'node:http'
 import { createEngine, engineProvenance } from '../engine.js'
 import { createSelectionStore } from '../selectionstore.js'
-import { describeConfig } from '../config.js'
+import { CFG, describeConfig } from '../config.js'
 import { HOST, stats, pushRtt, rttView, reqCounts, bump } from '../http/config.js'
 import { json, streamJson, readBody, hostJson, hostErrText } from '../http/response.js'
 import {
@@ -115,7 +115,21 @@ export function createGatewayApp(opts: GatewayAppOptions = {}): GatewayApp {
     },
   )
   registryRef.current = sessionRegistry
-  const jobQueue = new JobQueue({ executor: new SpawnJobExecutor() })
+  // 队列容量来自 runtime/config.ts 的三段式（Q-1）：env → features.queue → 默认 1/2/64/8，
+  // 不在这里写死、也不做自适应；写错的值已在那里回落到默认并留下 invalid:… 来源。
+  const queueCapacity = CFG.features.queue
+  const jobQueue = new JobQueue({
+    executor: new SpawnJobExecutor(),
+    capacity: {
+      gpu: queueCapacity.gpu,
+      cpu: queueCapacity.cpu,
+      pending: queueCapacity.pending,
+      ownerQuota: queueCapacity.ownerQuota,
+    },
+    // 每个 starting/ready 的 virtual-gui 占 1 个 GPU slot（Q-2）：render 在它活着时排队并
+    // 得到 decision.reason='virtual_gui'，而不是挤上去把显存打爆。
+    reservedGpu: () => sessionRegistry.virtualGuiCount(),
+  })
   const E: HttpRouteDeps = {
     sessionRegistry,
     jobQueue,
