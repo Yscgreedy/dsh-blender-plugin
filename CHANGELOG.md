@@ -192,6 +192,38 @@
   未在本机跑通**。面板没有截图/录屏（沙箱无浏览器自动化、React 未随包安装）：证据是 `panelTree` 的 HTML
   预览 + 文本快照 + 渲染断言（按钮 `data-request`、auto 条款、认领表字段）。
 
+## v3.3.1（2026-11-28）—— 多代理协作基座收口：作用域 / 所有权 / 队列 / 回执
+
+> 相对 v3.3.0（2026-11-21），累积 PR #1 / #2 / #4 与四轮并行修复。主题：让「一个主控 + N 个子代理
+> 共用一个 Gateway / 一个 .blend」从「能跑」变成「能解释」——作用域、所有权、队列、回执四处口径一致。
+
+- **多代理协作基座**：`session list` / `/who` 每行新增 `crew[]`（agentId / role / state / scopes /
+  jobs_running / jobs_queued / blocked_reason，纯 additive）；写作用域补 `aspect:`（world / render /
+  camera / lights）与 `frames:`（帧区间）两个词汇，于是建模（prefix）、打光机位（aspect）、动画（frames）
+  能分头并行而不必都退回 exclusive（catalog 默认不变）；所有权改按 owner 粒度——子代理自开的
+  virtual-gui 记 5 min stale（`Owner.staleMs`），主控仍 30 min，`attach` / `prune` / `stale_after_ms` 同一判据。
+- **队列可配 + 可解释**：`features.queue.{gpu,cpu,pending,ownerQuota}` 与 `DSH_BLENDER_QUEUE_*` 生效
+  （默认仍 1/2/64/8，非法值回落并记 `invalid:*` 来源）；`reservedGpu` 接上 virtual-gui 实例数，
+  GUI 活着时 render 不再无脑准入；`queue_full` 文案指向真实配置键；`status` / `list` 的等待行透出
+  `decision.reason` / `detail`，120 s `wait` 到点回 `still_running` 而不是观感失败。
+- **真机验收（2026-11-28，命令与回执见 [已知问题台账](docs/已知问题台账.md)）**：子代理 `attach` 得
+  `viewer=true / is_mine=false / borrowed=true` 且 `blender_inspect` 只读命令照常；主控占着 user-gui 时
+  子代理 `start virtual-gui` 一次 ready、两会话并存；空闲内存充足时 virtual-gui 准入与 ready 后复测正常
+  （内存压力路径仍只有单测）；worker `see` 的 `fit=object|scene|<名>` 后端 4 组参数 pass（bpy 侧对象
+  筛选待真机复测）。
+- **CI**：`no-useless-assignment` 与五个跟踪文件的 prettier 漂移修复；两处棘轮门归位——文档链接图计数
+  25 → 28（新增台账/通道/协议三份文档），计划 ID 残留 73 → 0（`config/plan-ids.json` 加跳过目录 +
+  台账型豁免，脚本与台账正文未改）。
+- **结构拆分**：会话注册表五刀拆完（写授权 / 同意面 / 只读视图 / 实例簿 / 生命周期依次下沉，`registry`
+  只剩装配）；写门跳过判据收成唯一入口（`runtime/http/write-skip.ts`）；宿主侧队列传输 / 取帧去重 /
+  回执收成单入口并删除死模块；Python 域间调用改端口（`gate_run` 等），跨域 import 保持为零。
+- **文档**：新增 [已知问题台账](docs/已知问题台账.md)、[通道已知问题与待修](docs/通道已知问题与待修.md)、
+  [多代理并行分工协议](docs/多代理并行分工协议.md)；[操作教程](docs/操作教程.md) 在 §3 之后加
+  「多代理并行：先读分工协议」；README 与 docs/zh/README 的安装命令版本号同步到 3.3.1。
+- **版本**：`package.json` / `package-lock.json` / `PLUGIN_VERSION`（`src/constants.ts`）→ **3.3.1**；
+  addon 仍 **2.0.0 / protocol 12**，工具面仍 6 tools / 38 family / 270 op / 29 routes。
+- **未在 3.3.1 处理**：台账里仍未收口的条目（全局安装路径、远程发布管线、Mixar 真机、参考图三原语、
+  车道粒度）。
 ## v3.3.0（2026-11-21）
 
 ### 2026-11-21 发布收口：3.3.0 · 行预算拆分 · 口径统一
